@@ -114,7 +114,7 @@ final class RtSectionTable {
             if (generation.capacity >= minCapacity) {
                 return generation;
             }
-            ctx.gpuExecutor().enqueueDestroyUnpublished(generation.buffer::destroy);
+            ctx.gpuExecutor().retireUnpublished(generation.buffer::destroy);
         }
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         RtBuffer buffer = ctx.createBuffer((long) minCapacity * SECTION_ENTRY_BYTES, storage, true,

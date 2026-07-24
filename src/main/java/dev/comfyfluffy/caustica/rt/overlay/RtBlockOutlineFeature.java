@@ -29,6 +29,7 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
@@ -89,7 +90,8 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     private long boundSet;
 
     @Override
-    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, int width, int height) {
+    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+                           int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
             return false;
         }
@@ -145,7 +147,7 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
         vbo.flush(0L, (long) data.length * Float.BYTES);
 
         viewProj.set(RtComposite.INSTANCE.currentViewProjection());
-        boundSet = accelSet.bind(ctx, tlas);
+        boundSet = accelSet.bind(ctx, tlas, graphicsUse);
         return true;
     }
 

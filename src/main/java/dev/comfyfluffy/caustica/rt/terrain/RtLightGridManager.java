@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
@@ -103,7 +104,7 @@ final class RtLightGridManager {
     }
 
     /** World-reset path only. Normal light changes intentionally retain the published generation. */
-    void invalidate(RtContext ctx, long lastGraphicsUse) {
+    void invalidate(RtContext ctx, GraphicsUse lastGraphicsUse) {
         cancelPending();
         PublishedState old = published;
         published = PublishedState.EMPTY;
@@ -262,11 +263,11 @@ final class RtLightGridManager {
         PublishedState old = published;
         // The executor's host-side timeline wait only proves that the transfer completed. It does not
         // establish device-memory visibility from the async queue to the graphics queue. Publish the
-        // exact upload build so beginGraphicsTerrainUse() attaches the required semaphore dependency
+        // exact upload build so beginGraphicsUse() attaches the required semaphore dependency
         // before any shader can dereference this generation's buffer device addresses.
         ctx.gpuExecutor().markPublished(uploaded.build);
         published = next;
-        old.retire(ctx, ctx.gpuExecutor().latestGraphicsUseValue());
+        old.retire(ctx, ctx.gpuExecutor().latestGraphicsUse());
 
         if (CausticaConfig.Rt.Lights.DUMP.value()) dumpNearbyLights(uploaded.data);
 
@@ -312,7 +313,7 @@ final class RtLightGridManager {
         if (!isLatest(requestId)) return;
         PublishedState old = published;
         published = PublishedState.empty(requestId);
-        old.retire(ctx, ctx.gpuExecutor().latestGraphicsUseValue());
+        old.retire(ctx, ctx.gpuExecutor().latestGraphicsUse());
     }
 
     private void discardCompletions() {
@@ -373,9 +374,9 @@ final class RtLightGridManager {
             return arena != null ? arena.deviceAddress + offset : 0L;
         }
 
-        private void retire(RtContext ctx, long lastGraphicsUse) {
+        private void retire(RtContext ctx, GraphicsUse lastGraphicsUse) {
             if (arena != null) {
-                ctx.gpuExecutor().enqueueDestroyAfterGraphics(lastGraphicsUse, arena::destroy);
+                ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse, arena::destroy);
             }
         }
 

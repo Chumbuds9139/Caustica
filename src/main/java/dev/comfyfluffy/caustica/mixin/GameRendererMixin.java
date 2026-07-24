@@ -161,11 +161,12 @@ public abstract class GameRendererMixin {
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. RtUiOverlay then performs the single final blend to SDR/HDR.
 		try {
-			RtWorldOverlay.INSTANCE.compositeIntoUiOverlay(this.mainRenderTarget);
+			RtWorldOverlay.INSTANCE.compositeIntoUiOverlay(
+					this.mainRenderTarget, RtComposite.INSTANCE.currentGraphicsUse());
 		} finally {
-			// The block-outline ray query consumes this frame's TLAS. Signal terrain retirement only after
-			// its transient command buffer has been placed later in the same graphics submission.
-			RtComposite.INSTANCE.finishTerrainGraphicsUse();
+			// The block-outline ray query consumes this frame's TLAS. Signal the shared RT frame token only
+			// after its transient command buffer has been placed later in the same graphics submission.
+			RtComposite.INSTANCE.finishGraphicsUse();
 		}
 	}
 

@@ -14,6 +14,7 @@ import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
@@ -54,7 +55,8 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
     private int drawCount;
 
     @Override
-    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, int width, int height) {
+    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+                           int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
         }

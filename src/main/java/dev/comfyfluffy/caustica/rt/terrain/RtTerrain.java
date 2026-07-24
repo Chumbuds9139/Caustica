@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
@@ -1406,7 +1407,7 @@ public final class RtTerrain {
         if (ctx == null) {
             RtSectionBuilder.destroy(ps);
         } else {
-            ctx.gpuExecutor().enqueueDestroyUnpublished(() -> RtSectionBuilder.destroy(ps));
+            ctx.gpuExecutor().retireUnpublished(() -> RtSectionBuilder.destroy(ps));
         }
     }
 
@@ -1471,7 +1472,7 @@ public final class RtTerrain {
 
     private void applyBuildChanges(RtContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
                                    boolean rebase, int rbx, int rby, int rbz) {
-        long lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUseValue();
+        GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
         int baseX = rebase ? rbx : blockX;
         int baseY = rebase ? rby : blockY;
         int baseZ = rebase ? rbz : blockZ;
@@ -1506,7 +1507,7 @@ public final class RtTerrain {
             if (!desired.contains(ps.key())) {
                 // Left the window while its batched BLAS build was in flight (window sync keeps running
                 // during builds). Never published — retire the fresh, unreferenced geometry.
-                ctx.gpuExecutor().enqueueDestroyUnpublished(g::destroy);
+                ctx.gpuExecutor().retireUnpublished(g::destroy);
                 continue;
             }
             SectionGeom prev = resident.get(ps.key());
@@ -1631,14 +1632,14 @@ public final class RtTerrain {
     }
 
     /** Queue old GPU resources until the last graphics submission that could reference them completes. */
-    private void retire(RtContext ctx, long lastGraphicsUse, List<SectionGeom> removed) {
+    private void retire(RtContext ctx, GraphicsUse lastGraphicsUse, List<SectionGeom> removed) {
         for (SectionGeom g : removed) {
-            ctx.gpuExecutor().enqueueDestroyAfterGraphics(lastGraphicsUse, g::destroy);
+            ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse, g::destroy);
         }
     }
 
-    private void retireGeneration(RtContext ctx, long lastGraphicsUse, Generation generation) {
-        ctx.gpuExecutor().enqueueDestroyAfterGraphics(lastGraphicsUse,
+    private void retireGeneration(RtContext ctx, GraphicsUse lastGraphicsUse, Generation generation) {
+        ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse,
                 () -> table.recycleGeneration(generation));
     }
 
@@ -1763,7 +1764,7 @@ public final class RtTerrain {
         inFlightDirtyGroup.clear();
         cancelAllDirtyGroups();
 
-        long lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUseValue();
+        GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
         Generation oldGeneration = table.detachGeneration();
 
         Set<SectionGeom> oldGeometry = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -1817,11 +1818,11 @@ public final class RtTerrain {
         lightGrid.invalidate(ctx, lastGraphicsUse);
         if (!oldGeometry.isEmpty()) {
             ArrayList<SectionGeom> retirement = new ArrayList<>(oldGeometry);
-            ctx.gpuExecutor().enqueueDestroyAfterGraphics(lastGraphicsUse,
+            ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse,
                     () -> destroyDetachedGeometry(retirement));
         }
         if (!oldPrepared.isEmpty()) {
-            ctx.gpuExecutor().enqueueDestroyUnpublished(() -> destroyDetachedPrepared(oldPrepared));
+            ctx.gpuExecutor().retireUnpublished(() -> destroyDetachedPrepared(oldPrepared));
         }
 
         // Keep the RT seam alive as an empty world while the new desired window begins filling.

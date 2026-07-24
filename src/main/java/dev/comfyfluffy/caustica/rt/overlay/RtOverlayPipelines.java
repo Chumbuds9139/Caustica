@@ -38,6 +38,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
@@ -544,25 +545,32 @@ public final class RtOverlayPipelines {
      * {@link SampledImageSet}) is required because the TLAS handle changes most frames ({@code RtAccel
      * .TlasRing} cycles it every frame even when it doesn't grow) — rewriting a single set's binding while
      * an earlier frame's command buffer referencing that same set may still be executing on the GPU is the
-     * same "descriptor set update while in use" hazard {@code RtPipeline.setTlas} already guards against
-     * with its own 4-slot ring.
+     * same "descriptor set update while in use" hazard {@code RtPipeline.setTlas} guards against. Exact
+     * graphics completion protects both rings; their depths only avoid routine host waits.
      */
     public static final class AccelStructureSet {
         private static final int RING = 4;
         public final long layout;
         private final long pool;
         private final long[] sets;
+        private final RtGpuExecutor.TrackedGraphicsUse[] uses;
         private int current = -1;
 
         private AccelStructureSet(long layout, long pool, long[] sets) {
             this.layout = layout;
             this.pool = pool;
             this.sets = sets;
+            this.uses = new RtGpuExecutor.TrackedGraphicsUse[sets.length];
+            for (int i = 0; i < uses.length; i++) {
+                uses[i] = new RtGpuExecutor.TrackedGraphicsUse();
+            }
         }
 
-        /** Advance to the next ring slot, write {@code tlas} into it, and return the set to bind this frame. */
-        public long bind(RtContext ctx, long tlas) {
+        /** Wait for the next ring slot's prior use, write {@code tlas}, and return the set for this frame. */
+        public long bind(RtContext ctx, long tlas, RtGpuExecutor.GraphicsUse graphicsUse) {
             current = (current + 1) % RING;
+            RtGpuExecutor.TrackedGraphicsUse slotUse = uses[current];
+            ctx.gpuExecutor().graphicsUseWaiter().await(slotUse);
             long set = sets[current];
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
@@ -573,6 +581,7 @@ public final class RtOverlayPipelines {
                         .descriptorCount(1).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
             }
+            slotUse.mark(graphicsUse);
             return set;
         }
 

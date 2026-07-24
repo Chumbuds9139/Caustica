@@ -38,10 +38,14 @@ import world_common;
 // `worldPush` global). Layout constants generated from this module's SPIR-V — see world_common.WorldPush.
 static WorldPush worldPush;
 
-// Ray payloads. Module-level statics so the helper functions (visibility / refractedGuideHit /
-// specularReflectionMotion / tracePath) can share them, mirroring the GLSL rayPayloadEXT globals.
+// The radiance payload remains module-level so tracePath and its guide helpers can share it across
+// HitObject trace/invoke calls, mirroring the GLSL rayPayloadEXT global.
 static Payload payload;
-static float4 shadowVis; // rgb = transmittance; a = nearest water-crossing t (-1 = none)
+
+struct VisibilityResult {
+    float3 transmittance;
+    float waterHitT;
+};
 
 // First-hit (primary-visibility) guide attributes, captured at bounce 0 of tracePath. The primary ray
 // is deterministic (no AA jitter yet), so every SPP sample's bounce 0 yields identical values.
@@ -179,9 +183,9 @@ float3 applyWaterWaves(float3 nGeo, float2 worldXZ, float t) {
 // ---- Water caustics. Sunlight refracting through the waved surface converges/diverges before it
 // reaches an underwater receiver; the analytic wave field makes the true focusing factor computable
 // instead of faked with a scrolling texture. Where the shadow ray of an underwater NEE vertex crossed
-// water (recorded by world.rahit in shadowVis.a), evaluate the horizontal landing position of the
-// refracted sun ray as a function of surface position and finite-difference it: the caustic intensity is
-// the inverse Jacobian determinant of that surface→floor mapping (area compression = brightening, real
+// water (returned by visibility() as VisibilityResult.waterHitT), evaluate the horizontal landing
+// position of the refracted sun ray as a function of surface position and finite-difference it. The
+// caustic intensity is the inverse Jacobian determinant of that surface→floor mapping (area compression = brightening, real
 // fold caustics where det → 0). Because this uses the SAME wave field as the visible surface normals,
 // the caustic pattern stays in sync with the ripples, and the per-sample sun-quad jitter (sampleSquare)
 // shifts the pattern per sample → caustics physically blur with depth under DLSS-RR accumulation.
@@ -307,7 +311,12 @@ uint pcg(inout uint s) {
     uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
     return (w >> 22u) ^ w;
 }
-float rndf(inout uint s) { return float(pcg(s)) * (1.0 / 4294967296.0); }
+float rndf(inout uint s) {
+    // Convert the high 24 bits, which are exactly representable as float. Converting all 32 bits first
+    // lets the top 128 uint values round to 2^32, incorrectly returning 1.0 and breaking `< probability`
+    // tests (most seriously the F == 1 total-internal-reflection branch).
+    return float(pcg(s) >> 8u) * (1.0 / 16777216.0);
+}
 
 float3 primaryRayDir(float2 ndc) {
     float4 nearH = mul(worldPush.invViewProj, float4(ndc.x, ndc.y, 1.0, 1.0));
@@ -668,7 +677,8 @@ float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd,
     float3 toL = s.pos - origin;
     float dist = length(toL);
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
-    vis = visibility(origin, toL / dist, dist * 0.999);
+    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    vis = shadow.transmittance;
     return contrib * vis * s.W;
 }
 
@@ -703,16 +713,36 @@ void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, flo
     HitObject::Invoke(topLevelAS, hObj, payload);
 }
 
-float3 visibility(float3 origin, float3 dir, float tmax) {
-    shadowVis = float4(1.0, 1.0, 1.0, -1.0); // a = water-crossing sentinel, filled by the water any-hit
+Payload makeShadowPayload() {
+    Payload shadowPayload;
+    shadowPayload.albedo = float3(1.0, 1.0, 1.0);
+    shadowPayload.hitT = -1.0; // water-crossing sentinel, filled by the water any-hit
+    shadowPayload.normal = float3(0.0, 0.0, 0.0);
+    shadowPayload.motionPrev = float3(0.0, 0.0, 0.0);
+    shadowPayload.f0 = float3(0.0, 0.0, 0.0);
+    shadowPayload.flags = 0u;
+    shadowPayload.roughMetal = 0u;
+    shadowPayload.emissionSss = 0u;
+    shadowPayload.iorTransmission = 0u;
+    shadowPayload.rayCone = 0u;
+    return shadowPayload;
+}
+
+VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
+    // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
+    // path uses only albedo as accumulated transmittance and hitT as the nearest-water crossing.
+    Payload shadowPayload = makeShadowPayload();
     // Shadow SBT records run any-hit only for cutout/translucent/water. Cutout alpha-tests; translucent
-    // and water tint shadowVis.rgb and pass through. Solid blocks terminate traversal. There is no closest
-    // or miss shader worth executing, so use a hit object only as the traversal result.
+    // and water tint shadowPayload.albedo and pass through. Solid blocks terminate traversal. There is no
+    // closest or miss shader worth executing, so use a hit object only as the traversal result.
     HitObject hObj = HitObject::TraceRay(topLevelAS,
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
             CULL_SECONDARY, SBT_SHADOW, SBT_STRIDE_BUCKET, 0u,
-            makeRay(origin, RAY_TMIN, dir, tmax), shadowVis);
-    return hObj.IsMiss() ? shadowVis.rgb : float3(0.0, 0.0, 0.0);
+            makeRay(origin, RAY_TMIN, dir, tmax), shadowPayload);
+    VisibilityResult result;
+    result.transmittance = hObj.IsMiss() ? shadowPayload.albedo : float3(0.0, 0.0, 0.0);
+    result.waterHitT = shadowPayload.hitT;
+    return result;
 }
 
 float2 projectPrevNdc(float3 worldPos) {
@@ -971,7 +1001,7 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
             float ndl = abs(signedNdl);
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0);
+                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
                 }
@@ -1114,12 +1144,13 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         }
         float ndl = max(0.0, dot(n, lightDir));
         if (ndl > 0.0) {
-            float3 vis = visibility(p, lightDir, 10000.0);
+            VisibilityResult shadow = visibility(p, lightDir, 10000.0);
+            float3 vis = shadow.transmittance;
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
-            if (inWater && waterWaves && shadowVis.a > 0.0) {
-                vis *= waterCaustic(p + lightDir * shadowVis.a, lightDir, shadowVis.a);
+            if (inWater && waterWaves && shadow.waterHitT > 0.0) {
+                vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
             }
             if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                 float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
@@ -1159,11 +1190,13 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         if (sss > 0.0 && bounce <= MAX_SSS_BOUNCE) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
-                float3 visB = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
+                VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
+                float3 visB = shadowBack.transmittance;
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
-                if (inWater && waterWaves && shadowVis.a > 0.0) {
-                    visB *= waterCaustic(hitPos + lightDir * shadowVis.a, lightDir, shadowVis.a);
+                if (inWater && waterWaves && shadowBack.waterHitT > 0.0) {
+                    visB *= waterCaustic(hitPos + lightDir * shadowBack.waterHitT,
+                            lightDir, shadowBack.waterHitT);
                 }
                 if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
                     float cosT = dot(lightDir, rd);

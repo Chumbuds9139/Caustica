@@ -95,11 +95,6 @@ public final class RtComposite {
     // Hot addresses/frameIndex and raygen's debugView avoid unnecessary global-memory dereferences;
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
     private static final int GUIDE_COUNT = 6; // RR guide buffers bound at world-pipeline bindings 3..8
-    // Frames a retired per-frame TLAS must outlive before it's freed (> frames-in-flight); matches
-    // RtTerrain's deferred-free horizon. The frame TLAS is built + traced this frame, then freed once
-    // the composite frame counter has advanced this far past it (so no in-flight frame still reads it).
-    private static final int KEEP_FRAMES = 4;
-
     private static int debugView() {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
@@ -154,7 +149,7 @@ public final class RtComposite {
         return sunNoonY();
     }
 
-    // Monotonic per-composite frame counter, used by RtTerrain to time frames-in-flight-safe frees.
+    // Monotonic per-composite frame counter used for cache eviction, shader sampling, and diagnostics.
     private static volatile long frameCounter;
 
     public static long frameCounter() {
@@ -178,9 +173,9 @@ public final class RtComposite {
     private boolean materialEpochTraceGate;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
-    // One slot per in-flight frame, cycled per frame so an in-flight slot is never overwritten.
+    // Exact graphics completion guards host writes; ring depth only avoids routine waits.
     private static final int PUSH_RING = 6;
-    private RtBuffer[] pushRing;
+    private PushSlot[] pushRing;
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
     private RtImage output;
@@ -205,6 +200,15 @@ public final class RtComposite {
     // Step C.2: composites the combined UI overlay over hdrDisplayImage at paper white, just before present.
     private RtHdrCompositePipeline hdrCompositePipeline;
     private long hdrUiSampler;
+
+    private static final class PushSlot {
+        final RtBuffer buffer;
+        final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
+
+        PushSlot(RtBuffer buffer) {
+            this.buffer = buffer;
+        }
+    }
     // Menu/non-RT present: converts the SDR main target (sRGB) to PQ-encoded at paper white so menus,
     // the title panorama and the loading screen present correctly to the PQ swapchain instead of being
     // raw-copied (misdisplayed). Lazily created; the image is sized to the swapchain.
@@ -292,7 +296,7 @@ public final class RtComposite {
     // makes the TLAS build's writes visible without an extra semaphore, matching every other overlay
     // feature's reliance on in-order queue execution for this frame's world content.
     private volatile long currentTlasHandle;
-    private long pendingTerrainGraphicsUse;
+    private RtGpuExecutor.GraphicsUse pendingGraphicsUse;
 
     private RtComposite() {
     }
@@ -385,27 +389,33 @@ public final class RtComposite {
      * runs instead.
      */
     public void beginFrame() {
-        if (pendingTerrainGraphicsUse != 0L) {
-            throw new IllegalStateException("Previous RT terrain graphics use was never completed");
+        if (pendingGraphicsUse != null) {
+            throw new IllegalStateException("Previous RT graphics use was never completed");
         }
         RtFrameStats.FRAME.beginIfInactive();
         hdrWrittenThisFrame = false;
     }
 
-    /** Record terrain retirement completion after the frame's final TLAS consumer (world overlay). */
-    public void finishTerrainGraphicsUse() {
-        long graphicsUse = pendingTerrainGraphicsUse;
-        if (graphicsUse == 0L) {
+    /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
+    public RtGpuExecutor.GraphicsUse currentGraphicsUse() {
+        RenderSystem.assertOnRenderThread();
+        return pendingGraphicsUse;
+    }
+
+    /** Signal this RT frame's shared completion token after its final TLAS consumer (world overlay). */
+    public void finishGraphicsUse() {
+        RtGpuExecutor.GraphicsUse graphicsUse = pendingGraphicsUse;
+        if (graphicsUse == null) {
             return;
         }
         RtContext ctx = RtContext.currentOrNull();
         if (ctx == null) {
-            throw new IllegalStateException("RT context disappeared before terrain graphics use completed");
+            throw new IllegalStateException("RT context disappeared before graphics use completed");
         }
         var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice()
                 .createCommandEncoder()).caustica$getBackend();
-        ctx.gpuExecutor().endGraphicsTerrainUse(encoder, graphicsUse);
-        pendingTerrainGraphicsUse = 0L;
+        ctx.gpuExecutor().endGraphicsUse(encoder, graphicsUse);
+        pendingGraphicsUse = null;
     }
 
     public void endFrame() {
@@ -514,10 +524,10 @@ public final class RtComposite {
                     WorldPushConstantsData.BYTE_SIZE, true, GUIDE_COUNT, bindlessTextureCapacity, true);
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
-                pushRing = new RtBuffer[PUSH_RING];
+                pushRing = new PushSlot[PUSH_RING];
                 for (int i = 0; i < PUSH_RING; i++) {
-                    pushRing[i] = ctx.createBuffer(WORLD_PUSH_SIZE,
-                            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i);
+                    pushRing[i] = new PushSlot(ctx.createBuffer(WORLD_PUSH_SIZE,
+                            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
                 }
             }
             if (output != null) {
@@ -761,6 +771,12 @@ public final class RtComposite {
     private void recordFrame(RtContext ctx, RtPipeline active, GpuTexture nativeColor) {
         long dstImage = vkImage(nativeColor);
         var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
+        RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
+        // Reserve the graphics-use value that guards this frame's reusable TLAS and entity resources.
+        RtGpuExecutor.GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(encoder);
+        RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
+        pendingGraphicsUse = graphicsUse;
+        RtEntities.FrameEntities frameEntities = null;
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
@@ -781,7 +797,10 @@ public final class RtComposite {
             // Select the next BDA ring slot; the generated WorldPushData serializer fills it once all
             // frame-derived values (including entity addresses and block-breaking entries) are known.
             pushSlot = (pushSlot + 1) % PUSH_RING;
-            RtBuffer pushBuf = pushRing[pushSlot];
+            PushSlot selectedPushSlot = pushRing[pushSlot];
+            graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
+            selectedPushSlot.graphicsUse.mark(graphicsUse);
+            RtBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             // flags: PBR BRDF (bit 1, always on) + camera-in-water (so the path tracer starts in the water
@@ -829,6 +848,7 @@ public final class RtComposite {
             // feeds the hit shader entity path (per-prim normal/tint) and motion vectors.
             RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, terrain.staticInstances(),
                     terrain.blockX, terrain.blockY, terrain.blockZ, camX, camY, camZ, frameProjection, frameViewRotation);
+            frameEntities = fe;
             // Block-breaking overlay: resolves each destroy-stage RenderType's texture into the
             // SAME bindless entity-texture array (destroy_stage_N.png is a standalone Sampler0 texture,
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
@@ -877,9 +897,8 @@ public final class RtComposite {
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
             RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx));
-            // Build the entity BLAS this frame, then the TLAS that references them (+ the already-built
-            // terrain BLAS), then the trace — each separated by a barrier. The frame TLAS is retired
-            // KEEP_FRAMES later (entity meshes/BLAS are retired by RtEntities on the same horizon).
+            // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
+            // Barriers separate each stage; the graphics-use timeline guards resource reuse.
             if (!fe.blas().isEmpty()) {
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blasRecord")) {
                     RtAccel.recordBlasBuilds(ctx, cmd, fe.blas());
@@ -888,9 +907,10 @@ public final class RtComposite {
             }
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
-                frameTlas = RtAccel.prepareTlas(ctx, fe.baseInstances(), fe.dynamicInstances(), tlasRing);
+                frameTlas = RtAccel.prepareTlas(ctx, fe.baseInstances(), fe.dynamicInstances(), tlasRing,
+                        graphicsUse);
             }
-            active.setTlas(frameTlas.accel.handle);
+            active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
                 RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
@@ -961,10 +981,10 @@ public final class RtComposite {
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
-        RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
-        long graphicsUse = gpuExecutor.beginGraphicsTerrainUse(encoder);
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
-        pendingTerrainGraphicsUse = graphicsUse;
+        // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
+        // every owner in this frame's manifest is protected through the final overlay consumer.
+        RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
     }
 
     /**
@@ -1230,9 +1250,9 @@ public final class RtComposite {
         materialEpochTraceGate = false;
         RtMaterialRegistry.INSTANCE.destroy();
         if (pushRing != null) {
-            for (RtBuffer b : pushRing) {
-                if (b != null) {
-                    b.destroy();
+            for (PushSlot slot : pushRing) {
+                if (slot != null) {
+                    slot.buffer.destroy();
                 }
             }
             pushRing = null;

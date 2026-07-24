@@ -31,6 +31,7 @@ import java.nio.LongBuffer;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 
@@ -67,17 +68,15 @@ public final class RtPipeline {
     private static final int MATERIAL_SURFACE0_BINDING = 1;
     private static final int MATERIAL_NORMAL_AO_BINDING = 2;
     private static final int MATERIAL_SURFACE1_BINDING = 3;
-    // A ring of descriptor sets: setTlas writes the next slot (long-unused) rather than mutating the
-    // slot in-flight frames are still reading, so the TLAS can be swapped without a device drain.
-    // The TLAS is rebuilt + rebound every frame (dynamic content), so a slot is reused every RING
-    // frames; RING must exceed the max frames-in-flight (vanilla MC ≤ 3) for the reused slot to be off
-    // all queues. 6 gives margin and matches the KEEP_FRAMES-style horizon used for resource frees.
+    // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
+    // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
     private static final int RING = 6;
 
     private final RtContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long[] descriptorSets;
+    private final RtGpuExecutor.TrackedGraphicsUse[] descriptorSetUses;
     private int currentSet;
     private final long pipelineLayout;
     private final long pipeline;
@@ -103,6 +102,10 @@ public final class RtPipeline {
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
         this.descriptorSets = sets;
+        this.descriptorSetUses = new RtGpuExecutor.TrackedGraphicsUse[sets.length];
+        for (int i = 0; i < descriptorSetUses.length; i++) {
+            descriptorSetUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
+        }
         this.currentSet = 0;
         this.pipelineLayout = layout;
         this.pipeline = pipeline;
@@ -362,12 +365,12 @@ public final class RtPipeline {
         return entityBucket == RtAccel.ENTITY_BUCKET_ANY_HIT;
     }
 
-    /**
-     * Bind a new TLAS into the next ring slot (which in-flight frames are no longer reading, since
-     * swaps are many frames apart) and make it current, so the binding can change without a drain.
-     */
-    public void setTlas(long tlas) {
+    /** Bind a new TLAS after the selected descriptor slot's exact prior graphics use completes. */
+    public void setTlas(long tlas, RtGpuExecutor.GraphicsUse graphicsUse,
+                        RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
         currentSet = (currentSet + 1) % RING;
+        RtGpuExecutor.TrackedGraphicsUse slotUse = descriptorSetUses[currentSet];
+        graphicsUseWaiter.await(slotUse);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR).pAccelerationStructures(stack.longs(tlas));
@@ -376,6 +379,7 @@ public final class RtPipeline {
                     .descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
             VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
         }
+        slotUse.mark(graphicsUse);
     }
 
     /** Write the storage image into every ring slot (set once at init / on resize, when idle). */
