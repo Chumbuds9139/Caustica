@@ -13,11 +13,26 @@ import java.util.function.BooleanSupplier;
  */
 final class RtLightHierarchy {
     static final int SOURCE_FLOATS_PER_LIGHT = RtLightCollector.FLOATS_PER_LIGHT;
-    static final int GPU_FLOATS_PER_LIGHT = 12;
+    /**
+     * 8 floats / 32 B per GPU record: {@code {pos.xyz, packedLe} {halfU.xy, halfU.z|halfV.x, halfV.yz,
+     * section}}, half axes packed two per lane. 32 divides the 64 B cache line, so a record never
+     * straddles one — at the previous 48 B roughly half of them did, costing two transactions each. RIS
+     * fetches these at random indices, so that halving of transactions is the point of the layout.
+     * <p>The rectangle area is NOT stored: it is exactly {@code 4*|halfU x halfV|}, since the collector
+     * builds {@code halfU = 0.5*(aHi-aLo)*e01} and {@code rectArea = |e01 x e03|*(aHi-aLo)*(bHi-bLo)}.
+     * world.rgen derives it from the cross product it already computes for the emitter normal.
+     */
+    static final int GPU_FLOATS_PER_LIGHT = 8;
     private static final int MAX_PACKED_GRID_DIM = 1024;
     private static final int NORMAL_FLIP_BIT = 1 << 30;
 
     private RtLightHierarchy() {
+    }
+
+    /** Two halves into one float lane, low half = x — mirrors world_common.slang's unpackHalf2. */
+    private static float packHalf2(float x, float y) {
+        int bits = (Float.floatToFloat16(y) << 16) | (Float.floatToFloat16(x) & 0xFFFF);
+        return Float.intBitsToFloat(bits);
     }
 
     static Data build(List<SectionInput> sections, int rebaseX, int rebaseY, int rebaseZ,
@@ -64,26 +79,28 @@ final class RtLightHierarchy {
                 float leG = section.lights[source + 17];
                 float leB = section.lights[source + 18];
                 int packedLe = packR11G11B10(leR, leG, leB);
+                float halfUx = section.lights[source + 8];
+                float halfUy = section.lights[source + 9];
+                float halfUz = section.lights[source + 10];
+                float halfVx = section.lights[source + 12];
+                float halfVy = section.lights[source + 13];
+                float halfVz = section.lights[source + 14];
                 packedLights[destination] = section.lights[source] + ox;
                 packedLights[destination + 1] = section.lights[source + 1] + oy;
                 packedLights[destination + 2] = section.lights[source + 2] + oz;
-                packedLights[destination + 3] = section.lights[source + 3];
-                packedLights[destination + 4] = section.lights[source + 8];
-                packedLights[destination + 5] = section.lights[source + 9];
-                packedLights[destination + 6] = section.lights[source + 10];
-                packedLights[destination + 7] = Float.intBitsToFloat(packedLe);
-                packedLights[destination + 8] = section.lights[source + 12];
-                packedLights[destination + 9] = section.lights[source + 13];
-                packedLights[destination + 10] = section.lights[source + 14];
-                float crossX = section.lights[source + 9] * section.lights[source + 14]
-                        - section.lights[source + 10] * section.lights[source + 13];
-                float crossY = section.lights[source + 10] * section.lights[source + 12]
-                        - section.lights[source + 8] * section.lights[source + 14];
-                float crossZ = section.lights[source + 8] * section.lights[source + 13]
-                        - section.lights[source + 9] * section.lights[source + 12];
+                packedLights[destination + 3] = Float.intBitsToFloat(packedLe);
+                // Half axes at half precision: these are block-scale offsets from the rectangle centre,
+                // well inside half's range and resolution. The centre itself stays f32 because the RIS
+                // target divides by squared distance to it.
+                packedLights[destination + 4] = packHalf2(halfUx, halfUy);
+                packedLights[destination + 5] = packHalf2(halfUz, halfVx);
+                packedLights[destination + 6] = packHalf2(halfVy, halfVz);
+                float crossX = halfUy * halfVz - halfUz * halfVy;
+                float crossY = halfUz * halfVx - halfUx * halfVz;
+                float crossZ = halfUx * halfVy - halfUy * halfVx;
                 if (crossX * section.lights[source + 4] + crossY * section.lights[source + 5]
                         + crossZ * section.lights[source + 6] < 0.0f) {
-                    packedLights[destination + 11] = Float.intBitsToFloat(NORMAL_FLIP_BIT);
+                    packedLights[destination + 7] = Float.intBitsToFloat(NORMAL_FLIP_BIT);
                 }
                 double luminance = 0.2126 * unpackUnsignedFloat(packedLe & 0x7ff, 6)
                         + 0.7152 * unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6)
@@ -136,7 +153,7 @@ final class RtLightHierarchy {
                         || z >= MAX_PACKED_GRID_DIM) {
                     throw new IllegalStateException("Light section is outside packed light grid");
                 }
-                int destination = i * GPU_FLOATS_PER_LIGHT + 11;
+                int destination = i * GPU_FLOATS_PER_LIGHT + 7;
                 int flags = Float.floatToRawIntBits(packedLights[destination]) & NORMAL_FLIP_BIT;
                 packedLights[destination] = Float.intBitsToFloat(flags | x | (y << 10) | (z << 20));
             }

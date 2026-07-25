@@ -89,13 +89,13 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         if (instanceKind == ENTITY_BIT && shadowRay && materialHeader.model == MATERIAL_GLASS) {
             float3 tint = lerp(float3(1.0, 1.0, 1.0),
                     srgbToLinear(texel.rgb) * epr.tint.rgb, texel.a);
-            payload.albedo *= tint * clamp(materialHeader.params.w, 0.0, 1.0);
+            payload.albedo *= half3(tint * clamp(materialHeader.params.w, 0.0, 1.0));
             IgnoreHit();
         }
         if (instanceKind == ENTITY_BIT && shadowRay && materialHeader.model == MATERIAL_WATER) {
             float3 tint = srgbToLinear(texel.rgb) * epr.tint.rgb;
-            payload.albedo *= lerp(float3(1.0, 1.0, 1.0), tint, WATER_SHADOW_TINT)
-                    * clamp(materialHeader.params.w, 0.0, 1.0);
+            payload.albedo *= half3(lerp(float3(1.0, 1.0, 1.0), tint, WATER_SHADOW_TINT)
+                    * clamp(materialHeader.params.w, 0.0, 1.0));
             payload.hitT = payload.hitT < 0.0 ? RayTCurrent() : min(payload.hitT, RayTCurrent());
             IgnoreHit();
         }
@@ -110,7 +110,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // the biome water color, then keep walking so submerged terrain is lit by colored transmission.
     if (bucket == BUCKET_WATER) {
         TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
-        payload.albedo *= lerp(float3(1.0, 1.0, 1.0), pr.tint.rgb, WATER_SHADOW_TINT);
+        payload.albedo *= half3(lerp(float3(1.0, 1.0, 1.0), pr.tint.rgb, WATER_SHADOW_TINT));
         // Record the NEAREST water crossing (any-hit order is arbitrary) in the shadow payload's hitT
         // lane. For an underwater shading point this is the exit point of its sun shadow ray, where
         // world.rgen evaluates the wave-refraction caustic. visibility() seeds the -1 sentinel.
@@ -136,7 +136,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         // The neutral floor is a flat per-hit dimming, NOT scaled by alpha: vanilla clear glass has a low
         // natural alpha, so folding it into the alpha-scaled term crushed it to near-zero for exactly the
         // white/clear-glass case it's meant to cover.
-        payload.albedo *= exp(-colorExtinction * materialHeader.average.a - TRANSLUCENT_NEUTRAL_EXTINCTION);
+        payload.albedo *= half3(exp(-colorExtinction * materialHeader.average.a - TRANSLUCENT_NEUTRAL_EXTINCTION));
         IgnoreHit();
     }
 

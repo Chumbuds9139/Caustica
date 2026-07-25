@@ -29,13 +29,14 @@ final class RtLightHierarchyTest {
         assertEquals(0.25, aliasProbability(data.localAliases(), 0, 2, 0), 1.0e-6);
         assertEquals(0.75, aliasProbability(data.localAliases(), 0, 2, 1), 1.0e-6);
         // Position is compacted into rebased world coordinates by the worker.
+        int stride = RtLightHierarchy.GPU_FLOATS_PER_LIGHT;
         assertEquals(0f, data.packedLights()[0], 0f);
-        assertEquals(48f, data.packedLights()[2 * 12], 0f);
-        // Grid-relative section coordinates live in the final Light48 lane.
-        assertPackedCoord(data.packedLights()[11], 2, 2, 2);
-        assertPackedCoord(data.packedLights()[2 * 12 + 11], 5, 4, 3);
+        assertEquals(48f, data.packedLights()[2 * stride], 0f);
+        // Grid-relative section coordinates live in the record's final lane.
+        assertPackedCoord(data.packedLights()[stride - 1], 2, 2, 2);
+        assertPackedCoord(data.packedLights()[2 * stride + stride - 1], 5, 4, 3);
         assertEquals(1f / 6f, data.invGlobalPowerSum(), 1.0e-6f);
-        assertEquals(3L * 48L, data.lightBytes());
+        assertEquals(3L * stride * Float.BYTES, data.lightBytes());
         assertEquals(3L * 8L, data.globalAliases().bytes());
     }
 

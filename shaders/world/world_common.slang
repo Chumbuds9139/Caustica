@@ -10,12 +10,21 @@ module world_common;
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
 
 // Push constant block. The hot inline lanes avoid dereferencing WorldPush for values that are read in
-// hit shaders or used for raygen control flow.
+// hit shaders or used for raygen control flow — every 64-bit device address lives here for exactly that
+// reason, rather than behind the worldPushAddr indirection. tableAddr/entityTableAddr/materialTableAddr
+// are read in world.rahit/world.rchit, which never load WorldPush at all; the light-buffer addresses are
+// only read in world.rgen, which loads WorldPush anyway, but keeping every Addr in one place means there
+// is exactly one struct to check when adding a new device buffer, instead of two.
 public struct WorldPushConstants {
     public uint64_t worldPushAddr;
     public uint64_t tableAddr;
     public uint64_t entityTableAddr;
     public uint64_t materialTableAddr;
+    public uint64_t lightBufAddr;        // RIS emitter-NEE global light buffer (0 = none published)
+    public uint64_t lightAliasAddr;      // power-weighted O(1) alias table (0 = uniform fallback)
+    public uint64_t lightLocalAliasAddr; // power aliases relative to each section's range
+    public uint64_t lightGridCellAddr;   // dense light grid cell headers (0 = global proposals only)
+    public uint64_t lightGridSpanAddr;   // packed weighted section spans referenced by cell headers
     public uint frameIndex;
     public uint debugView;
 };
@@ -31,14 +40,12 @@ public struct BreakEntry {
 public struct WorldPush {
     public float4x4 invViewProj;
     public float3   camOffset;
-    public uint64_t tableAddr;        // section table
     public uint     frameIndex;
     public float4x4 prevViewProj;
     public float3   camDelta;
     public uint     spp;
     public float2   jitter;
-    public uint64_t entityTableAddr;  // entity geometry table
-    public uint     flags;            // bit0 submerged, bit1 PBR, bit4 waves
+    public uint     flags;            // bit0 submerged, bit4 waves (bit1 was PBR-toggle, now unconditional)
     public uint     maxBounces;
     public float4   sunDir;           // xyz true sun direction, w dayFactor 0..1
     public float4   lightDir;         // xyz active NEE light dir, w square half-angle (rad)
@@ -52,24 +59,32 @@ public struct WorldPush {
     public float4x4 curViewProj;      // forward camera-relative view-projection
     public uint     breakCount;
     public BreakEntry breaking[8];    // Java capacity and breakCount serialization are generated from this
-    public uint64_t lightBufAddr;     // RIS emitter-NEE global light buffer (0 = none published)
-    public uint64_t lightAliasAddr;   // power-weighted O(1) alias table (0 = uniform fallback)
-    public uint64_t lightLocalAliasAddr; // power aliases relative to each section's range
     public float4   lightRebase;      // xyz hierarchy-to-current rebase, w inverse total light power
-    public uint64_t lightGridCellAddr;   // dense light grid cell headers (0 = global proposals only)
-    public uint64_t lightGridSpanAddr;   // packed weighted section spans referenced by cell headers
     public float4   lightGridOrigin;     // xyz minimum cell origin in rebased blocks, w cell size
     public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
-    public uint     lightCount;       // packed Light records in lightBufAddr
+    public uint     lightCount;       // packed Light records in pc.lightBufAddr
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
 };
 
-// 48-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
+// 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
 // uses three unsigned 10-bit coordinates; the geometric normal is reconstructed from the half axes.
+//
+// 32 divides the 64-byte cache line, so a record never straddles one. At the previous 48 bytes about
+// half of them did, costing two transactions apiece — and RIS fetches these at random indices, M per
+// shading vertex, so that is the layout's whole purpose. float3 forces 16-byte struct alignment and 32
+// is a multiple of it, so this lands with no tail padding.
+//
+// The rectangle area is derived rather than stored: the rect spans 2U x 2V, so area = 4*|U x V|, which
+// is exactly what the collector used to write (halfU = 0.5*(aHi-aLo)*e01 and rectArea =
+// |e01 x e03|*(aHi-aLo)*(bHi-bLo)). lightGeometricNormal already needs that cross product, so the
+// freed lane costs one length() the compiler shares with the normalize.
 public struct Light {
-    public float4 posArea;
-    public float4 halfULe;       // xyz world half-axis U, w bitcast R11G11B10 radiance
-    public float4 halfVSection;  // xyz half-axis V, w bitcast 10:10:10 section + normal-flip bit
+    public float3 pos;      // rebased world centre, f32 (the RIS target divides by distance to it)
+    public uint   le;       // bitcast R11G11B10 radiance
+    public uint   halfUxy;  // half2(U.x, U.y)
+    public uint   halfUzVx; // half2(U.z, V.x)
+    public uint   halfVyz;  // half2(V.y, V.z)
+    public uint   section;  // 10:10:10 grid-relative section coord + bit 30 normal-flip
 };
 
 // Eight-byte Vose alias-table column. PDFs are reconstructed from the selected Light.
@@ -97,13 +112,23 @@ public struct LightGridSpan {
 // TerrainPrim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 
+// Largest finite half. The payload's half3 lanes carry HDR values (sky radiance most of all), so
+// producers clamp to this instead of letting the conversion round up to +inf.
+public static const float HALF_MAX = 65504.0;
+
 // Radiance-ray payload (location 0). Member order and types are a cross-stage ABI.
+//
+// The three-component lanes are half3: they cost 6 bytes instead of 12, and payload storage is reserved
+// per trace call site, so every byte here is paid twice per radiance trace (once for TraceRay, once for
+// Invoke) and is preserved across the SER reorder. hitT stays f32 — it reaches 10000 blocks and the hit
+// position is reconstructed from it, where half's ~4-block spacing at that magnitude would be visible.
 public struct Payload {
-    public float3 albedo;      // hit: block albedo. miss: sky radiance.
-    public float3 normal;      // hit: geometric normal, viewer-oriented.
+    // Sky radiance on a miss, so this carries HDR values well above 1; half tops out at 65504.
+    public half3  albedo;      // hit: block albedo. miss: sky radiance.
+    public half3  normal;      // hit: geometric normal, viewer-oriented.
     public float  hitT;        // >= 0 on hit, < 0 on miss.
-    public float3 motionPrev;  // per-vertex world displacement since last frame.
-    public float3 f0;          // specular F0.
+    public half3  motionPrev;  // per-vertex world displacement since last frame.
+    public half3  f0;          // specular F0.
     public uint   flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source.
     public uint   roughMetal;  // packHalf2x16(roughness, metalness)
     public uint   emissionSss; // packHalf2x16(emission, sss)

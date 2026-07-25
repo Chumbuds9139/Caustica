@@ -33,13 +33,16 @@ final class RtMaterialLayoutTest {
     }
 
     @Test
-    void reflectedWorldPushConstantsIncludeMaterialTableAndDebugView() {
-        assertEquals(40, WorldPushConstantsData.BYTE_SIZE);
+    void reflectedWorldPushConstantsIncludeLightBuffersAndDebugView() {
+        // 9 uint64_t addresses (worldPush/table/entityTable/materialTable + the 5 light buffers) + 2 uint.
+        assertEquals(80, WorldPushConstantsData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(WorldPushConstantsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5, 6).write(data);
-        assertEquals(4L, data.getLong(24));
-        assertEquals(5, data.getInt(32));
-        assertEquals(6, data.getInt(36));
+        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10, 11).write(data);
+        assertEquals(4L, data.getLong(24));  // materialTableAddr
+        assertEquals(5L, data.getLong(32));  // lightBufAddr
+        assertEquals(9L, data.getLong(64));  // lightGridSpanAddr (last of the light-buffer addresses)
+        assertEquals(10, data.getInt(72));   // frameIndex
+        assertEquals(11, data.getInt(76));   // debugView
     }
 }

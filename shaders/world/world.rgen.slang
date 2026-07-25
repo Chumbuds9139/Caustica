@@ -78,10 +78,6 @@ float payloadEmission() { return unpackHalf2(payload.emissionSss).x; }
 float payloadSss() { return unpackHalf2(payload.emissionSss).y; }
 float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }
 float payloadTransmission() { return unpackHalf2(payload.iorTransmission).y; }
-void payloadSetTraceState(bool showCelestial, float rayConeWidth, float rayConeSpread) {
-    payload.flags = showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u;
-    payload.rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
-}
 
 static const float PI = 3.14159265359;
 static const float INV_PI = 0.31830988618;
@@ -251,7 +247,11 @@ float3 fresnelSchlick(float cosT, float3 f0) {
 // g=0 → isotropic; g>0 → forward-scatter peak at cosT=1 (light and view aligned through a thin slab).
 static const float SSS_G        = 0.6; // forward-scatter anisotropy; leaves/grass are quite directional
 static const float SSS_STRENGTH = 1.0; // 1.0 ≈ 2.5× the Lambertian at peak (sss=1, cosT=1, backNdl=1)
-static const int   MAX_SSS_BOUNCE = 1; // fire the transmission shadow ray on primary + first indirect hit only
+// Deepest SHADED surface at which the SSS transmission shadow ray fires. diffuseDepth, not `bounce`: the
+// glass/water continue branches don't shade a surface, so foliage seen through a window is still
+// diffuseDepth 0 and should backlight like any other primary leaf — see RIS_MAX_DIFFUSE_DEPTH for the
+// same distinction and why it matters.
+static const int   MAX_SSS_DIFFUSE_DEPTH = 1; // fire on the first-shaded surface + one indirect hit
 float hg(float cosT, float g) {
     float g2 = g * g;
     return (1.0 - g2) / (4.0 * PI * pow(max(0.0, 1.0 + g2 - 2.0 * g * cosT), 1.5));
@@ -435,7 +435,7 @@ Reservoir resEmpty() {
 //   - back hemisphere with sss>0 (LabPBR leaves/grass): HG transmission phase — cosT = dot(wi,rd) peaks
 //     when the ray points from the light through the slab toward the camera (same as the sun SSS term).
 float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos, float3 n,
-                         float3 v, float3 rd, float3 diffAlb, float3 F0, float rough, bool pbr,
+                         float3 v, float3 rd, float3 diffAlb, float3 F0, float rough,
                          bool twoSided, float sss, out float phat) {
     phat = 0.0;
     float3 toL = sp - hitPos;
@@ -457,7 +457,11 @@ float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 h
     if (ndl > 0.0) {
         float G = ndl * cosL / dist2; // area-light geometry term (x area)
         float3 brdf = diffAlb * INV_PI;
-        if (pbr) {
+        // twoSided callers are particle billboards, which pass rough=1/F0=0 and want diffuse-only
+        // shading: fresnelSchlick still returns up to full white at grazing angles even with F0=0 (that
+        // IS the Fresnel effect), so skipping the term here — not just zeroing F0 — is what keeps
+        // billboards from picking up a rim highlight they were never meant to have.
+        if (!twoSided) {
             float3 h = normalize(wi + v);
             float ndh = max(0.0, dot(n, h));
             float ndv = max(1.0e-4, dot(n, v));
@@ -482,8 +486,8 @@ float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 h
 void selectGlobalLight(inout uint proposalSeed, out uint lightIndex) {
     float aliasSample = rndf(proposalSeed) * float(worldPush.lightCount);
     uint column = min(uint(aliasSample), worldPush.lightCount - 1u);
-    if (worldPush.lightAliasAddr != 0) {
-        LightAlias a = ConstPtr<LightAlias>(worldPush.lightAliasAddr)[column];
+    if (pc.lightAliasAddr != 0) {
+        LightAlias a = ConstPtr<LightAlias>(pc.lightAliasAddr)[column];
         bool self = aliasSample - float(column) < a.accept;
         lightIndex = self ? column : a.aliasIndex;
     } else {
@@ -496,7 +500,7 @@ bool findLightGridCell(float3 p, out LightGridCell cell, out int3 cellCoord) {
     cell.spanCount = 0u;
     cell.invWeightSum = 0.0;
     cellCoord = int3(0, 0, 0);
-    if (worldPush.lightGridCellAddr == 0 || worldPush.lightGridSpanAddr == 0) return false;
+    if (pc.lightGridCellAddr == 0 || pc.lightGridSpanAddr == 0) return false;
     int3 coord = int3(floor((p - worldPush.lightGridOrigin.xyz) / worldPush.lightGridOrigin.w));
     if (coord.x < 0 || coord.y < 0 || coord.z < 0
             || coord.x >= worldPush.lightGridDims.x
@@ -504,7 +508,7 @@ bool findLightGridCell(float3 p, out LightGridCell cell, out int3 cellCoord) {
             || coord.z >= worldPush.lightGridDims.z) return false;
     uint linear = (uint(coord.z) * uint(worldPush.lightGridDims.y) + uint(coord.y))
             * uint(worldPush.lightGridDims.x) + uint(coord.x);
-    cell = ConstPtr<LightGridCell>(worldPush.lightGridCellAddr)[linear];
+    cell = ConstPtr<LightGridCell>(pc.lightGridCellAddr)[linear];
     cellCoord = coord;
     return cell.spanCount > 0u;
 }
@@ -513,7 +517,7 @@ void selectSectionLight(uint firstLight, uint lightCount, inout uint proposalSee
                         out uint lightIndex) {
     float aliasSample = rndf(proposalSeed) * float(lightCount);
     uint column = min(uint(aliasSample), lightCount - 1u);
-    LightAlias alias = ConstPtr<LightAlias>(worldPush.lightLocalAliasAddr)[firstLight + column];
+    LightAlias alias = ConstPtr<LightAlias>(pc.lightLocalAliasAddr)[firstLight + column];
     bool self = aliasSample - float(column) < alias.accept;
     uint localIndex = self ? column : alias.aliasIndex;
     lightIndex = firstLight + localIndex;
@@ -531,27 +535,46 @@ float unpackUnsignedFloat(uint bits, uint mantissaBits) {
 }
 
 float3 lightRadiance(Light light) {
-    uint packed = asuint(light.halfULe.w);
+    uint packed = light.le;
     return float3(unpackUnsignedFloat(packed & 0x7ffu, 6u),
             unpackUnsignedFloat((packed >> 11u) & 0x7ffu, 6u),
             unpackUnsignedFloat((packed >> 22u) & 0x3ffu, 5u));
 }
 
 int3 lightSectionCoord(Light light) {
-    uint packed = asuint(light.halfVSection.w);
+    uint packed = light.section;
     return int3(int(packed & 0x3ffu), int((packed >> 10u) & 0x3ffu),
             int((packed >> 20u) & 0x3ffu));
 }
 
+// The half axes share three lanes two-at-a-time; see the Light record in world_common.
+float3 lightHalfU(Light light) {
+    return float3(unpackHalf2(light.halfUxy), unpackHalf2(light.halfUzVx).x);
+}
+
+float3 lightHalfV(Light light) {
+    return float3(unpackHalf2(light.halfUzVx).y, unpackHalf2(light.halfVyz));
+}
+
+// U x V drives both the emitter normal and the rectangle area, so it is computed once and shared.
+float3 lightCrossUV(Light light) {
+    return cross(lightHalfU(light), lightHalfV(light));
+}
+
+// The rect spans 2U x 2V, so its area is 4|U x V| — exactly the rectArea the collector used to store.
+float lightArea(Light light) {
+    return 4.0 * length(lightCrossUV(light));
+}
+
 float3 lightGeometricNormal(Light light) {
-    float3 normal = normalize(cross(light.halfULe.xyz, light.halfVSection.xyz));
-    return (asuint(light.halfVSection.w) & 0x40000000u) != 0u ? -normal : normal;
+    float3 normal = normalize(lightCrossUV(light));
+    return (light.section & 0x40000000u) != 0u ? -normal : normal;
 }
 
 float proposalPdf(Light light, float3 le, LightGridCell cell, int3 cellCoord,
                   float localProbability) {
-    float power = max(0.0, light.posArea.w * luminance(le));
-    float globalPdf = worldPush.lightAliasAddr != 0
+    float power = max(0.0, lightArea(light) * luminance(le));
+    float globalPdf = pc.lightAliasAddr != 0
             ? power * worldPush.lightRebase.w : 1.0 / float(worldPush.lightCount);
     float localPdf = 0.0;
     if (localProbability > 0.0 && power > 0.0) {
@@ -566,7 +589,7 @@ float proposalPdf(Light light, float3 le, LightGridCell cell, int3 cellCoord,
 
 void selectLightGridSpanLight(LightGridCell cell, inout uint proposalSeed,
                               out uint lightIndex) {
-    ConstPtr<LightGridSpan> spans = ConstPtr<LightGridSpan>(worldPush.lightGridSpanAddr);
+    ConstPtr<LightGridSpan> spans = ConstPtr<LightGridSpan>(pc.lightGridSpanAddr);
     float aliasSample = rndf(proposalSeed) * float(cell.spanCount);
     uint column = min(uint(aliasSample), cell.spanCount - 1u);
     LightGridSpan span = spans[cell.spanOffset + column];
@@ -591,23 +614,66 @@ void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint proposal
     }
 }
 
+// ---- RIS cost budget. Both constants below come from a set of temporary probes that pinned the
+// candidate walk out of the shader to bound what memory-side RIS work could ever be worth. Against an
+// 18.0ms frame at M=8, removing every dependent load (span -> alias -> record) and all lane divergence
+// saved 5.9ms — a third of the frame. Split by vertex that was ~4.3ms at secondary vertices against
+// ~1.1ms at the primary hit, and forcing coherent selection recovered at most 1.3ms of it. So the cost
+// was chasing DEPTH, not divergence, and it lived at secondary vertices. The two knobs below spend that
+// finding; a presampled candidate pool would attack the same 5.9ms structurally, but see the note on
+// proposalSeed in tracePath for why it should share the pool rather than the seed.
+
+// Candidate-count divisor for RIS at secondary vertices (bounce > 0). Secondary vertices carried ~78% of
+// the cost while being much the more forgiving place to spend variance: that radiance is already
+// integrated over a diffuse lobe before the denoiser sees it. 18.0 -> 16.1ms, and indistinguishable from
+// 1 by eye — whereas reducing M globally to 2 was clearly worse, because that also degraded the primary
+// hit. The primary hit always keeps the full worldPush.risCandidates.
+//
+// 4 is the floor worth using rather than a tuning accident. The stratification below keeps at least one
+// global candidate, so M=2 is the smallest count that still schedules one local AND one global; at M=1
+// localProbability collapses to 0 and the light-grid proposal that makes nearby emitters sample well is
+// gone entirely.
+static const uint SECONDARY_RIS_DIVISOR = 4u;
+
+// Deepest SHADED surface at which RIS emitter NEE runs. Past it, emitters are gathered only when a path
+// hits one directly — the pre-RIS behaviour, still unbiased because gateEmitter lifts in lockstep, so the
+// failure mode is noisier emitter light at depth rather than missing light. Unlike the divisor this also
+// drops shadeReservoir's per-vertex shadow ray, which never scaled with M. Gating at all: 16.1 -> 15.7ms.
+//
+// This counts diffuseDepth, not `bounce`, and the difference is not cosmetic. MATERIAL_GLASS and
+// MATERIAL_WATER continue without shading anything, so looking through a pane spends bounce 0 on the
+// glass and lands the first shaded surface at bounce 1. Gating on `bounce` therefore starved surfaces
+// seen through glass or water — visually primary, but counted as depth — and they went black, since only
+// a path randomly striking an emitter could light them. Keying on shaded surfaces removes that whole
+// class of bug and lets the budget go lower than the two bounces of headroom the dielectric prefix used
+// to cost.
+//
+// Caveat this does not solve: a smooth specular bounce IS a shaded surface, so a wall seen in a metal
+// block counts as depth 1. Accumulated roughness rather than a vertex count is the principled fix, and
+// is what a radiance cache would need anyway to decide cache-vs-trace.
+static const uint RIS_MAX_DIFFUSE_DEPTH = 2u;
+
 // Initial RIS over M power-weighted candidates -> one resampled sample, no shadow ray yet. The chosen
 // sample's W = wSum / (M * p-hat); M counts every candidate, including zero-weight ones.
 Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
-                     float rough, bool pbr, bool twoSided, float sss,
+                     float rough, bool twoSided, float sss, uint shadedDepth,
                      inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
     LightGridCell gridCell;
     int3 gridCellCoord;
     float3 gridLookup = hitPos;
-    if (worldPush.lightGridCellAddr != 0) {
+    if (pc.lightGridCellAddr != 0) {
         // Stochastically blend across hard section boundaries. Every cell proposal retains full global
         // support, so conditioning on this independently jittered lookup remains unbiased.
         gridLookup += (float3(rndf(proposalSeed), rndf(proposalSeed), rndf(proposalSeed)) - 0.5)
                 * worldPush.lightGridOrigin.w;
     }
     bool hasGridCell = findLightGridCell(gridLookup, gridCell, gridCellCoord);
-    uint candidateCount = worldPush.risCandidates;
+    // shadedDepth, not the bounce index: a surface behind glass or water is the first thing this path has
+    // shaded and is visually primary, so it keeps the full candidate count.
+    uint candidateCount = shadedDepth == 0u
+            ? worldPush.risCandidates
+            : max(1u, worldPush.risCandidates / SECONDARY_RIS_DIVISOR);
     // Deterministically stratify the proposal mixture. At the default M=8 this schedules exactly six
     // local and two global candidates, with every lane taking the same branch for a given candidate.
     // Counts that are not divisible by four use the nearest practical split with at least one global
@@ -616,24 +682,25 @@ Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAl
             ? max(1u, (candidateCount + 2u) / 4u) : candidateCount;
     uint localCandidateCount = candidateCount - globalCandidateCount;
     float localProbability = float(localCandidateCount) / float(candidateCount);
-    for (uint c = 0u; c < worldPush.risCandidates; c++) {
+    for (uint c = 0u; c < candidateCount; c++) {
         r.M += 1.0;
         uint li;
         uint globalsBefore = (c * globalCandidateCount) / candidateCount;
         uint globalsAfter = ((c + 1u) * globalCandidateCount) / candidateCount;
         bool useLocal = hasGridCell && globalsAfter == globalsBefore;
         selectLightGridLight(gridCell, useLocal, proposalSeed, li);
-        Light lg = ConstPtr<Light>(worldPush.lightBufAddr)[li];
+        Light lg = ConstPtr<Light>(pc.lightBufAddr)[li];
         // Soft shadows: uniform point on the emitter rectangle ((s,t) in [-1,1]^2, pdf 1/area).
         float s = rndf(seed) * 2.0 - 1.0;
         float t = rndf(seed) * 2.0 - 1.0;
-        float3 sp = lg.posArea.xyz + worldPush.lightRebase.xyz
-                + s * lg.halfULe.xyz + t * lg.halfVSection.xyz;
+        float3 sp = lg.pos + worldPush.lightRebase.xyz
+                + s * lightHalfU(lg) + t * lightHalfV(lg);
         float3 le = lightRadiance(lg);
         float3 lightNormal = lightGeometricNormal(lg);
+        float area = lightArea(lg);
         float phat;
-        evalSampleContrib(sp, lightNormal, le, lg.posArea.w, hitPos, n, v, rd,
-                diffAlb, F0, rough, pbr, twoSided, sss, phat);
+        evalSampleContrib(sp, lightNormal, le, area, hitPos, n, v, rd,
+                diffAlb, F0, rough, twoSided, sss, phat);
         if (phat <= 0.0) {
             continue;
         }
@@ -644,7 +711,7 @@ Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAl
             r.pos = sp;
             r.lnrm = lightNormal;
             r.le = le;
-            r.area = lg.posArea.w;
+            r.area = area;
             r.phat = phat;
         }
     }
@@ -657,14 +724,14 @@ Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAl
 // the survivor (front BRDF, twoSided billboard, or SSS backscatter) — the origin is biased toward the
 // sample's side of the surface.
 float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-                      float3 F0, float rough, bool pbr, bool twoSided, float sss, out float3 vis) {
+                      float3 F0, float rough, bool twoSided, float sss, out float3 vis) {
     vis = float3(0.0, 0.0, 0.0);
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
     float phat;
     float3 contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, n, v, rd,
-            diffAlb, F0, rough, pbr, twoSided, sss, phat);
+            diffAlb, F0, rough, twoSided, sss, phat);
     if (phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
@@ -703,23 +770,56 @@ RayDesc makeRay(float3 origin, float tmin, float3 dir, float tmax) {
     return r;
 }
 
+// A radiance payload carrying only the two words the invoked hit/miss shader READS: `flags`
+// (show-celestial gate, consumed by world.rmiss) and the packed ray cone (consumed by world.rchit for
+// texture LOD). Every other member is an OUTPUT that world.rchit/world.rmiss write, so it carries no
+// information into a trace and is initialized to a neutral value here.
+Payload makeRadiancePayload(uint flags, uint rayCone) {
+    Payload p;
+    p.albedo = half3(0.0h, 0.0h, 0.0h);
+    p.normal = half3(0.0h, 0.0h, 0.0h);
+    p.hitT = -1.0; // miss sentinel: world.rmiss writes only albedo, so a miss leaves this negative
+    p.motionPrev = half3(0.0h, 0.0h, 0.0h);
+    p.f0 = half3(0.0h, 0.0h, 0.0h);
+    p.flags = flags;
+    p.roughMetal = 0u;
+    p.emissionSss = 0u;
+    p.iorTransmission = 0u;
+    p.rayCone = rayCone;
+    return p;
+}
+
 // SER radiance trace: trace into a hit object, reorder threads by hit coherence, THEN invoke the
 // hit/miss shader — this is where the divergent Section/Prim shading work (world.rchit/world.rahit)
 // actually happens, so reordering before it is what pays for the reorder's own cost.
-void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax) {
+//
+// The payload is built TWICE from the trace state rather than carried across ReorderThread. Traversal
+// runs only world.rahit, which never writes a RADIANCE payload: its terrain tint paths live in the
+// translucent/water buckets, which carry no any-hit record for radiance rays, and its entity paths are
+// gated on RAY_FLAG_SKIP_CLOSEST_HIT_SHADER. So whatever TraceRay leaves in the payload holds no
+// information. Reading it back and carrying it over would pin all ten members — 72 bytes — in registers
+// across the one point where SER must spill every live value, which profiling showed to be the peak
+// live state in this shader. Rebuilding costs a few constant moves and leaves only these two words
+// spanning the reorder.
+void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
+                            bool showCelestial, float rayConeWidth, float rayConeSpread) {
+    uint flags = showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u;
+    uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
+    Payload tracePayload = makeRadiancePayload(flags, rayCone);
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
-            SBT_RADIANCE, SBT_STRIDE_BUCKET, 0u, makeRay(ro, tmin, rd, tmax), payload);
+            SBT_RADIANCE, SBT_STRIDE_BUCKET, 0u, makeRay(ro, tmin, rd, tmax), tracePayload);
     ReorderThread(hObj);
+    payload = makeRadiancePayload(flags, rayCone);
     HitObject::Invoke(topLevelAS, hObj, payload);
 }
 
 Payload makeShadowPayload() {
     Payload shadowPayload;
-    shadowPayload.albedo = float3(1.0, 1.0, 1.0);
+    shadowPayload.albedo = half3(1.0h, 1.0h, 1.0h);
     shadowPayload.hitT = -1.0; // water-crossing sentinel, filled by the water any-hit
-    shadowPayload.normal = float3(0.0, 0.0, 0.0);
-    shadowPayload.motionPrev = float3(0.0, 0.0, 0.0);
-    shadowPayload.f0 = float3(0.0, 0.0, 0.0);
+    shadowPayload.normal = half3(0.0h, 0.0h, 0.0h);
+    shadowPayload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+    shadowPayload.f0 = half3(0.0h, 0.0h, 0.0h);
     shadowPayload.flags = 0u;
     shadowPayload.roughMetal = 0u;
     shadowPayload.emissionSss = 0u;
@@ -783,11 +883,10 @@ float2 specularReflectionMotion(float3 surfacePos, float3 primaryDir, float2 cur
     // lies in the screen plane there) -> a non-zero MV in a static scene. Reconstructing from surfacePos
     // cancels the term so the mirror lands exactly on the view ray (static MV = bit-exact zero) WITHOUT
     // zeroing the trace bias the main path tracer needs to avoid surface acne.
-    payload.hitT = -1.0;
-    payloadSetTraceState(false,
+    traceRadianceReordered(CULL_SECONDARY, surfacePos + n * SURF_BIAS, RAY_TMIN, specDir, 10000.0,
+            false,
             max(length(surfacePos - worldPush.camOffset) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
             max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
-    traceRadianceReordered(CULL_SECONDARY, surfacePos + n * SURF_BIAS, RAY_TMIN, specDir, 10000.0);
 
     float3 reflectedHit;
     float3 reflectedMotionPrev;
@@ -831,9 +930,8 @@ void refractedGuideHit(float3 surfacePos, float3 incidentDir, float3 surfaceNorm
     refracted = true;
 
     float3 ro = surfacePos - surfaceNormal * SURF_BIAS;
-    payload.hitT = -1.0;
-    payloadSetTraceState(false, rayConeWidth, rayConeSpread);
-    traceRadianceReordered(CULL_SECONDARY, ro, RAY_TMIN, refractedDir, 10000.0);
+    traceRadianceReordered(CULL_SECONDARY, ro, RAY_TMIN, refractedDir, 10000.0,
+            false, rayConeWidth, rayConeSpread);
     if (payload.hitT < 0.0) {
         hitCamRel = (ro + refractedDir * 1.0e6) - worldPush.camOffset; // sky through the surface, at infinity
         motionPrev = float3(0.0, 0.0, 0.0);
@@ -847,14 +945,11 @@ void refractedGuideHit(float3 surfacePos, float3 incidentDir, float3 surfaceNorm
     uint material = payloadMaterial();
     motionPrev = material != MATERIAL_WATER ? payload.motionPrev : float3(0.0, 0.0, 0.0);
     if (material == MATERIAL_OPAQUE) {
-        bool pbr = (worldPush.flags & 2u) != 0u;
-        diffuseAlbedo = pbr ? payload.albedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0)) : payload.albedo;
-        if (pbr) {
-            float3 f0 = payload.f0;
-            float rough = clamp(payloadRoughness(), MIN_ROUGH, 1.0);
-            float NoV = clamp(dot(payload.normal, -refractedDir), 0.0, 1.0);
-            specAlbedo = rrSpecularAlbedo(f0, rough * rough, NoV);
-        }
+        diffuseAlbedo = payload.albedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+        float3 f0 = payload.f0;
+        float rough = clamp(payloadRoughness(), MIN_ROUGH, 1.0);
+        float NoV = clamp(dot(payload.normal, -refractedDir), 0.0, 1.0);
+        specAlbedo = rrSpecularAlbedo(f0, rough * rough, NoV);
     }
 }
 
@@ -867,12 +962,13 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
     float rayConeSpread = max(primaryConeSpread, RAY_CONE_MIN_SPREAD);
     int maxBounces = int(worldPush.maxBounces);
     int rrStart = maxBounces <= 3 ? 1 : 2;
-    bool pbr = (worldPush.flags & 2u) != 0u; // GGX BRDF + material guides, else Lambertian fallback
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
-    bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && worldPush.lightBufAddr != 0;
+    bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
     // Independent light-proposal RNG. Screen-space coherent selection is intentionally deferred until
     // there is a real presampled RIS tile buffer; direct sharing made tile-shaped lighting noise visible.
+    // Measured: making a 16x16 tile share this seed recovers at most 1.3ms, so a future pool should share
+    // the POOL rather than the seed — the win is in removing dependent loads, not in coherence.
     uint proposalSeed = pix.x * 1973u + pix.y * 9277u + 26699u
             ^ worldPush.frameIndex * 2654435761u ^ sampleIndex * 2246822519u;
     proposalSeed = pcg(proposalSeed);
@@ -888,14 +984,18 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = true;
+    // Number of surfaces this path has SHADED so far, as distinct from `bounce`, which also counts
+    // dielectric interfaces. Glass and water continue without shading anything, so a wall behind a pane
+    // is bounce 1 but diffuseDepth 0 — visually primary, and it must be treated as such. See
+    // RIS_MAX_DIFFUSE_DEPTH.
+    int diffuseDepth = 0;
     for (int bounce = 0; bounce <= maxBounces; bounce++) {
-        payload.hitT = -1.0;
-        payloadSetTraceState(showCelestial, rayConeWidth, rayConeSpread);
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
         // player. Bounce rays are secondary (CULL_SECONDARY): exclude particles, include the player.
-        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0);
+        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+                showCelestial, rayConeWidth, rayConeSpread);
 
         if (payload.hitT < 0.0) {
             // world.rmiss writes sky radiance (gradient + sun/moon disc + stars) into payload.albedo. The
@@ -1010,13 +1110,13 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
             // RIS direct lighting from block emitters (lava, glowstone, torches, ...) — same reservoir
             // sampler as terrain/entities, but two-sided: a billboard has no back face, so light
             // striking either side of the quad should still land (matches the sun/moon NEE above).
-            if (risOn) {
+            if (risOn && diffuseDepth <= int(RIS_MAX_DIFFUSE_DEPTH)) {
                 float3 v = -rd;
-                Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0, false,
-                        true, 0.0, seed, proposalSeed);
+                Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
+                        true, 0.0, uint(diffuseDepth), seed, proposalSeed);
                 float3 risVis;
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                        false, true, 0.0, risVis);
+                        true, 0.0, risVis);
             }
 
             if (bounce >= maxBounces) {
@@ -1027,6 +1127,7 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse receiver: direct sun/moon was handled by NEE above
+            diffuseDepth++;        // a billboard is a shaded surface, unlike the dielectric branches
             continue;
         }
 
@@ -1099,18 +1200,17 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         float3 v = -rd; // view direction (toward the camera / incoming ray)
 
         // Material split. Metals tint F0 by albedo and have no diffuse lobe; dielectrics use a fixed
-        // 0.04 F0. With PBR disabled this collapses to the Lambertian fallback.
-        float rough = pbr ? clamp(payloadRoughness(), MIN_ROUGH, 1.0) : 1.0;
-        float metal = pbr ? clamp(payloadMetalness(), 0.0, 1.0) : 0.0;
+        // 0.04 F0, sourced from the chit (LabPBR custom/metal F0, or the dielectric default it applies).
+        float rough = clamp(payloadRoughness(), MIN_ROUGH, 1.0);
+        float metal = clamp(payloadMetalness(), 0.0, 1.0);
         float3 diffAlb = albedo * (1.0 - metal);
-        // F0 comes from the chit: dielectric 0.04, a LabPBR custom/metal F0, or albedo for metals.
-        float3 F0 = pbr ? payload.f0 : lerp(float3(0.04, 0.04, 0.04), albedo, metal);
+        float3 F0 = payload.f0;
 
         if (bounce == 0) { // primary-visibility surface: capture the denoiser guide buffers
             gv_normal = n;
-            gv_albedo = pbr ? diffAlb : albedo;  // RR diffuse-albedo demodulation target
+            gv_albedo = diffAlb;  // RR diffuse-albedo demodulation target
             gv_rough = rough;
-            gv_specAlb = pbr ? rrSpecularAlbedo(F0, rough * rough, dot(n, v)) : float3(0.0, 0.0, 0.0);
+            gv_specAlb = rrSpecularAlbedo(F0, rough * rough, dot(n, v));
             gv_hitCamRel = ro + rd * payload.hitT - worldPush.camOffset; // camera-relative hit position
             gv_motionHitCamRel = gv_hitCamRel;
             gv_motionUseRefracted = false;
@@ -1127,7 +1227,11 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         // Emission is already the full HDR strength (EMISSIVE_STRENGTH baseline * any override
         // multiplier baked in Java at material-compile time — see MaterialHeader.features packing).
         float emission = payloadEmission();
-        bool gateEmitter = risOn && payloadEmitterInList();
+        // One gate drives both the RIS call below and the direct-hit emission suppression here. They must
+        // agree: gateEmitter exists only because RIS already accounted for this emitter, so a bounce where
+        // RIS is skipped must also gather emission directly or that light is lost outright.
+        bool risActive = risOn && diffuseDepth <= int(RIS_MAX_DIFFUSE_DEPTH);
+        bool gateEmitter = risActive && payloadEmitterInList();
         if (emission > 0.0 && (!gateEmitter || showCelestial)) {
             L += throughput * albedo * emission;
         }
@@ -1154,16 +1258,14 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
             }
             if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                 float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
-                if (pbr) {
-                    float3 h = normalize(lightDir + v);
-                    float ndh = max(0.0, dot(n, h));
-                    float ndv = max(1.0e-4, dot(n, v));
-                    float vdh = max(0.0, dot(v, h));
-                    float D = ggxD(ndh, rough);
-                    float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
-                    float3 F = fresnelSchlick(vdh, F0);
-                    brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
-                }
+                float3 h = normalize(lightDir + v);
+                float ndh = max(0.0, dot(n, h));
+                float ndv = max(1.0e-4, dot(n, v));
+                float vdh = max(0.0, dot(v, h));
+                float D = ggxD(ndh, rough);
+                float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
+                float3 F = fresnelSchlick(vdh, F0);
+                brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
                 L += throughput * brdf * worldPush.lightRadiance.xyz * ndl * vis;
             }
         }
@@ -1171,14 +1273,16 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         // RIS direct lighting from block emitters (single-frame only, no temporal reservoir reuse).
         // Front lobe + SSS backlighting are resampled together and share ONE shadow ray — a light can
         // only be in front of n or behind it, never both, so combining them into one target function is
-        // exact, not an approximation. The SSS term is gated off past MAX_SSS_BOUNCE by passing sss=0
-        // there (falls back to plain front-only RIS).
-        if (risOn) {
-            float activeSss = bounce <= MAX_SSS_BOUNCE ? sss : 0.0;
-            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, pbr, false, activeSss,
-                    seed, proposalSeed);
+        // exact, not an approximation. The SSS term is gated off past MAX_SSS_DIFFUSE_DEPTH by passing
+        // sss=0 there (falls back to plain front-only RIS). Keyed on diffuseDepth, not `bounce`, for the
+        // same reason as RIS_MAX_DIFFUSE_DEPTH above: leaves seen through a window are still the first
+        // surface this path has shaded, and should still backlight.
+        if (risActive) {
+            float activeSss = diffuseDepth <= MAX_SSS_DIFFUSE_DEPTH ? sss : 0.0;
+            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
+                    uint(diffuseDepth), seed, proposalSeed);
             float3 risVis;
-            L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, pbr, false,
+            L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
                     activeSss, risVis);
         }
 
@@ -1187,7 +1291,7 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
         // through them toward the light source). Shadow ray fires from the back face to avoid
         // self-occlusion. cosT = dot(lightDir, rd): rd tracks the ray toward the sun when the sun is
         // behind the slab, giving cosT ≈ 1 → forward-scatter peak.
-        if (sss > 0.0 && bounce <= MAX_SSS_BOUNCE) {
+        if (sss > 0.0 && diffuseDepth <= MAX_SSS_DIFFUSE_DEPTH) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
@@ -1205,37 +1309,34 @@ float3 tracePath(float3 ro, float3 rd, float primaryConeSpread, uint2 pix, uint 
             }
         }
 
+        // Every shading term for this surface is now accounted for, so it counts toward the shaded depth.
+        // The dielectric branches above return before reaching here, which is exactly the distinction
+        // between this and `bounce`.
+        diffuseDepth++;
+
         // Indirect continuation: importance-sample the diffuse OR the GGX specular lobe, chosen by their
-        // relative reflectance. With PBR off, use the cosine-weighted Lambertian fallback.
-        if (pbr) {
-            float ps = clamp(luminance(F0) / (luminance(F0) + luminance(diffAlb) + 1.0e-4), 0.1, 0.9);
-            if (rndf(seed) < ps) {
-                float3 h = sampleGGXVNDF(n, v, rough, seed);
-                float3 l = reflect(rd, h); // rd = -v: reflect the incoming ray about the microfacet normal
-                float ndl2 = dot(n, l);
-                if (ndl2 <= 0.0) {
-                    break; // microfacet reflects below the surface: terminate this path
-                }
-                // VNDF + separable Smith ⇒ weight = F · G2/G1(v) = F · G1(l); divide by the lobe pdf ps.
-                float3 F = fresnelSchlick(max(0.0, dot(v, h)), F0);
-                throughput *= F * ggxG1(ndl2, rough) / ps;
-                ro = p;
-                rd = l;
-                rayConeSpread = max(rayConeSpread, rough * rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
-                showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
-            } else {
-                throughput *= diffAlb / (1.0 - ps);
-                ro = p;
-                rd = cosineDir(n, seed);
-                rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
-                showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
+        // relative reflectance.
+        float ps = clamp(luminance(F0) / (luminance(F0) + luminance(diffAlb) + 1.0e-4), 0.1, 0.9);
+        if (rndf(seed) < ps) {
+            float3 h = sampleGGXVNDF(n, v, rough, seed);
+            float3 l = reflect(rd, h); // rd = -v: reflect the incoming ray about the microfacet normal
+            float ndl2 = dot(n, l);
+            if (ndl2 <= 0.0) {
+                break; // microfacet reflects below the surface: terminate this path
             }
+            // VNDF + separable Smith ⇒ weight = F · G2/G1(v) = F · G1(l); divide by the lobe pdf ps.
+            float3 F = fresnelSchlick(max(0.0, dot(v, h)), F0);
+            throughput *= F * ggxG1(ndl2, rough) / ps;
+            ro = p;
+            rd = l;
+            rayConeSpread = max(rayConeSpread, rough * rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
+            showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
         } else {
-            throughput *= albedo; // Lambertian fallback (PI and cos cancel)
-            showCelestial = false; // diffuse bounce: hide the disc (covered by NEE)
+            throughput *= diffAlb / (1.0 - ps);
             ro = p;
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
+            showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.

@@ -296,8 +296,21 @@ final class RtLightGridManager {
             float z = lights[record + 2];
             double dx = x - px, dy = y - py, dz = z - pz;
             if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
-            float area = lights[record + 3];
-            int packedLe = Float.floatToRawIntBits(lights[record + 7]);
+            // Area is derived, not stored — 4*|halfU x halfV| (see RtLightHierarchy.GPU_FLOATS_PER_LIGHT).
+            int packedU = Float.floatToRawIntBits(lights[record + 4]);
+            int packedUzVx = Float.floatToRawIntBits(lights[record + 5]);
+            int packedV = Float.floatToRawIntBits(lights[record + 6]);
+            float hux = Float.float16ToFloat((short) packedU);
+            float huy = Float.float16ToFloat((short) (packedU >>> 16));
+            float huz = Float.float16ToFloat((short) packedUzVx);
+            float hvx = Float.float16ToFloat((short) (packedUzVx >>> 16));
+            float hvy = Float.float16ToFloat((short) packedV);
+            float hvz = Float.float16ToFloat((short) (packedV >>> 16));
+            float crossX = huy * hvz - huz * hvy;
+            float crossY = huz * hvx - hux * hvz;
+            float crossZ = hux * hvy - huy * hvx;
+            float area = 4f * (float) Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+            int packedLe = Float.floatToRawIntBits(lights[record + 3]);
             float leR = RtLightHierarchy.unpackUnsignedFloat(packedLe & 0x7ff, 6);
             float leG = RtLightHierarchy.unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6);
             float leB = RtLightHierarchy.unpackUnsignedFloat((packedLe >>> 22) & 0x3ff, 5);

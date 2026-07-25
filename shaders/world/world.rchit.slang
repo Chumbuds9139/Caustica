@@ -234,19 +234,19 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         if (dot(pn, WorldRayDirection()) > 0.0) {
             pn = -pn;
         }
-        payload.albedo = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(pslot)].SampleLevel(puv, particleLod).rgb) * pr.tint.rgb;
-        payload.normal = pn;
+        payload.albedo = half3(srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(pslot)].SampleLevel(puv, particleLod).rgb) * pr.tint.rgb);
+        payload.normal = half3(pn);
         payload.hitT = RayTCurrent();
         // Per-particle motion vector: interpolate the captured per-vertex displacement (uniform across
         // the billboard's verts) with the same indices/barycentrics as the UV. dispAddr == 0 falls back
         // to rigidDisp, which particles write as zero.
         if (g.dispAddr != 0) {
             ConstPtr<float4> pd = ConstPtr<float4>(g.dispAddr);
-            payload.motionPrev = pbary.x * pd[p0].xyz + pbary.y * pd[p1].xyz + pbary.z * pd[p2].xyz;
+            payload.motionPrev = half3(pbary.x * pd[p0].xyz + pbary.y * pd[p1].xyz + pbary.z * pd[p2].xyz);
         } else {
-            payload.motionPrev = g.rigidDisp.xyz;
+            payload.motionPrev = half3(g.rigidDisp.xyz);
         }
-        payload.f0 = float3(0.0, 0.0, 0.0);
+        payload.f0 = half3(0.0h, 0.0h, 0.0h);
         payloadSetPacked(payload, MATERIAL_PARTICLE, 1.0, 0.0, 0.0, 0.0,
                 1.0, 0.0, EMISSION_SOURCE_NONE);
         return;
@@ -297,19 +297,19 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 header.params.x, header.params.y, pr.normal.w, material == MATERIAL_OPAQUE);
         n = surface.normal;
 
-        payload.albedo = albedo * surface.ao;
-        payload.normal = n;
+        payload.albedo = half3(albedo * surface.ao);
+        payload.normal = half3(n);
         payload.hitT = RayTCurrent();
         // Per-vertex motion vector: interpolate the captured per-vertex displacement with the same
         // indices/barycentrics used for the UV above. Rotation and skeletal/lid animation use a
         // per-vertex buffer; pure whole-object translation is packed into rigidDisp with no buffer.
         if (g.dispAddr != 0) {
             ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
-            payload.motionPrev = ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz;
+            payload.motionPrev = half3(ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz);
         } else {
-            payload.motionPrev = g.rigidDisp.xyz;
+            payload.motionPrev = half3(g.rigidDisp.xyz);
         }
-        payload.f0 = surface.f0;
+        payload.f0 = half3(surface.f0);
         float emission = material == MATERIAL_OPAQUE ? surface.emission : 0.0;
         float sss = material == MATERIAL_OPAQUE ? surface.sss : 0.0;
         payloadSetPacked(payload, material, surface.roughness, surface.metalness,
@@ -376,12 +376,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         n = glassSurface.normal;
         // Translucent blocks (glass, ice, …) are breakable too — apply the same overlay here, reusing
         // gtex (already sampled above) rather than re-fetching blockAlbedoAtlas.
-        payload.albedo = applyBreaking(glassAlbedo * glassSurface.ao,
-                rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n);
-        payload.normal = n;
+        payload.albedo = half3(applyBreaking(glassAlbedo * glassSurface.ao,
+                rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
+        payload.normal = half3(n);
         payload.hitT = RayTCurrent();
-        payload.motionPrev = float3(0.0, 0.0, 0.0);
-        payload.f0 = glassSurface.f0;
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(glassSurface.f0);
         payloadSetPacked(payload, MATERIAL_GLASS, glassSurface.roughness,
                 glassSurface.metalness, 0.0, 0.0, materialHeader.params.z,
                 materialHeader.params.w, EMISSION_SOURCE_NONE);
@@ -391,10 +391,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Water (tint.w == 1) carries the pure biome water tint (no grey water-texture multiply): raygen
     // shades the surface as a clear dielectric and only needs the tint to derive the per-channel
     // Beer–Lambert absorption. Opaque terrain uses textured albedo.
-    payload.albedo = materialHeader.model == MATERIAL_WATER
-            ? tint : srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint;
+    payload.albedo = half3(materialHeader.model == MATERIAL_WATER
+            ? tint : srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
     payload.hitT = RayTCurrent();
-    payload.motionPrev = float3(0.0, 0.0, 0.0); // static terrain: camera-only motion vector
+    payload.motionPrev = half3(0.0h, 0.0h, 0.0h); // static terrain: camera-only motion vector
     uint material = materialHeader.model == MATERIAL_WATER ? MATERIAL_WATER : MATERIAL_OPAQUE;
 
     // normal.w packs the 0..1 block-light level plus a +2 offset flag for non-SOLID (cutout /
@@ -402,18 +402,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float ew = pr.normal.w;
     bool nonSolid = ew >= 1.5;
     float emission = nonSolid ? ew - 2.0 : ew; // heuristic emission source (block light level)
-    Surface surface = evaluateMaterial(materialHeader, uv, blockLod, payload.albedo, n,
+    Surface surface = evaluateMaterial(materialHeader, uv, blockLod, float3(payload.albedo), n,
             tp0, tp1, tp2, uv0, uv1, uv2, vdir,
             materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
     n = surface.normal;
-    payload.albedo *= surface.ao;
+    payload.albedo *= half(surface.ao);
     // Block-breaking overlay: opaque/cutout terrain (water skips — fluids aren't breakable). Evaluate
     // it after normal mapping so decal projection uses the same shading orientation as the old path.
     if (material != MATERIAL_WATER) {
-        payload.albedo = applyBreaking(payload.albedo, rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n);
+        payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
     }
-    payload.normal = n;
-    payload.f0 = surface.f0;
+    payload.normal = half3(n);
+    payload.f0 = half3(surface.f0);
     payloadSetPacked(payload, material, surface.roughness, surface.metalness,
             surface.emission, surface.sss, materialHeader.params.z, materialHeader.params.w,
             materialEmissionSource(materialHeader, surface.emission));

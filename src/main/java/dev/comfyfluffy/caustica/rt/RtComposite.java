@@ -803,9 +803,11 @@ public final class RtComposite {
             RtBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
-            // flags: PBR BRDF (bit 1, always on) + camera-in-water (so the path tracer starts in the water
-            // medium when the eye is submerged, fixing the air→water first-segment orientation).
-            int flags = 0b10;
+            // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
+            // submerged, fixing the air→water first-segment orientation) + W1 wave normals. Bit 1 used to
+            // gate a Lambertian fallback BRDF that nothing ever turned off; the GGX path is unconditional
+            // now, so that bit is unused rather than reassigned, to avoid a stale reader elsewhere.
+            int flags = 0;
             var level = Minecraft.getInstance().level;
             if (level != null) {
                 cameraBlockPos.set(Mth.floor(camX), Mth.floor(camY), Mth.floor(camZ));
@@ -859,13 +861,11 @@ public final class RtComposite {
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
                             (float) (camZ - terrain.blockZ)),
-                    terrain.tableAddress(),
                     (int) frameCounter,
                     mvPushMatrix,
                     new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
                     spp(),
                     new Float2(jitterX, jitterY),
-                    fe.geomTableAddr(),
                     flags,
                     maxBounces(),
                     sky.sunDir(),
@@ -880,15 +880,12 @@ public final class RtComposite {
                     mvCurProjView,
                     breaking.length,
                     breaking,
-                    // RIS emitter NEE: published light buffer + RIS candidate count (0 = emitter NEE off;
-                    // the shader also requires lightCount > 0, so an empty buffer degrades to legacy gather).
-                    terrain.lightBufferAddress(),
-                    terrain.lightAliasBufferAddress(),
-                    terrain.lightLocalAliasBufferAddress(),
+                    // RIS emitter NEE: candidate count (0 = emitter NEE off; the shader also requires
+                    // lightCount > 0, so an empty buffer degrades to legacy gather). The light buffer
+                    // device addresses themselves are pc.light*Addr — every 64-bit address lives in the
+                    // push-constant block now, not here.
                     new Float4(terrain.lightRebaseOffsetX(), terrain.lightRebaseOffsetY(),
                             terrain.lightRebaseOffsetZ(), terrain.lightInvGlobalPowerSum()),
-                    terrain.lightGridCellBufferAddress(),
-                    terrain.lightGridSpanBufferAddress(),
                     new Float4(terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f),
                     new Int4(terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(), 0),
                     terrain.lightCount(),
@@ -918,9 +915,16 @@ public final class RtComposite {
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
             // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
+            // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
+            // section/entity/material tables are read from world.rahit/world.rchit, which never load
+            // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
+            // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
             new WorldPushConstantsData(pushBuf.deviceAddress, terrain.tableAddress(), fe.geomTableAddr(),
                     RtMaterialRegistry.INSTANCE.tableAddress(),
+                    terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
+                    terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
+                    terrain.lightGridSpanBufferAddress(),
                     (int) frameCounter, debugView).write(pushConstants);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.trace")) {

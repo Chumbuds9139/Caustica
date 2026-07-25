@@ -287,11 +287,14 @@ void main(inout Payload payload) {
         }
     }
 
-    payload.albedo = max(col, float3(0.0, 0.0, 0.0)); // raygen reads this as sky radiance + bounce-0 guide
+    // albedo is a half3 lane, so the sky's HDR radiance is clamped to half's finite range rather than
+    // allowed to round up to +inf and propagate as NaN through the path throughput. This is a guard, not
+    // a correction: the brightest term here is SUN_DISC_RADIANCE at 24.0, far under the 65504 ceiling.
+    payload.albedo = half3(clamp(col, float3(0.0, 0.0, 0.0), float3(HALF_MAX, HALF_MAX, HALF_MAX)));
     payload.hitT = -1.0;
-    payload.normal = float3(0.0, 0.0, 0.0);
-    payload.motionPrev = float3(0.0, 0.0, 0.0);
-    payload.f0 = float3(0.0, 0.0, 0.0);
+    payload.normal = half3(0.0h, 0.0h, 0.0h);
+    payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+    payload.f0 = half3(0.0h, 0.0h, 0.0h);
     payload.flags = 0u;
     payload.roughMetal = packHalf2(float2(1.0, 0.0));
     payload.emissionSss = packHalf2(float2(0.0, 0.0));
