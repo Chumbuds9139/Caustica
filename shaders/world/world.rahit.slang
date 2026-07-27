@@ -67,6 +67,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
         float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(uv, 0.0);
+        // aux0 stores a float coverage multiplier written by RtEntityCapture. Older/default records have
+        // zero in this lane, so treat 0 as opaque coverage for compatibility. For enchantment glint this
+        // multiplier is deliberately < 1 because vanilla's opaque purple glint texture is fixed-function
+        // blended over the armour; texture alpha alone would make it an opaque ray-traced shell.
+        float primCoverage = epr.aux0 == 0u ? 1.0 : clamp(asfloat(epr.aux0), 0.0, 1.0);
         bool stochasticAlpha = false;
         MaterialHeader materialHeader;
         if (instanceKind == ENTITY_BIT) {
@@ -77,10 +82,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             uint salt = pid * 1664525u
                     ^ (InstanceID() & IDX_MASK) * 1013904223u
                     ^ asuint(RayTCurrent());
-            if (alphaDitherThreshold(salt) >= clamp(texel.a, 0.0, 1.0)) {
+            if (alphaDitherThreshold(salt) >= clamp(texel.a * primCoverage, 0.0, 1.0)) {
                 IgnoreHit();
             }
-        } else if (texel.a < ENTITY_ALPHA_CUTOFF) {
+        } else if (texel.a * primCoverage < ENTITY_ALPHA_CUTOFF) {
             IgnoreHit();
         }
 
