@@ -34,7 +34,7 @@ public PathSegment tracePrimary(PathSegment seg,
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     uint seed = seg.seed;
     bool showCelestial = seg.showCelestial;
-    bool waterWaves = (worldPush.flags & 16u) != 0u;
+    bool waterWaves = waterWavesEnabled();
     nextRecord = PATH_NO_NEXT;
 
     {
@@ -94,6 +94,14 @@ public PathSegment tracePrimary(PathSegment seg,
 
         // This hit is consumed in pass A, so carry its travelled-medium absorption and cone growth into
         // the record for the next trace. The terminal hit above is deliberately not consumed here.
+        //
+        // worldPush.ambientFog is deliberately NOT applied to this segment. The fog is emissive: over a
+        // segment it removes exp(-sigma*d) of the incoming radiance and adds its own glow back. Pass A
+        // carries only a throughput, with no radiance accumulator to add that glow into, so applying it
+        // here could only take the attenuation half — a net darkening of everything seen through the
+        // first glass or water surface, which is the opposite of what the fog does. Pass B owns both
+        // halves for every segment it traces, and this prefix is just the short camera-to-interface
+        // hop, so skipping it entirely is the closer approximation.
         if (any(medium.current.extinction > 0.0)) {
             throughput *= exp(-medium.current.extinction * payload.hitT);
         }
@@ -227,7 +235,7 @@ void main() {
     float rayConeSpread = primaryRayConeSpread(jndc, size, dir);
     uint seed = (dispatchIndex.x * 1973u + dispatchIndex.y * 9277u + 26699u)
             ^ (worldPush.frameIndex * 2654435761u);
-    MediumStack cameraMedium = makeMediumStack((worldPush.flags & 1u) != 0u
+    MediumStack cameraMedium = makeMediumStack(cameraSubmerged()
             ? makeDielectricMedium(true, WATER_IOR, worldPush.waterParams.xyz, 1.0)
             : airMedium());
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;

@@ -51,6 +51,24 @@ public float payloadSss() { return unpackHalf2(payload.emissionSss).y; }
 public float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }
 public float payloadTransmission() { return unpackHalf2(payload.iorTransmission).y; }
 
+// ---- Per-frame feature toggles + dimension, resolved once on the CPU (CausticaConfig -> WorldPush).
+// Reading them through these helpers rather than open-coding the bit test keeps every pass agreeing on
+// what a flag means, and gives one place to look when a new option is added.
+public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
+public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
+public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }
+public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED); }
+
+/** SSS strength after the player toggle: the material value, or a hard zero when SSS is disabled. */
+public float payloadActiveSss() { return sssEnabled() ? payloadSss() : 0.0; }
+
+// Firefly ceiling for the UNDENOISED path. With RR running, a rare very bright sample is exactly the
+// energy the temporal filter is built to absorb, and clamping it would darken the image. With RR off
+// there is no accumulation at all, so that same sample is a permanent white speck in every frame — the
+// single worst artefact of the raw reference view at low SPP. Applied only when the denoiser is off,
+// which keeps the denoised path bit-identical to before this option existed.
+public static const float UNDENOISED_FIREFLY_MAX_LUMINANCE = 24.0;
+
 public static const float PI = 3.14159265359;
 public static const float INV_PI = 0.31830988618;
 

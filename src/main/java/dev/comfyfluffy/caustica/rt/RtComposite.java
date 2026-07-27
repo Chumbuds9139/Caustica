@@ -19,6 +19,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -29,6 +30,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
@@ -111,6 +113,43 @@ public final class RtComposite {
 
     private static boolean waterWaves() {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
+    }
+
+    // ---- Shader feature flags (WorldPush.featureFlags). Mirrors world_common.slang's FEATURE_*
+    // constants: these are player-facing effect toggles, kept in their own word so they can never be
+    // confused with WorldPush.flags, which describes the camera's physical state for the frame.
+    private static final int FEATURE_SSS = 1;
+    private static final int FEATURE_WEATHER_LIGHTING = 2;
+    private static final int FEATURE_DENOISER = 4;
+
+    // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
+    // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
+    // celestial cycle at all and draw their own skybox in world.rmiss.
+    private static final int DIMENSION_OVERWORLD = 0;
+    private static final int DIMENSION_NETHER = 1;
+    private static final int DIMENSION_END = 2;
+
+    /**
+     * Collect this frame's shader feature toggles into the {@code featureFlags} word. Read fresh every
+     * frame (never cached) so the Video Settings toggles take effect on the next frame, the way every
+     * other runtime-tunable option in the renderer does.
+     */
+    private static int featureFlags() {
+        int flags = 0;
+        if (CausticaConfig.Rt.Composite.SSS.value()) {
+            flags |= FEATURE_SSS;
+        }
+        if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
+            flags |= FEATURE_WEATHER_LIGHTING;
+        }
+        // Reports what the pipeline is ACTUALLY doing, not just what the option asks for:
+        // RtDlssRr.enabled() already folds in the backend switch, and a debug view suppresses RR
+        // entirely (see recordFrame's rrPath), so a shader reading this flag learns whether its output
+        // will be denoised rather than whether the player would like it to be.
+        if (RtDlssRr.enabled() && debugView() == 0) {
+            flags |= FEATURE_DENOISER;
+        }
+        return flags;
     }
 
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
@@ -704,6 +743,10 @@ public final class RtComposite {
             return;
         }
         ctx.waitIdle(); // resize is rare; no in-flight frame may use the old image/descriptor
+        // Reaching here with RR off can mean the denoising filter was just turned off. Nothing calls
+        // ensureFeature again in that state, so the RR feature (and its history buffers) would stay
+        // allocated for the rest of the session; the device is idle right now, so release it here.
+        RtDlssRr.INSTANCE.releaseIfDisabled();
         if (displayImage != null) {
             displayImage.destroy();
         }
@@ -829,6 +872,8 @@ public final class RtComposite {
             // submerged, fixing the air→water first-segment orientation) + W1 wave normals. Bit 1 used to
             // gate a Lambertian fallback BRDF that nothing ever turned off; the GGX path is unconditional
             // now, so that bit is unused rather than reassigned, to avoid a stale reader elsewhere.
+            // This word describes the frame's PHYSICAL state; player-facing effect toggles live in the
+            // separate featureFlags word (see featureFlags()).
             int flags = 0;
             var level = Minecraft.getInstance().level;
             if (level != null) {
@@ -886,7 +931,12 @@ public final class RtComposite {
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
-            SkyPush sky = skyPush();
+            // Dimension + weather drive the sky model, the celestial light and the ambient medium, so
+            // all three are resolved together, once, from the same level and partial tick.
+            int dimension = dimensionId(level);
+            WeatherState weather = weatherState(level,
+                    Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false));
+            SkyPush sky = skyPush(dimension, weather);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -922,7 +972,12 @@ public final class RtComposite {
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     new Float4(CausticaConfig.Rt.Lights.BLOCK_INTENSITY.value(),
                             CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY.value(),
-                            0.0f, 0.0f)
+                            0.0f, 0.0f),
+                    new Float4(weather.rain(), weather.thunder(), weather.skyDarken(),
+                            weather.lightAttenuation()),
+                    ambientFog(dimension, weather),
+                    dimension,
+                    featureFlags()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1076,12 +1131,123 @@ public final class RtComposite {
     private record CelestialUv(Float4 sun, Float4 moon) {}
 
     /**
+     * This frame's weather, resolved once on the CPU and pushed to the shaders.
+     *
+     * <p>{@code rain} and {@code thunder} are vanilla's own interpolated 0..1 levels. The two derived
+     * multipliers exist so the sky shader and the NEE light cannot disagree about how dark a storm is:
+     * {@code skyDarken} scales the atmosphere in-scatter in {@code world.rmiss}, {@code lightAttenuation}
+     * scales the sun/moon radiance in {@link #skyPush}, and both are computed here, from the same two
+     * levels, in one place.
+     *
+     * @param rain             vanilla rain level, 0 clear .. 1 fully raining
+     * @param thunder          vanilla thunder level, 0 .. 1 (only ever non-zero while it is also raining)
+     * @param skyDarken        multiplier on the sky's own radiance
+     * @param lightAttenuation multiplier on the direct sun/moon radiance
+     */
+    private record WeatherState(float rain, float thunder, float skyDarken, float lightAttenuation) {
+        static final WeatherState CLEAR = new WeatherState(0f, 0f, 1f, 1f);
+    }
+
+    /**
+     * Read vanilla's interpolated rain/thunder levels and turn them into the sky/light multipliers.
+     *
+     * <p>The curve: overcast rain keeps about 35% of the clear-sky light and 45% of the sky's own
+     * radiance, and a full thunderstorm roughly halves each of those again. Those numbers are picked to
+     * match how vanilla treats the two states — rain drops the effective sky light level from 15 to 12
+     * and a thunderstorm to 10, which is a much larger perceptual drop than the raw light levels suggest
+     * because the sun disc is also gone — while staying well clear of zero, since a path tracer with no
+     * sun and no sky fill has no light left at all and a daytime storm would render as night.
+     *
+     * <p>Thunder is folded in as an additional factor rather than a separate branch: vanilla only ever
+     * raises the thunder level while it is already raining, so the two multiply into one continuous ramp
+     * from clear to storm with no discontinuity at the transition.
+     *
+     * <p>Dimensions without weather (Nether, End) always report clear — {@code getRainLevel} is already
+     * zero there, but returning the shared constant keeps the fast path allocation-free.
+     */
+    private static WeatherState weatherState(ClientLevel level, float partial) {
+        if (level == null || !CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
+            return WeatherState.CLEAR;
+        }
+        float rain = Math.clamp(level.getRainLevel(partial), 0f, 1f);
+        if (rain <= 0f) {
+            return WeatherState.CLEAR;
+        }
+        // getThunderLevel already includes the rain level as a factor in vanilla; clamp defensively so a
+        // datapack or mod that drives it independently cannot push the multipliers negative.
+        float thunder = Math.clamp(level.getThunderLevel(partial), 0f, 1f);
+        // Written out rather than via a lerp helper so each ramp's endpoints are readable inline:
+        // at full rain the direct light keeps 35% and the sky 45%; a full thunderstorm then halves
+        // each again (to ~18% and ~25% of clear).
+        float rainLight = 1.0f - 0.65f * rain;
+        float stormLight = 1.0f - 0.50f * thunder;
+        float rainSky = 1.0f - 0.55f * rain;
+        float stormSky = 1.0f - 0.45f * thunder;
+        return new WeatherState(rain, thunder, rainSky * stormSky, rainLight * stormLight);
+    }
+
+    /**
+     * Map the client level's dimension onto the shader's sky model. Uses {@code level.dimension()} —
+     * the dimension's {@code ResourceKey}, which is what the server actually tells the client it is in —
+     * rather than sniffing dimension type flags, so a datapack dimension that merely reuses the Nether's
+     * or the End's type still renders as the Overworld unless it really is that dimension.
+     */
+    private static int dimensionId(ClientLevel level) {
+        if (level == null) {
+            return DIMENSION_OVERWORLD;
+        }
+        var dimension = level.dimension();
+        if (Level.NETHER.equals(dimension)) {
+            return DIMENSION_NETHER;
+        }
+        if (Level.END.equals(dimension)) {
+            return DIMENSION_END;
+        }
+        return DIMENSION_OVERWORLD;
+    }
+
+    /**
+     * Uniform, self-illuminated ambient medium for the dimension ({@code WorldPush.ambientFog}: rgb
+     * in-scatter radiance, w extinction per block). {@code medium.slang} integrates it over every path
+     * segment, so it reaches reflections, refractions and indirect bounces — not just primary rays.
+     *
+     * <p>The Nether gets a thick warm haze: it is what makes the dimension read as enclosed and is a
+     * large part of its ambient light, since a Nether cave has no sky to gather from. The End gets a
+     * very thin violet dust that only becomes visible across the long sight lines of the outer islands.
+     * The Overworld is clear except in rain, where a light grey haze grows with the rain level and
+     * washes out distant terrain the way a real downpour does.
+     *
+     * <p>Densities are per block: 0.012 halves radiance at ~58 blocks, 0.0016 at ~430.
+     */
+    private static Float4 ambientFog(int dimension, WeatherState weather) {
+        return switch (dimension) {
+            case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);
+            case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);
+            default -> {
+                if (weather.rain() <= 0f) {
+                    yield new Float4(0f, 0f, 0f, 0f); // clear Overworld: the shader skips fog entirely
+                }
+                // Rain haze: neutral grey-blue, scaled by the same darkening the sky uses so it never
+                // out-glows the overcast it is supposed to be part of.
+                float scale = weather.rain() * weather.skyDarken();
+                yield new Float4(0.055f * scale, 0.060f * scale, 0.070f * scale,
+                        0.0035f * weather.rain());
+            }
+        };
+    }
+
+    /**
      * Derive the celestial light from Minecraft's time of day as typed values for {@link WorldPushData}.
      * Celestial angles come from the camera's {@link EnvironmentAttributeProbe} (partial-tick
      * interpolated). {@code caustica.rt.sunNoonSouthDeg} tilts the east-west arc toward south (+Z) at
      * noon.
+     *
+     * <p>{@code weather} attenuates the resulting radiance, and a dimension with no celestial cycle
+     * (Nether, End) zeroes it outright: neither has a sun or a moon, so a directional NEE light there
+     * would be light arriving from nothing. The raygen skips the whole NEE block — shadow ray included —
+     * when the radiance is zero, so those dimensions also stop paying for a light they do not have.
      */
-    private SkyPush skyPush() {
+    private SkyPush skyPush(int dimension, WeatherState weather) {
         float sunX, sunY, sunZ, dayFactor, lx, ly, lz, rr, rg, rb, lightRadius;
         float moonX, moonY, moonZ, moonPhase, starAngle, starBrightness;
         Minecraft mc = Minecraft.getInstance();
@@ -1132,6 +1298,21 @@ public final class RtComposite {
             rb = 0.55f * moonPeak * moonStrength * trans[2];
             lightRadius = CausticaConfig.Rt.Composite.MOON_ANGULAR_RADIUS.value();
         }
+        // Weather attenuation, applied to whichever body is currently the NEE light. Overcast does not
+        // just dim the sun, it replaces it with a diffuse source — the sky term in world.rmiss carries
+        // that half — so the directional component drops further than the sky does (see weatherState).
+        float lightAttenuation = weather.lightAttenuation();
+        // No celestial cycle in the Nether/End: no sun, no moon, no directional light, no stars.
+        if (dimension != DIMENSION_OVERWORLD) {
+            lightAttenuation = 0f;
+            starBrightness = 0f;
+        }
+        rr *= lightAttenuation;
+        rg *= lightAttenuation;
+        rb *= lightAttenuation;
+        // Stars are behind the cloud deck during rain; the sky shader fades them out on the same ramp.
+        starBrightness *= 1.0f - weather.rain();
+
         CelestialUv uv = celestialUv(moonPhase);
         return new SkyPush(
                 new Float4(sunX, sunY, sunZ, dayFactor),
@@ -1231,9 +1412,10 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
-        if (RtDlssRr.enabled()) {
-            RtDlssRr.INSTANCE.destroy();
-        }
+        // Unconditional: RtDlssRr.enabled() reflects the CURRENT toggles, and the denoiser toggle can
+        // have been turned off after a feature was already created. destroy() is a no-op when nothing
+        // was ever allocated, so asking it every time is what guarantees the feature is released.
+        RtDlssRr.INSTANCE.destroy();
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;

@@ -30,6 +30,15 @@
 	"caustica.options.rt.waterWaves": "Eau animée",
 	"caustica.options.rt.waterWaves.tooltip": "Anime les normales de surface de l'eau pour des reflets de vagues en mouvement.",
 
+	"caustica.options.rt.sss": "Diffusion sous-surfacique",
+	"caustica.options.rt.sss.tooltip": "Laisse la lumière se diffuser à travers les surfaces fines comme les feuilles et l'herbe, si bien que le feuillage rayonne lorsqu'on le regarde à contre-jour. N'affecte que les matériaux fournissant des données de sous-surface et coûte un rayon d'ombre supplémentaire là où elle s'applique.",
+
+	"caustica.options.rt.weatherLighting": "Éclairage météorologique",
+	"caustica.options.rt.weatherLighting.tooltip": "Atténue la lumière du soleil et de la lune et assombrit le ciel pendant la pluie et les orages, en masquant le soleil, la lune et les étoiles derrière les nuages. Désactivé, conserve l'éclairage d'un ciel dégagé par tous les temps.",
+
+	"caustica.options.rt.denoiser": "Filtre de débruitage",
+	"caustica.options.rt.denoiser.tooltip": "Applique le filtre de débruitage DLSS Ray Reconstruction à l'image en path tracing. Désactivé, affiche le rendu brut et bruité en pleine résolution — utile comme vue de référence, mais bien plus granuleux à faible nombre d'échantillons. Nécessite la prise en charge de DLSS Ray Reconstruction.",
+
 	"caustica.options.rt.handFov": "Champ de vision de la main",
 	"caustica.options.rt.handFov.tooltip": "Fait suivre au bras et à l'objet en première personne le champ de vision du jeu. Activé, un champ de vision plus large éloigne le bras et un champ plus étroit le rapproche. Désactivé, rétablit le champ de vision fixe d'origine.",
 

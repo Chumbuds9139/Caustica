@@ -23,8 +23,17 @@ import java.lang.foreign.ValueLayout;
  */
 public final class RtDlssRr {
     public static final RtDlssRr INSTANCE = new RtDlssRr();
+
+    /**
+     * Whether the RR denoise+upscale pass should run this frame. Two switches gate it and both must be
+     * on: {@code dlss-rr.enabled} is the backend/capability switch (it is what a machine without RR
+     * support turns off), while {@code composite.denoiser} is the player-facing denoising-filter toggle
+     * in Video Settings. Keeping the check here rather than at each call site means every consumer —
+     * the render-size query, the per-frame evaluate, the resize path and teardown — sees one consistent
+     * answer, so flipping the toggle can never leave the trace sized for RR while RR is not running.
+     */
     public static boolean enabled() {
-        return CausticaConfig.Rt.DlssRr.ENABLED.value();
+        return CausticaConfig.Rt.DlssRr.ENABLED.value() && CausticaConfig.Rt.Composite.DENOISER.value();
     }
 
     // DLSS feature flags. IsHDR (bit 0): color is linear HDR (rgba16f) — RR requires it ("HDR Color
@@ -123,6 +132,30 @@ public final class RtDlssRr {
             CausticaMod.LOGGER.error("DLSS-RR evaluate failed; RT composite continues without it", t);
             return false;
         }
+    }
+
+    /**
+     * Release the RR feature if the denoiser has been switched off since it was created, and report
+     * whether anything was released.
+     *
+     * <p>{@link #ensureFeature} only runs on frames that take the RR path, so once the toggle goes off
+     * it is never reached again and the feature — which holds a non-trivial amount of device memory for
+     * its internal history buffers — would sit allocated until teardown. {@code RtComposite.ensureOutput}
+     * already notices the toggle (it re-sizes the trace targets) and has just waited for the device to
+     * go idle, which is exactly the point at which the feature can be safely destroyed, so it calls this.
+     *
+     * <p>Idempotent: with the denoiser on, or with no feature allocated, this does nothing.
+     */
+    public boolean releaseIfDisabled() {
+        if (enabled() || isNull(feature)) {
+            return false;
+        }
+        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
+            releaseFeature(device);
+            CausticaMod.LOGGER.info("DLSS-RR feature released: denoising filter turned off");
+            return true;
+        }
+        return false;
     }
 
     /**

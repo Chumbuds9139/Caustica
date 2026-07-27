@@ -57,7 +57,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // (so the first ray already carries the right relative index and absorption); for a segment split off
     // a dielectric it is whatever the parent was travelling through.
     MediumStack medium = seg.medium;
-    bool waterWaves = (worldPush.flags & 16u) != 0u; // animated wave-normal perturbation
+    bool waterWaves = waterWavesEnabled(); // animated wave-normal perturbation
     // Sky-disc gate (see world.rmiss): the sun/moon disc is shown to the primary ray and to rays spawned
     // by a specular/dielectric bounce (mirror reflections + refractions of the sun/moon), but hidden from
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
@@ -89,7 +89,14 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             // world.rmiss writes sky radiance (gradient + sun/moon disc + stars) into payload.albedo. The
             // packed show-celestial flag decides whether this path segment may see the bright disc.
             float3 sky = payload.albedo;
-            L += throughput * sky; // escaped to sky
+            // No ambient fog on an escaping ray. The medium is what the path travels THROUGH to reach
+            // something; the sky is not a surface at a distance, it is the far field itself, and each
+            // dimension's skybox is already written as the appearance of that far field (the Nether's
+            // haze dome, the End's void, the Overworld's own atmosphere march). Integrating the fog
+            // over a nominal 10000-block escape on top of that would saturate — exp(-0.012 * 10000) is
+            // zero — and replace every skybox with a flat fog colour, so the fog is deliberately scoped
+            // to segments that actually end on geometry, where it is doing depth cueing.
+            L += throughput * sky;
             break;
         }
 
@@ -99,6 +106,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // the ordinary case costs one comparison.
         if (any(medium.current.extinction > 0.0)) {
             throughput *= exp(-medium.current.extinction * payload.hitT);
+        }
+
+        // Dimension-wide ambient fog over the same segment. Independent of the dielectric medium above:
+        // that one describes what the path is submerged in (water, glass), this one the air of the
+        // dimension itself, so a ray inside a Nether lava-lit cave picks up both. Added into L rather
+        // than only attenuating, because the medium glows.
+        {
+            AmbientFog segFog = evalAmbientFog(worldPush.ambientFog, payload.hitT);
+            L += throughput * segFog.inScatter;
+            throughput *= segFog.transmittance;
         }
 
         float3 n = payload.normal; // oriented toward the incoming ray by the closest-hit
@@ -194,9 +211,12 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
             // Billboards are effectively two-sided receivers. Bias from the side facing the light; shadow
             // rays exclude particles anyway, but this keeps the origin sane when the light is behind the
-            // camera side.
+            // camera side. Same zero-radiance skip as the surface NEE below (Nether/End, or a fully
+            // overcast sky with weather lighting on).
+            bool particleCelestialLit = max(worldPush.lightRadiance.x,
+                    max(worldPush.lightRadiance.y, worldPush.lightRadiance.z)) > 0.0;
             float signedNdl = dot(n, lightDir);
-            float ndl = abs(signedNdl);
+            float ndl = particleCelestialLit ? abs(signedNdl) : 0.0;
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
@@ -229,7 +249,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         }
 
         float3 albedo = payload.albedo;
-        float sss = payloadSss(); // LabPBR SSS strength (0 when absent)
+        // LabPBR SSS strength (0 when the material has none, or when the player turned SSS off:
+        // payloadActiveSss returns a hard zero in that case, so every SSS term below — the RIS back
+        // lobe and the explicit transmission pass — collapses without needing its own check).
+        float sss = payloadActiveSss();
         float3 p = hitPos + n * SURF_BIAS;
         float3 v = -rd; // view direction (toward the camera / incoming ray)
 
@@ -270,12 +293,20 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // extent (worldPush.lightDir.w half-angle) so the shadow ray samples the light's quad — soft penumbrae
         // over accumulation. The same sampled direction drives ndl, the shadow ray, and the specular
         // half-vector.
+        //
+        // The radiance itself already carries the weather attenuation and the dimension's celestial
+        // state: Java writes a zeroed lightRadiance in the Nether and the End (neither has a sun or a
+        // moon) and a rain/thunder-scaled one in the Overworld. celestialLit therefore skips the whole
+        // NEE block — including its shadow ray — wherever the celestial light cannot contribute, which
+        // is every pixel of every Nether and End frame.
+        bool celestialLit = max(worldPush.lightRadiance.x,
+                max(worldPush.lightRadiance.y, worldPush.lightRadiance.z)) > 0.0;
         float3 lightDir = worldPush.lightDir.xyz;
         float lightHalfAngle = worldPush.lightDir.w;
         if (lightHalfAngle > 0.0) {
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
-        float ndl = max(0.0, dot(n, lightDir));
+        float ndl = celestialLit ? max(0.0, dot(n, lightDir)) : 0.0;
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
             float3 vis = shadow.transmittance;
@@ -318,7 +349,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // through them toward the light source). Shadow ray fires from the back face to avoid
         // self-occlusion. cosT = dot(lightDir, rd): rd tracks the ray toward the sun when the sun is
         // behind the slab, giving cosT ≈ 1 → forward-scatter peak.
-        if (sss > 0.0 && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
+        if (sss > 0.0 && celestialLit && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
@@ -414,5 +445,15 @@ void main() {
         }
         recordIndex = packed.nextRecord;
     }
-    outImage[pix] = float4(frameRadiance / float(spp), 1.0);
+    float3 radiance = frameRadiance / float(spp);
+    // Firefly clamp for the raw (undenoised) view only — see UNDENOISED_FIREFLY_MAX_LUMINANCE. Scaling
+    // the whole colour by the luminance ratio preserves hue and saturation, so a clamped highlight
+    // desaturates toward nothing rather than shifting colour.
+    if (!denoiserEnabled()) {
+        float lum = luminance(radiance);
+        if (lum > UNDENOISED_FIREFLY_MAX_LUMINANCE) {
+            radiance *= UNDENOISED_FIREFLY_MAX_LUMINANCE / lum;
+        }
+    }
+    outImage[pix] = float4(radiance, 1.0);
 }

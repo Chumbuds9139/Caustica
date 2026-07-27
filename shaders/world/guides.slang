@@ -189,7 +189,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = normalize(payload.normal);
         float3 interfaceNormal = geometricNormal;
-        if (isWater && (worldPush.flags & 16u) != 0u) {
+        if (isWater && waterWavesEnabled()) {
             float waterFootprint = rayConeWidth
                     / max(abs(dot(-direction, geometricNormal)), 0.2);
             interfaceNormal = applyWaterWaves(geometricNormal,
