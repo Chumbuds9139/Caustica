@@ -169,9 +169,13 @@ Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float
     // Final HDR emission strength (EMISSIVE_STRENGTH baseline * any JSON multiplier), baked in Java at
     // material-compile time and packed unconditionally — see MATERIAL_EMISSION_STRENGTH_SHIFT. 0 for
     // non-emissive materials, so this multiply is always safe (and a no-op) when nothing above ran.
+    // Runtime global light scales are applied later in raygen so block and dynamic emitters can differ.
     float strength = float((header.features >> MATERIAL_EMISSION_STRENGTH_SHIFT)
             & MATERIAL_EMISSION_STRENGTH_MASK)
             * (MATERIAL_MAX_EMISSION_STRENGTH / float(MATERIAL_EMISSION_STRENGTH_MASK));
+    if (strength <= 0.0 && fallbackEmission > 0.0) {
+        strength = MATERIAL_DEFAULT_DYNAMIC_EMISSION_STRENGTH;
+    }
     surface.emission *= strength;
     if ((header.features & MATERIAL_FEATURE_NORMAL) != 0u) {
         float4 normalAo = samplePageNormalAo(page, pageUv, materialLod);
@@ -323,6 +327,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         payloadSetPacked(payload, material, surface.roughness, surface.metalness,
                 emission, sss, header.params.z, header.params.w,
                 materialEmissionSource(header, emission));
+        payload.flags |= PAYLOAD_DYNAMIC_ENTITY;
         payloadSetDielectric(payload, material, entering);
         return;
     }

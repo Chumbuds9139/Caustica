@@ -205,11 +205,18 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 }
             }
 
+            float3 v = -rd;
+            // Analytic dynamic held-item lights (torches/lava buckets) move every frame and are shaded
+            // directly rather than through the static block-emitter RIS hierarchy.
+            if (worldPush.dynamicLightCount > 0u) {
+                L += throughput * shadeDynamicLights(hitPos, n, v, rd, albedo,
+                        float3(0.0, 0.0, 0.0), 1.0, true, 0.0);
+            }
+
             // RIS direct lighting from block emitters (lava, glowstone, torches, ...) — same reservoir
             // sampler as terrain/entities, but two-sided: a billboard has no back face, so light
             // striking either side of the quad should still land (matches the sun/moon NEE above).
             if (risOn) {
-                float3 v = -rd;
                 Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
                                          true, 0.0, seed, proposalSeed);
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
@@ -251,15 +258,17 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // specular/dielectric bounces (showCelestial true) still add it, since no emitter NEE happened
         // along those. Emitters NOT in the light buffer (sparse/sub-threshold footprints, entities) are
         // never NEE-sampled, so they always gather — bit-identical to the no-NEE path, no energy lost.
-        // Emission is already the full HDR strength (EMISSIVE_STRENGTH baseline * any override
-        // multiplier baked in Java at material-compile time — see MaterialHeader.features packing).
+        // Emission is the material HDR baseline (EMISSIVE_STRENGTH * JSON override, baked in Java).
+        // Apply the runtime global scale here so terrain blocks and dynamic entities can be adjusted
+        // independently from the options menu.
         float emission = payloadEmission();
         // One gate drives both the RIS call below and the direct-hit emission suppression here. They must
         // agree: gateEmitter exists only because RIS already accounted for this emitter, so a bounce where
         // RIS is skipped must also gather emission directly or that light is lost outright.
         bool gateEmitter = risOn && payloadEmitterInList();
         if (emission > 0.0 && (!gateEmitter || showCelestial)) {
-            L += throughput * albedo * emission;
+            float emissionScale = payloadDynamicEntity() ? worldPush.lightScales.y : worldPush.lightScales.x;
+            L += throughput * albedo * emission * max(emissionScale, 0.0);
         }
 
         // NEE: direct light from the dominant celestial body (sun by day, moon by night) — Lambert
@@ -296,13 +305,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
         }
 
+        float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
+        // Analytic dynamic held-item lights (torches/lava buckets) move every frame and are shaded
+        // directly rather than through the static block-emitter RIS hierarchy.
+        if (worldPush.dynamicLightCount > 0u) {
+            L += throughput * shadeDynamicLights(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss);
+        }
+
         // RIS direct lighting from block emitters (single-frame only, no temporal reservoir reuse).
         // Front lobe + SSS backlighting are resampled together and share ONE shadow ray — a light can
         // only be in front of n or behind it, never both, so combining them into one target function is
         // exact, not an approximation. The SSS term is gated off past MAX_SSS_INDIRECT_DEPTH by passing
         // sss=0 there (falls back to plain front-only RIS).
         if (risOn) {
-            float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
                                      seed, proposalSeed);
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,

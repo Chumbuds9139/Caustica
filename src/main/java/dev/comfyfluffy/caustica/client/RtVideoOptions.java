@@ -29,11 +29,9 @@ public final class RtVideoOptions {
     private RtVideoOptions() {
     }
 
-    /** Runtime-tunable RT options, in display order. Paired two-per-row by {@code OptionsList.addSmall}. */
+    /** General runtime-tunable RT options. Paired two-per-row by {@code OptionsList.addSmall}. */
     public static OptionInstance<?>[] runtimeOptions() {
         return new OptionInstance<?>[] {
-            exposureMode(),
-            manualEv(),
             spp(),
             maxBounces(),
             sunSize(),
@@ -45,6 +43,27 @@ public final class RtVideoOptions {
             hdrPaperWhite(),
             hdrPeak(),
             debugView(),
+        };
+    }
+
+    /** Light-emission options (dynamic held-item lights and emissive block scaling). */
+    public static OptionInstance<?>[] lightOptions() {
+        return new OptionInstance<?>[] {
+            dynamicLightIntensity(),
+            blockEmissiveIntensity(),
+        };
+    }
+
+    /** Tonemapping/exposure options for the display-mapping pass. */
+    public static OptionInstance<?>[] tonemapOptions() {
+        return new OptionInstance<?>[] {
+            exposureMode(),
+            manualEv(),
+            tonemapOperator(),
+            tonemapExposure(),
+            tonemapGamma(),
+            tonemapSaturation(),
+            tonemapContrast(),
         };
     }
 
@@ -110,6 +129,62 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(1, 50),
             initialTenths,
             tenths -> setting.set(tenths / 10.0f));
+    }
+
+
+    private static OptionInstance<Integer> dynamicLightIntensity() {
+        return multiplier("caustica.options.rt.dynamicLightIntensity",
+                CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY, 0, 160);
+    }
+
+    private static OptionInstance<Integer> blockEmissiveIntensity() {
+        return multiplier("caustica.options.rt.blockEmissiveIntensity",
+                CausticaConfig.Rt.Lights.BLOCK_INTENSITY, 0, 160);
+    }
+
+    private static final List<String> TONEMAP_OPERATORS =
+            List.of("agx", "pbr_neutral", "aces", "filmic", "linear");
+
+    private static OptionInstance<String> tonemapOperator() {
+        StringSetting setting = CausticaConfig.Rt.Tonemapping.OPERATOR;
+        return new OptionInstance<>(
+            "caustica.options.rt.tonemapOperator",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.tonemapOperator.tooltip")),
+            (caption, value) -> Component.translatable("caustica.options.rt.tonemapOperator." + value),
+            new OptionInstance.Enum<>(TONEMAP_OPERATORS, Codec.STRING),
+            TONEMAP_OPERATORS.contains(setting.get()) ? setting.get() : "agx",
+            setting::set);
+    }
+
+    private static OptionInstance<Integer> tonemapExposure() {
+        FloatSetting setting = CausticaConfig.Rt.Tonemapping.EXPOSURE_EV;
+        return new OptionInstance<>(
+            "caustica.options.rt.tonemapExposure",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.tonemapExposure.tooltip")),
+            (caption, tenths) -> {
+                float ev = tenths / 10.0f;
+                String sign = ev > 0.0f ? "+" : "";
+                return Options.genericValueLabel(caption,
+                        Component.literal(sign + String.format(Locale.ROOT, "%.1f EV", ev)));
+            },
+            new OptionInstance.IntRange(-50, 50),
+            Math.clamp(Math.round(setting.value() * 10.0f), -50, 50),
+            tenths -> setting.set(tenths / 10.0f));
+    }
+
+    private static OptionInstance<Integer> tonemapGamma() {
+        return hundredths("caustica.options.rt.tonemapGamma",
+                CausticaConfig.Rt.Tonemapping.GAMMA, 50, 300);
+    }
+
+    private static OptionInstance<Integer> tonemapSaturation() {
+        return hundredths("caustica.options.rt.tonemapSaturation",
+                CausticaConfig.Rt.Tonemapping.SATURATION, 0, 300);
+    }
+
+    private static OptionInstance<Integer> tonemapContrast() {
+        return hundredths("caustica.options.rt.tonemapContrast",
+                CausticaConfig.Rt.Tonemapping.CONTRAST, 0, 300);
     }
 
     private static OptionInstance<Boolean> entities() {
@@ -181,6 +256,28 @@ public final class RtVideoOptions {
             new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7), Codec.INT),
             Math.clamp(setting.value(), 0, 7),
             setting::set);
+    }
+
+    private static OptionInstance<Integer> multiplier(String captionKey, FloatSetting setting, int minTenths, int maxTenths) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, tenths) -> Options.genericValueLabel(caption,
+                    Component.literal(String.format(Locale.ROOT, "%.1fx", tenths / 10.0f))),
+            new OptionInstance.IntRange(minTenths, maxTenths),
+            Math.clamp(Math.round(setting.value() * 10.0f), minTenths, maxTenths),
+            tenths -> setting.set(tenths / 10.0f));
+    }
+
+    private static OptionInstance<Integer> hundredths(String captionKey, FloatSetting setting, int min, int max) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, hundredths) -> Options.genericValueLabel(caption,
+                    Component.literal(String.format(Locale.ROOT, "%.2f", hundredths / 100.0f))),
+            new OptionInstance.IntRange(min, max),
+            Math.clamp(Math.round(setting.value() * 100.0f), min, max),
+            value -> setting.set(value / 100.0f));
     }
 
     private static OptionInstance<Boolean> bool(String captionKey, BooleanSetting setting) {
