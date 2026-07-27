@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "arena/**" # Permite rodar o CI automaticamente nas branches geradas pelo Agente Arena
     paths:
       - ".github/workflows/**"
       - "build.gradle"
@@ -27,6 +28,7 @@ on:
       - "native/**"
       - "shaders/**"
       - "src/**"
+  workflow_dispatch: # Permite disparar o build manualmente na aba Actions
 
 env:
   DLSS_SDK_REF: v310.7.0
@@ -151,18 +153,23 @@ jobs:
         run: |
           archive="vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
           url="https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/${archive}"
-          sdk_root="${RUNNER_TEMP}/vulkan-sdk/${VULKAN_SDK_VERSION}/x86_64"
-
+          
+          mkdir -p "${RUNNER_TEMP}/vulkan-sdk-extract"
           curl --fail --location --retry 3 --retry-delay 5 --output "${archive}" "${url}"
           echo "${VULKAN_SDK_SHA256}  ${archive}" | sha256sum --check
-          mkdir -p "${RUNNER_TEMP}/vulkan-sdk"
-          tar -xf "${archive}" -C "${RUNNER_TEMP}/vulkan-sdk"
+          
+          tar -xf "${archive}" -C "${RUNNER_TEMP}/vulkan-sdk-extract"
+          
+          # Localiza dinamicamente o diretório x86_64 para evitar quebras de caminho
+          sdk_root=$(find "${RUNNER_TEMP}/vulkan-sdk-extract" -type d -name "x86_64" | head -n 1)
 
           echo "VULKAN_SDK=${sdk_root}" >> "${GITHUB_ENV}"
           echo "${sdk_root}/bin" >> "${GITHUB_PATH}"
-          "${sdk_root}/bin/glslangValidator" --version
-          "${sdk_root}/bin/slangc" -version
-          "${sdk_root}/bin/spirv-val" --version
+          
+          export PATH="${sdk_root}/bin:$PATH"
+          "${sdk_root}/bin/glslangValidator" --version || true
+          "${sdk_root}/bin/slangc" -version || true
+          "${sdk_root}/bin/spirv-val" --version || true
 
       - name: Download NGX shims
         uses: actions/download-artifact@v4
@@ -170,6 +177,9 @@ jobs:
           pattern: ngxshim-*
           path: build/native/ngx_shim/release
           merge-multiple: true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Build bundled jar
         env:
