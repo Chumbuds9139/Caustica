@@ -56,5 +56,27 @@
 	"caustica.options.rt.debugView.4": "Rugosidade",
 	"caustica.options.rt.debugView.5": "Movimento",
 	"caustica.options.rt.debugView.6": "Especular",
-	"caustica.options.rt.debugView.7": "Movimento especular"
+	"caustica.options.rt.debugView.7": "Movimento especular",
+
+	"caustica.options.rt.lightsHeader": "Iluminação RT",
+	"caustica.options.rt.tonemapHeader": "Tonemapping RT",
+	"caustica.options.rt.dynamicLightIntensity": "Intensidade das luzes dinâmicas",
+	"caustica.options.rt.dynamicLightIntensity.tooltip": "Escala as luzes analíticas criadas por itens luminosos segurados, como tochas, lanternas, glowstone e baldes de lava.",
+	"caustica.options.rt.blockEmissiveIntensity": "Intensidade de blocos emissivos",
+	"caustica.options.rt.blockEmissiveIntensity.tooltip": "Escala a luz emitida por blocos colocados no mundo, incluindo tochas, glowstone, lanternas, lava e outras superfícies emissivas.",
+	"caustica.options.rt.tonemapOperator": "Operador de tonemap",
+	"caustica.options.rt.tonemapOperator.tooltip": "Seleciona a curva de tonemapping usada para converter HDR em SDR após a exposição.",
+	"caustica.options.rt.tonemapOperator.agx": "AgX",
+	"caustica.options.rt.tonemapOperator.pbr_neutral": "PBR Neutral",
+	"caustica.options.rt.tonemapOperator.aces": "ACES",
+	"caustica.options.rt.tonemapOperator.filmic": "Filmic",
+	"caustica.options.rt.tonemapOperator.linear": "Linear / Pass-through",
+	"caustica.options.rt.tonemapExposure": "Exposição do tonemap",
+	"caustica.options.rt.tonemapExposure.tooltip": "Viés extra de exposição, em pontos EV, aplicado no passo de tonemapping após a exposição automática/manual.",
+	"caustica.options.rt.tonemapGamma": "Gama do tonemap",
+	"caustica.options.rt.tonemapGamma.tooltip": "Ajuste final de gama/aparência aplicado depois da curva de tonemap selecionada. 1,00 mantém a curva inalterada.",
+	"caustica.options.rt.tonemapSaturation": "Saturação do tonemap",
+	"caustica.options.rt.tonemapSaturation.tooltip": "Multiplicador final de saturação aplicado após o tonemapping. 1,00 é neutro; 0,00 é tons de cinza.",
+	"caustica.options.rt.tonemapContrast": "Contraste do tonemap",
+	"caustica.options.rt.tonemapContrast.tooltip": "Multiplicador final de contraste em torno do cinza médio aplicado após o tonemapping. 1,00 é neutro."
 }

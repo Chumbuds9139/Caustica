@@ -45,10 +45,10 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_HEURISTIC_EMISSION = 4;
     public static final int FEATURE_STOCHASTIC_ALPHA = 16;
-    // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo — the single knob
-    // (formerly duplicated as a literal in world.rgen.slang and RtLightCollector). Baked into every
-    // emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc), times
-    // any resource-pack emission.strength multiplier; see header()'s packing and RtMaterialOverrides.
+    // HDR radiance baseline of a full (level-15-equivalent) emitter, modulated by albedo. Baked into
+    // every emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc),
+    // times any resource-pack emission.strength multiplier; runtime global scales live in WorldPush
+    // (lights.block-emissive-intensity / lights.dynamic-intensity).
     private static final float EMISSIVE_STRENGTH = 5.0f;
     private static final int EMISSION_STRENGTH_SHIFT = 8;
     private static final int EMISSION_STRENGTH_MASK = 65535;

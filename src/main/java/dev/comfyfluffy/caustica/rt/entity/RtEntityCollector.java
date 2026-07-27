@@ -322,12 +322,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
         // authoritative semantic available here; glass-model roughness/IOR are profile-independent.
         boolean transmissive = q.materialInfo().layer() == ChunkSectionLayer.TRANSLUCENT;
+        float emission = itemSpriteEmission(sprite);
         capture.currentAlphaBucket = alphaBucket(q.materialInfo().layer(), false);
         setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
-                transmissive, false);
+                transmissive, false, emission > 0.0f);
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
-        capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
+        capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers), emission);
     }
 
     /** Resolve block-atlas geometry through the same immutable material snapshot as terrain. */
@@ -337,9 +338,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     private void setSpriteMaterial(TextureAtlasSprite sprite, RtMaterials.Profile profile,
                                    boolean transmissive, boolean stochasticAlpha) {
+        setSpriteMaterial(sprite, profile, transmissive, stochasticAlpha, false);
+    }
+
+    private void setSpriteMaterial(TextureAtlasSprite sprite, RtMaterials.Profile profile,
+                                   boolean transmissive, boolean stochasticAlpha, boolean emitting) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
-                    .resolve(sprite, profile, transmissive, false);
+                    .resolve(sprite, profile, transmissive, emitting);
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticAlpha(materialId) : materialId;
         } else if (sprite != null && RtEntityTextures.entityPbr()) {
@@ -808,11 +814,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         boolean stochasticAlpha = itemMesh && !transmissive && quad.itemRenderType() != null
                 && quad.itemRenderType().hasBlending();
         capture.currentAlphaBucket = alphaBucket(quad.chunkLayer(), stochasticAlpha);
+        float emission = state == null && itemMesh ? itemSpriteEmission(sprite) : 0.0f;
         if (state != null) {
             setBlockSpriteMaterial(sprite, state, transmissive, stochasticAlpha);
         } else {
             setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
-                    transmissive, stochasticAlpha);
+                    transmissive, stochasticAlpha, emission > 0.0f);
         }
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
@@ -833,8 +840,40 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             }
         }
         int color = ARGB.multiply(averageQuadColor(quad), tint);
-        float emission = quad.emissive() ? 1f : state != null ? state.getLightEmission() / 15f : 0f;
+        if (quad.emissive()) {
+            emission = 1.0f;
+        } else if (state != null) {
+            emission = state.getLightEmission() / 15f;
+        }
         capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, 0f, 0f, 0f, color, emission);
+    }
+
+
+    /**
+     * Item submissions do not expose the original ItemStack in Minecraft's submit API, so dynamic item
+     * emission is inferred from well-known luminous sprite names. Block items that texture from block
+     * sprites still resolve through the emitting material variant above; item-atlas sprites use the
+     * explicit per-primitive emission value and the shader's fallback dynamic emission strength.
+     */
+    private static float itemSpriteEmission(TextureAtlasSprite sprite) {
+        if (sprite == null) {
+            return 0.0f;
+        }
+        String path = sprite.contents().name().getPath();
+        int level = 0;
+        if (path.contains("lava")) level = 15;
+        else if (path.contains("soul_torch") || path.contains("soul_lantern")) level = 10;
+        else if (path.contains("torch")) level = 14;
+        else if (path.contains("lantern")) level = 15;
+        else if (path.contains("glowstone") || path.contains("sea_lantern")
+                || path.contains("shroomlight") || path.contains("froglight")
+                || path.contains("jack_o_lantern") || path.contains("redstone_lamp")
+                || path.contains("beacon")) level = 15;
+        else if (path.contains("end_rod") || path.contains("glow_berries")) level = 14;
+        else if (path.contains("sea_pickle")) level = 6;
+        else if (path.contains("magma")) level = 3;
+        else if (path.contains("blaze_rod")) level = 10;
+        return level > 0 ? level / 15.0f : 0.0f;
     }
 
     /** Collapse Fabric's per-vertex colour into the flat per-primitive tint stored by the RT layout. */

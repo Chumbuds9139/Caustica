@@ -58,8 +58,8 @@ public final class CausticaConfig {
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.FrameStats.ENABLED,
-            Rt.Hdr.ENABLED, Ngx.PATH,
+            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
+            Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
     }
 
@@ -97,13 +97,16 @@ public final class CausticaConfig {
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
         FILE.setComment("lights",
-                " RIS direct lighting from block emitters (torches, glowstone, lava, ...): per diffuse\n"
-                        + " vertex, resample ris-candidates power-weighted proposals and spend one shadow ray on\n"
-                        + " the survivor. ris-candidates = 0 disables it entirely (emitters just gather on direct\n"
-                        + " hit, same as with no NEE). Power-weighted sampling and the local per-section light\n"
-                        + " grid are always active whenever RIS is on. min-fill-ratio drops emissive footprints\n"
-                        + " below that fraction of their bounding rectangle (speckle/sparse crossed planes), so\n"
-                        + " only reasonably compact glows become lights. stats/dump/dump-radius are debug logging.");
+                " Direct lighting controls. dynamic-intensity scales analytic lights created from luminous\n"
+                        + " held items (torches, lanterns, lava buckets, ...). block-emissive-intensity scales\n"
+                        + " emissive blocks placed in the world, both their direct-hit emission and the RIS\n"
+                        + " sampled area-light contribution. ris-candidates = 0 disables RIS emitter NEE\n"
+                        + " entirely (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
+                        + " footprints from the light buffer. stats/dump/dump-radius are debug logging.");
+        FILE.setComment("tonemap",
+                " Scene tonemapping after exposure and before writing the vanilla SDR target. operator selects\n"
+                        + " the curve; exposure-ev is an extra post-exposure bias; gamma/saturation/contrast\n"
+                        + " are final look controls shared by all operators.");
         FILE.setComment("hdr",
                 " HDR display output (ST.2084/PQ). When enabled the swapchain is created in PQ automatically\n"
                         + " (falls back to SDR if the surface doesn't advertise it). paper-white-nits / peak-nits\n"
@@ -572,8 +575,12 @@ public final class CausticaConfig {
             }
         }
 
-        /** RIS block-emitter lights. {@code ris-candidates = 0} disables everything. */
+        /** Runtime light scaling and RIS block-emitter lights. {@code ris-candidates = 0} disables RIS. */
         public static final class Lights {
+            public static final FloatSetting DYNAMIC_INTENSITY =
+                    lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);
+            public static final FloatSetting BLOCK_INTENSITY =
+                    lightIntensity("caustica.rt.blockLightIntensity", "lights.block-emissive-intensity", 2.0f);
             public static final IntSetting RIS_CANDIDATES =
                     intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0);
             public static final FloatSetting MIN_FILL_RATIO =
@@ -733,6 +740,48 @@ public final class CausticaConfig {
             }
         }
 
+        /** Tonemap curve and final look controls for the SDR display mapper. */
+        public static final class Tonemapping {
+            public static final StringSetting OPERATOR =
+                    string("caustica.rt.tonemap.operator", "tonemap.operator", "agx", Tonemapping::sanitizeOperator);
+            /** Extra exposure bias applied after the auto/manual exposure image, in EV stops. */
+            public static final FloatSetting EXPOSURE_EV =
+                    clampedFloat("caustica.rt.tonemap.exposureEv", "tonemap.exposure-ev", 0.0f, -5.0f, 5.0f);
+            public static final FloatSetting GAMMA =
+                    clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.5f, 3.0f);
+            public static final FloatSetting SATURATION =
+                    clampedFloat("caustica.rt.tonemap.saturation", "tonemap.saturation", 1.0f, 0.0f, 3.0f);
+            public static final FloatSetting CONTRAST =
+                    clampedFloat("caustica.rt.tonemap.contrast", "tonemap.contrast", 1.0f, 0.0f, 3.0f);
+
+            private Tonemapping() {
+            }
+
+            public static int operatorIndex() {
+                return switch (OPERATOR.get()) {
+                    case "pbr_neutral" -> 1;
+                    case "aces" -> 2;
+                    case "filmic" -> 3;
+                    case "linear" -> 4;
+                    default -> 0; // agx
+                };
+            }
+
+            private static String sanitizeOperator(String value) {
+                if (value == null) {
+                    return "agx";
+                }
+                return switch (value.toLowerCase(java.util.Locale.ROOT).replace('-', '_')) {
+                    case "agx" -> "agx";
+                    case "pbr_neutral", "pbrneutral", "neutral" -> "pbr_neutral";
+                    case "aces" -> "aces";
+                    case "filmic" -> "filmic";
+                    case "linear", "passthrough", "pass_through", "none" -> "linear";
+                    default -> "agx";
+                };
+            }
+        }
+
         /** Render-frame timing + hitch logging. See {@code RtFrameStats}. */
         public static final class FrameStats {
             public static final BooleanSetting ENABLED = bool("caustica.rt.frameStats", "frame-stats.enabled", false);
@@ -839,6 +888,10 @@ public final class CausticaConfig {
 
     private static FloatSetting exposureScale(String key, String tomlPath, float fallback) {
         return new FloatSetting(key, tomlPath, fallback, v -> v, v -> v, v -> Math.clamp(v, 1.0e-4, 1.0e4));
+    }
+
+    private static FloatSetting lightIntensity(String key, String tomlPath, float fallback) {
+        return new FloatSetting(key, tomlPath, fallback, v -> v, v -> v, v -> Math.clamp(v, 0.0, 16.0));
     }
 
     private static FloatSetting clampedFloat(String key, String tomlPath, float fallback, float min, float max) {

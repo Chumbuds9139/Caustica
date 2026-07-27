@@ -202,7 +202,8 @@ final class RtLightCollector {
             // Rectangle-mean radiance: every emissive sample lies inside the rectangle, so
             // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionStrength()
             // is the material's final HDR strength (EMISSIVE_STRENGTH baseline * any JSON multiplier,
-            // baked in RtMaterialRegistry) — the single knob shared with world.rchit's direct-hit shading.
+            // baked in RtMaterialRegistry). The shader applies the runtime block-emissive global scale
+            // consistently to this RIS path and to world.rchit's direct-hit emission.
             float tintR = p[pb + 4], tintG = p[pb + 5], tintB = p[pb + 6];
             float scale = factor * desc.emissionStrength() / rectSamples;
             float leR = sumR * scale * tintR;

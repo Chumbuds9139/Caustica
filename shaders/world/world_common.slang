@@ -39,6 +39,17 @@ public struct BreakEntry {
 
 // Per-frame world data, read through a 64-bit device address. WorldPushData.java is generated from this
 // reflected type, including its serializer, byte size, vector/matrix types, and fixed-array capacities.
+
+// Small analytic point lights injected every frame for luminous held items. They are deliberately kept
+// separate from the static RIS block-emitter hierarchy so hand-held torches/lava buckets can move every
+// frame without rebuilding the section light grid. posIntensity.xyz is rebased world space; .w is a
+// normalized light level (0..1, vanilla level / 15). colorRadius.rgb is linear light color; .w is a soft
+// source radius in blocks for inverse-square attenuation clamping.
+public struct DynamicLight {
+    public float4 posIntensity;
+    public float4 colorRadius;
+};
+
 public struct WorldPush {
     public float4x4 invViewProj;
     public float3   camOffset;
@@ -66,6 +77,9 @@ public struct WorldPush {
     public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
     public uint     lightCount;       // packed Light records in pc.lightBufAddr
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
+    public float4   lightScales;      // x block emitter scale, y dynamic/entity emission scale, z point-light scale
+    public uint     dynamicLightCount;
+    public DynamicLight dynamicLights[4];
 };
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
@@ -142,6 +156,9 @@ public static const uint PAYLOAD_SHOW_CELESTIAL = 4u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
+// Set by world.rchit for dynamic entity/block-entity/item geometry, letting raygen apply the dynamic
+// light scale to direct-hit emission while terrain uses the block-emissive scale.
+public static const uint PAYLOAD_DYNAMIC_ENTITY = 256u;
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
@@ -206,13 +223,15 @@ public static const uint MATERIAL_FEATURE_SPEC = 1u;
 public static const uint MATERIAL_FEATURE_NORMAL = 2u;
 public static const uint MATERIAL_FEATURE_HEURISTIC_EMISSION = 4u;
 public static const uint MATERIAL_FEATURE_STOCHASTIC_ALPHA = 16u;
-// Final HDR emission strength (EMISSIVE_STRENGTH baseline * any JSON override multiplier), baked in Java
-// at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
-// emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
-// full features word's spare 16 bits (8..23) go to it instead of the 8 bits the old override-only field used.
+// Final HDR emission strength baseline (EMISSIVE_STRENGTH * any JSON override multiplier), baked in
+// Java at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max.
+// Runtime global scales are separate WorldPush values so players can tune block and dynamic lights live.
 public static const uint MATERIAL_EMISSION_STRENGTH_SHIFT = 8u;
 public static const uint MATERIAL_EMISSION_STRENGTH_MASK = 65535u;
 public static const float MATERIAL_MAX_EMISSION_STRENGTH = 32.0;
+// Runtime-generated dynamic item lights may use the neutral fallback material (packed strength 0).
+// Give an explicitly emissive primitive the same baseline radiance as Java's RtMaterialRegistry.
+public static const float MATERIAL_DEFAULT_DYNAMIC_EMISSION_STRENGTH = 5.0;
 public static const uint MATERIAL_MAX_LOD_SHIFT = 24u;
 public static const uint MATERIAL_MAX_LOD_MASK = 255u;
 
