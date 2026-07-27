@@ -30,6 +30,15 @@
 	"caustica.options.rt.waterWaves": "Animiertes Wasser",
 	"caustica.options.rt.waterWaves.tooltip": "Animiert Wasseroberflächen-Normalen für bewegte Wellenlichter.",
 
+	"caustica.options.rt.sss": "Streuung unter der Oberfläche",
+	"caustica.options.rt.sss.tooltip": "Lässt Licht durch dünne Oberflächen wie Blätter und Gras streuen, sodass Laub leuchtet, wenn man in Richtung Sonne hindurchschaut. Betrifft nur Materialien mit Subsurface-Daten und kostet dort einen zusätzlichen Schattenstrahl.",
+
+	"caustica.options.rt.weatherLighting": "Wetterbeleuchtung",
+	"caustica.options.rt.weatherLighting.tooltip": "Dämpft Sonnen- und Mondlicht und verdunkelt den Himmel bei Regen und Gewitter; Sonne, Mond und Sterne verschwinden hinter den Wolken. Aus behält bei jedem Wetter die Beleuchtung eines klaren Himmels bei.",
+
+	"caustica.options.rt.denoiser": "Rauschunterdrückungsfilter",
+	"caustica.options.rt.denoiser.tooltip": "Wendet den Rauschunterdrückungsfilter von DLSS Ray Reconstruction auf das pfadverfolgte Bild an. Aus zeigt den rohen, verrauschten Trace in voller Auflösung – als Referenzansicht nützlich, bei wenigen Samples aber deutlich körniger. Erfordert DLSS-Ray-Reconstruction-Unterstützung.",
+
 	"caustica.options.rt.handFov": "Hand-Sichtfeld",
 	"caustica.options.rt.handFov.tooltip": "Lässt die Hand und das gehaltene Item in der Ego-Perspektive dem Sichtfeld des Spiels folgen. An: Ein größeres Sichtfeld schiebt den Arm weiter weg, ein kleineres holt ihn näher heran. Aus: stellt das feste Sichtfeld der Hand wieder her.",
 

@@ -30,6 +30,15 @@
 	"caustica.options.rt.waterWaves": "動態水面",
 	"caustica.options.rt.waterWaves.tooltip": "對水面法線進行動畫處理，以顯示移動波浪高光。",
 
+	"caustica.options.rt.sss": "次表面散射",
+	"caustica.options.rt.sss.tooltip": "讓光線穿過樹葉、草等薄表面並產生散射，因此朝太陽方向看時植被會發光。僅影響提供次表面資料的材質，並在生效處增加一條陰影光線。",
+
+	"caustica.options.rt.weatherLighting": "天氣光照",
+	"caustica.options.rt.weatherLighting.tooltip": "在下雨與雷暴期間減弱陽光與月光並壓暗天空，同時將太陽、月亮和星星隱藏在雲層之後。關閉後，任何天氣下都維持晴空光照。",
+
+	"caustica.options.rt.denoiser": "降噪濾鏡",
+	"caustica.options.rt.denoiser.tooltip": "對路徑追蹤影像套用 DLSS Ray Reconstruction 降噪濾鏡。關閉後會以完整解析度顯示原始的雜訊追蹤結果——可作為參考畫面，但在低取樣數下顆粒感明顯更強。需要 DLSS Ray Reconstruction 支援。",
+
 	"caustica.options.rt.handFov": "手部視野",
 	"caustica.options.rt.handFov.tooltip": "讓第一人稱的手和手持物品跟隨遊戲視野設定。開啟時，視野越大手臂越遠，視野越小手臂越近。關閉時恢復原版固定的手部視野。",
 

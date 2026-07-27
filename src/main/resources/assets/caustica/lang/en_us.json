@@ -30,6 +30,15 @@
 	"caustica.options.rt.waterWaves": "Animated Water",
 	"caustica.options.rt.waterWaves.tooltip": "Animate water-surface normals for moving wave highlights.",
 
+	"caustica.options.rt.sss": "Subsurface Scattering",
+	"caustica.options.rt.sss.tooltip": "Let light scatter through thin surfaces such as leaves and grass, so foliage glows when you look through it toward the sun. Only affects materials that provide subsurface data; costs an extra shadow ray where it applies.",
+
+	"caustica.options.rt.weatherLighting": "Weather Lighting",
+	"caustica.options.rt.weatherLighting.tooltip": "Dim sunlight and moonlight and darken the sky during rain and thunderstorms, and hide the sun, moon and stars behind the clouds. Off keeps clear-sky lighting in all weather.",
+
+	"caustica.options.rt.denoiser": "Denoising Filter",
+	"caustica.options.rt.denoiser.tooltip": "Apply the DLSS Ray Reconstruction denoising filter to the path-traced image. Off shows the raw, noisy trace at full resolution — useful as a reference view, but far grainier at low sample counts. Requires DLSS Ray Reconstruction support.",
+
 	"caustica.options.rt.handFov": "Hand FOV",
 	"caustica.options.rt.handFov.tooltip": "Make the first-person hand and held item follow the game's FOV setting. On, a higher FOV pushes the arm further away and a lower FOV brings it closer. Off restores vanilla's fixed hand FOV.",
 

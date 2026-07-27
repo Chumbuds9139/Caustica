@@ -27,6 +27,40 @@ public float3 volumeExtinction(float3 tint, float transmission) {
     return -log(blockTransmittance) / VOLUME_TINT_REFERENCE_DISTANCE;
 }
 
+// ---- Global ambient fog (worldPush.ambientFog): a uniform, self-illuminated participating medium
+// filling the whole dimension, on top of whatever volume dielectric the path happens to be inside.
+//
+// This is what gives the Nether its deep, enclosing haze and the End its faint void dust, and what
+// makes distant terrain wash out in heavy rain. It is a single-scatter, homogeneous approximation:
+// over a segment of length d the path keeps exp(-sigma*d) of its radiance and picks up the fog's own
+// emission over the part it lost. That is exact for a uniform emissive medium, costs one exp per
+// segment, and — unlike a screen-space depth fade — automatically applies to reflections, refractions
+// and every indirect bounce, because it lives in the path integral rather than at the display seam.
+//
+// density (w) is per block and zero in the clear Overworld, where the whole thing compiles down to one
+// comparison per segment.
+public struct AmbientFog {
+    public float3 inScatter;   // radiance added over the segment
+    public float3 transmittance; // what survives of the radiance coming from beyond it
+};
+
+public AmbientFog evalAmbientFog(float4 ambientFog, float distance) {
+    AmbientFog result;
+    result.inScatter = float3(0.0, 0.0, 0.0);
+    result.transmittance = float3(1.0, 1.0, 1.0);
+    float density = ambientFog.w;
+    if (density <= 0.0 || distance <= 0.0) {
+        return result;
+    }
+    // Clamp the optical depth. exp(-huge) is zero either way, but bounding the exponent keeps the
+    // result out of the denormal range on a very long segment (a far shadow/guide ray can report
+    // thousands of blocks), which some drivers handle at a large penalty.
+    float t = exp(-min(density * distance, 32.0));
+    result.transmittance = float3(t, t, t);
+    result.inScatter = ambientFog.xyz * (1.0 - t);
+    return result;
+}
+
 // ---- Participating medium the path is currently inside.
 //
 // Refraction needs the RELATIVE index across an interface, so the renderer has to know what it is

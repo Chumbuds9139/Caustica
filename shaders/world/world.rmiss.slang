@@ -3,6 +3,17 @@
 // sun/moon discs + soft horizon + starfield) into payload.albedo; raygen consumes that value for both
 // accumulated radiance and bounce-0 denoiser guides.
 //
+// Three skyboxes live here, selected by worldPush.dimension. Only the Overworld runs the atmosphere
+// march and the celestial cycle; the Nether and the End have no sun or moon at all, so they answer with
+// their own closed-form skybox (netherSky / endSky) and never touch sunDir, the starfield, or the
+// celestials atlas. Splitting on the dimension rather than trying to fold the other two into the
+// atmosphere model is deliberate: neither has an atmosphere, and both are lit ambiently by the sky
+// dome itself, which is exactly what a miss shader returns.
+//
+// Overworld weather (rain/thunder) is applied to the atmosphere result rather than baked into the
+// march: worldPush.weather.z is the single sky-darkening factor Java also derives its NEE light
+// attenuation from, so the sky and the light on the ground dim together.
+//
 // Celestial discs (sun/moon) are gated by a packed payload flag, which raygen sets per-ray from the path
 // state: true on the primary ray and after every specular/dielectric bounce (so the sun/moon show up in
 // water/glass/metal reflections + refractions), false after a diffuse vertex did sun/moon NEE (so the
@@ -219,10 +230,99 @@ float3 stars(float3 dir, float starBrightness, float VdotS, float4 celestial) {
     return 0.2 * star * starCol * starBrightness;
 }
 
+// ---- Nether skybox. The Nether has no sky: the player is under a bedrock ceiling looking into a
+// thick, self-illuminated haze. So instead of a gradient with a horizon, this is a dome of diffuse
+// ambient light — warm and dark, brightening slightly downward (toward the lava seas that light the
+// dimension from below) and toward the fog colour the dimension pushes. There is no sun term, no
+// transmittance, and no direction that reads as "up", which is what makes it look enclosed rather
+// than open. The radiance level is deliberately low but non-zero: it is the ONLY ambient light source
+// for a path that escapes geometry, so zero would make unlit caves pure black.
+static const float3 NETHER_SKY_LOW  = float3(0.36, 0.085, 0.030); // toward the lava glow below
+static const float3 NETHER_SKY_HIGH = float3(0.085, 0.024, 0.020); // toward the dark ceiling
+float3 netherSky(float3 dir, float3 fogColor) {
+    // Downward rays see the glow, upward rays the ceiling; smoothstep keeps the crossover soft so the
+    // ambient term has no visible band in it.
+    float down = smoothstep(-0.75, 0.35, -dir.y);
+    float3 col = lerp(NETHER_SKY_HIGH, NETHER_SKY_LOW, down);
+    // Blend toward the dimension/biome fog colour so a crimson forest reads red and a soul valley
+    // teal, exactly like the fog the same biome pushes into worldPush.ambientFog.
+    return lerp(col, col * 0.5 + fogColor * 0.6, 0.5);
+}
+
+// ---- The End skybox. Deep void purple with a dense, static starfield: the End is rendered as open
+// space, so unlike the Nether it gets a real (if dim) star layer, and unlike the Overworld those stars
+// do not wheel — the End has no celestial rotation, so the field is fixed to world directions and the
+// player can navigate by it. The gradient is subtle and vertical-symmetric (there is no horizon out
+// there); the small amount of extra brightness near the "equator" reads as distant void haze.
+static const float3 END_SKY_DEEP  = float3(0.020, 0.010, 0.035); // straight up / straight down
+static const float3 END_SKY_BAND  = float3(0.055, 0.028, 0.080); // toward the horizontal band
+static const float  END_STAR_BRIGHTNESS = 0.55;
+float3 endSky(float3 dir, float3 fogColor) {
+    float band = 1.0 - abs(dir.y);          // 0 at the poles, 1 around the horizontal
+    float3 col = lerp(END_SKY_DEEP, END_SKY_BAND, band * band);
+    col = lerp(col, fogColor * 0.35, 0.35); // the End's own fog tint, kept subtle
+    // Static starfield: the same cube-cell hash the Overworld uses, but sampled from the unrotated
+    // direction (celestial.w is meaningless here) and with no horizon/daylight gates.
+    float3 a = abs(dir);
+    float2 uv;
+    float face;
+    if (a.x >= a.y && a.x >= a.z)      { uv = dir.yz / a.x; face = dir.x > 0.0 ? 0.0 : 1.0; }
+    else if (a.y >= a.z)               { uv = dir.xz / a.y; face = dir.y > 0.0 ? 2.0 : 3.0; }
+    else                               { uv = dir.xy / a.z; face = dir.z > 0.0 ? 4.0 : 5.0; }
+    float2 g = uv * STAR_CELLS;
+    float3 id = float3(floor(g), face);
+    if (hash13(id) >= STAR_THRESHOLD) {
+        float sz = STAR_HALF * (0.6 + 0.8 * hash13(id + 53.0));
+        float inset = sz * 1.5;
+        float2 center = inset + (1.0 - 2.0 * inset) * float2(hash13(id + 11.0), hash13(id + 23.0));
+        float2 q = frac(g) - center;
+        float box = max(abs(q.x), abs(q.y));
+        float star = 1.0 - smoothstep(sz * 0.6, sz, box);
+        if (star > 0.0) {
+            // End stars are cold: a violet-white ramp rather than the Overworld's warm/blue mix.
+            float3 starCol = lerp(float3(0.62, 0.55, 0.95), float3(0.90, 0.86, 1.0), hash13(id + 137.0));
+            col += 0.2 * star * starCol * END_STAR_BRIGHTNESS * (0.55 + 0.45 * hash13(id + 71.0));
+        }
+    }
+    return col;
+}
+
+// Write a sky miss into the payload: HDR radiance in albedo, the -1 hitT sentinel, and the neutral
+// material lanes every consumer expects on a miss. One writer for all three skyboxes, so a new
+// dimension cannot forget to clear a lane and leave a hit's stale roughness or IOR behind.
+//
+// albedo is a half3 lane, so the sky's HDR radiance is clamped to half's finite range rather than
+// allowed to round up to +inf and propagate as NaN through the path throughput. This is a guard, not a
+// correction: the brightest term is SUN_DISC_RADIANCE at 24.0, far under the 65504 ceiling.
+void writeSkyMiss(inout Payload payload, float3 radiance) {
+    payload.albedo = half3(clamp(radiance, float3(0.0, 0.0, 0.0),
+            float3(HALF_MAX, HALF_MAX, HALF_MAX)));
+    payload.hitT = -1.0;
+    payload.normal = half3(0.0h, 0.0h, 0.0h);
+    payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+    payload.f0 = half3(0.0h, 0.0h, 0.0h);
+    payload.flags = 0u;
+    payload.roughMetal = packHalf2(float2(1.0, 0.0));
+    payload.emissionSss = packHalf2(float2(0.0, 0.0));
+    payload.iorTransmission = packHalf2(float2(1.0, 0.0));
+    payload.rayCone = 0u;
+}
+
 [shader("miss")]
 void main(inout Payload payload) {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
     float3 dir = normalize(WorldRayDirection());
+
+    // Nether / End: no atmosphere, no sun, no moon, no wheeling stars. Answer with the dimension's own
+    // skybox and skip the entire Overworld path below — including the celestials-atlas samples, which
+    // would draw an Overworld sun into a Nether ceiling.
+    if (worldPush.dimension != DIMENSION_OVERWORLD) {
+        writeSkyMiss(payload, worldPush.dimension == DIMENSION_NETHER
+                ? netherSky(dir, worldPush.ambientFog.xyz)
+                : endSky(dir, worldPush.ambientFog.xyz));
+        return;
+    }
+
     float day = worldPush.sunDir.w;
     float3 sd = worldPush.sunDir.xyz;
     float SdotU = sd.y;
@@ -255,12 +355,36 @@ void main(inout Payload payload) {
     float3 nightAmbient = lerp(NIGHT_HORIZON, NIGHT_ZENITH, up);
     col += nightAmbient * (1.0 - day);
     col *= downFade;
+
+    // ---- Weather. worldPush.weather.z is the sky-darkening factor Java computed from the same rain and
+    // thunder levels it used to attenuate the NEE sun/moon radiance, so overcast sky and dimmer ground
+    // light are two readings of one number and cannot drift apart. Vanilla hides the sun, moon and stars
+    // behind the cloud deck during rain; the same happens here, driven by rain strength.
+    //
+    // The clouds are not black: an overcast sky is a diffuse grey-blue light source, and killing the
+    // in-scatter outright would make a storm darker than night and destroy the sky fill that lights
+    // everything indirectly. So the atmosphere is dimmed toward a desaturated overcast radiance derived
+    // from its own luminance, which keeps the correct time-of-day brightness ordering (a storm at noon
+    // is still far brighter than a clear midnight) while removing the blue.
+    bool weatherOn = worldFeature(worldPush, FEATURE_WEATHER_LIGHTING);
+    float rainStrength = weatherOn ? clamp(worldPush.weather.x, 0.0, 1.0) : 0.0;
+    float skyDarken = weatherOn ? clamp(worldPush.weather.z, 0.0, 1.0) : 1.0;
+    if (rainStrength > 0.0) {
+        float overcastLum = dot(col, float3(0.2126, 0.7152, 0.0722));
+        float3 overcast = float3(overcastLum, overcastLum, overcastLum) * float3(0.92, 0.95, 1.0);
+        col = lerp(col, overcast, rainStrength * 0.85);
+    }
+    col *= skyDarken;
+    // Stars are already faded for rain on the CPU (RtComposite.skyPush scales the pushed
+    // starBrightness), so this must NOT re-apply the rain factor or the fade would be squared.
     col += stars(dir, starBrightness, VdotS, worldPush.celestial);
 
     // Sun & moon discs — sampled from the vanilla celestials atlas, gated to rays that haven't already
     // accounted for the light via diffuse NEE. squareBody gives the body-local [-1,1] coord; the
-    // sprite's own texel coverage (alpha) shapes the disc.
-    if (showCelestial) {
+    // sprite's own texel coverage (alpha) shapes the disc. Rain hides both bodies (vanilla does the
+    // same): discVisible reaches zero as the cloud deck closes over.
+    float discVisible = 1.0 - rainStrength;
+    if (showCelestial && discVisible > 0.0) {
         float2 local;
         squareBody(dir, sd, SUN_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
         if (all(abs(local) < float2(1.0, 1.0))) {
@@ -271,7 +395,7 @@ void main(inout Payload payload) {
             // survives, the halo collapses to ~0.
             float core = pow(clamp(dot(t, t) * 0.45, 0.0, 1.0), 6.0);
             // transmittanceToSpace reddens+dims the disc through the sunset on the sky's own curve.
-            col += SUN_DISC_RADIANCE * transmittanceToSpace(dir) * core * sunUp;
+            col += SUN_DISC_RADIANCE * transmittanceToSpace(dir) * core * sunUp * discVisible;
         }
         // Same horizon gate as the sun: with the soft-horizon change, below-horizon rays no longer clip
         // at the planet, so without this the moon disc would stay visible after it set.
@@ -283,21 +407,9 @@ void main(inout Payload payload) {
             // Moon: a smoothstep contrast ramp suppresses the faint halo while keeping the lit phase
             // shape from the texture. The transmittance tint gives a warm amber moon at moonrise/set.
             float m = smoothstep(0.0, 1.0, min(length(t), 1.0)) * 1.3;
-            col += MOON_DISC_RADIANCE * transmittanceToSpace(dir) * t * m * pow2(1.0 - day) * moonUp;
+            col += MOON_DISC_RADIANCE * transmittanceToSpace(dir) * t * m * pow2(1.0 - day) * moonUp * discVisible;
         }
     }
 
-    // albedo is a half3 lane, so the sky's HDR radiance is clamped to half's finite range rather than
-    // allowed to round up to +inf and propagate as NaN through the path throughput. This is a guard, not
-    // a correction: the brightest term here is SUN_DISC_RADIANCE at 24.0, far under the 65504 ceiling.
-    payload.albedo = half3(clamp(col, float3(0.0, 0.0, 0.0), float3(HALF_MAX, HALF_MAX, HALF_MAX)));
-    payload.hitT = -1.0;
-    payload.normal = half3(0.0h, 0.0h, 0.0h);
-    payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-    payload.f0 = half3(0.0h, 0.0h, 0.0h);
-    payload.flags = 0u;
-    payload.roughMetal = packHalf2(float2(1.0, 0.0));
-    payload.emissionSss = packHalf2(float2(0.0, 0.0));
-    payload.iorTransmission = packHalf2(float2(1.0, 0.0));
-    payload.rayCone = 0u;
+    writeSkyMiss(payload, col);
 }

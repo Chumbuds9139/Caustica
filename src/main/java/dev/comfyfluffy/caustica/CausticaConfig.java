@@ -56,7 +56,9 @@ public final class CausticaConfig {
     public static void ensureRegistered() {
         @SuppressWarnings("unused")
         Object[] touch = {
-            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
+            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
+            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
+            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -85,6 +87,14 @@ public final class CausticaConfig {
         FILE.setComment("enabled",
                 " Caustica RT renderer configuration.\n"
                         + " A matching -Dcaustica.* system property overrides the value below.");
+        FILE.setComment("composite",
+                " Per-frame path-tracing controls.\n"
+                        + " subsurface-scattering: LabPBR SSS (backlit foliage). Costs one extra shadow ray per\n"
+                        + " eligible vertex; off disables the effect entirely.\n"
+                        + " weather-lighting: attenuate sun/moon light and darken the sky during rain and\n"
+                        + " thunderstorms. Off keeps clear-sky lighting in all weather.\n"
+                        + " denoiser: the DLSS Ray Reconstruction denoise+upscale filter. Off presents the raw\n"
+                        + " path-traced image at full resolution (noisy reference view). Requires dlss-rr.enabled.");
         FILE.setComment("terrain",
                 " Render-thread terrain work is bounded by dispatch/result counts per streaming pass.\n"
                         + " Buffer fill and BLAS/OMM preparation run on workers. max-inflight-sections bounds\n"
@@ -547,6 +557,43 @@ public final class CausticaConfig {
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
+            /**
+             * LabPBR subsurface scattering. Light entering the back of a thin surface (leaves, grass,
+             * ice plants) scatters through toward the viewer via a forward-biased Henyey-Greenstein
+             * phase, which is what makes foliage glow when you look through it toward the sun.
+             *
+             * <p>Only materials that actually author an SSS channel are affected, so turning this off
+             * costs nothing visually on the rest of the world — but it does remove one shadow ray per
+             * eligible vertex, so it is a genuine performance lever in heavily vegetated scenes. The
+             * flag reaches the shaders through {@code WorldPush.featureFlags} and zeroes the SSS
+             * strength at the payload seam, which switches off the RIS back lobe and the explicit
+             * transmission pass together.
+             */
+            public static final BooleanSetting SSS =
+                    bool("caustica.rt.sss", "composite.subsurface-scattering", true);
+            /**
+             * Weather-driven lighting. Rain and thunderstorms attenuate the sun/moon NEE radiance,
+             * darken and desaturate the sky toward an overcast grey, hide the celestial discs and the
+             * stars behind the cloud deck, and add a light haze to the air.
+             *
+             * <p>Off restores clear-sky lighting in all weather (the vanilla-shader look), which is
+             * also the safe setting if a server drives rain constantly.
+             */
+            public static final BooleanSetting WEATHER_LIGHTING =
+                    bool("caustica.rt.weatherLighting", "composite.weather-lighting", true);
+            /**
+             * Denoising filter (DLSS Ray Reconstruction). Off traces and presents the raw path-traced
+             * image — a reference view that is correct but visibly noisy at low SPP, and, because RR
+             * also owns the upscale, one that renders at full display resolution instead of RR's
+             * chosen render size.
+             *
+             * <p>This is the player-facing name for the same switch {@code dlss-rr.enabled} exposes;
+             * both must be on for the filter to run, so a machine without RR support is unaffected by
+             * this toggle. Changing it re-sizes the trace targets on the next frame (see
+             * {@code RtComposite.ensureOutput}).
+             */
+            public static final BooleanSetting DENOISER =
+                    bool("caustica.rt.denoiser", "composite.denoiser", true);
             public static final FloatSetting SUN_ANGULAR_RADIUS =
                     radians("caustica.rt.sunAngularRadius", "composite.sun-angular-radius-deg", 0.6f);
             public static final FloatSetting MOON_ANGULAR_RADIUS =

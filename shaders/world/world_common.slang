@@ -48,7 +48,7 @@ public struct WorldPush {
     public float3   camDelta;
     public uint     spp;
     public float2   jitter;
-    public uint     flags;            // bit0 submerged, bit4 waves (bit1 was PBR-toggle, now unconditional)
+    public uint     flags;            // see WORLD_FLAG_* below (bit1 was PBR-toggle, now unconditional)
     public uint     maxBounces;
     public float4   sunDir;           // xyz true sun direction, w dayFactor 0..1
     public float4   lightDir;         // xyz active NEE light dir, w square half-angle (rad)
@@ -68,7 +68,41 @@ public struct WorldPush {
     public uint     lightCount;       // packed Light records in pc.lightBufAddr
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
     public float4   lightScales;      // x block emitter scale, y dynamic/entity emission scale
+    // Weather state, already resolved on the CPU from the client level (see RtComposite.weatherState).
+    // The two strengths drive the look (overcast sky, hidden discs/stars); the two multipliers are the
+    // single source of truth for how much the weather dims things, so Java's NEE radiance and the sky
+    // shader can never disagree about how dark a storm is.
+    public float4   weather;          // x rain 0..1, y thunder 0..1, z sky darkening, w light attenuation
+    // Uniform ambient in-scattering along every path segment: the Nether's thick haze, the End's void
+    // dust, and the Overworld's rain murk all reduce to one colour + one per-block density.
+    public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
+    public uint     dimension;        // DIMENSION_OVERWORLD / DIMENSION_NETHER / DIMENSION_END
+    public uint     featureFlags;     // FEATURE_* toggles resolved from CausticaConfig
 };
+
+// worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
+// Rayleigh/Mie/ozone atmosphere with the sun/moon cycle; the other two dimensions have no celestial
+// cycle at all, so they draw their own skybox and get their ambient light from it plus ambientFog.
+public static const uint DIMENSION_OVERWORLD = 0u;
+public static const uint DIMENSION_NETHER = 1u;
+public static const uint DIMENSION_END = 2u;
+
+// worldPush.featureFlags: player-facing toggles that gate whole effects rather than tune them. They
+// live in their own word (not WorldPush.flags, which describes the camera's physical state) so a new
+// option can never be confused with a per-frame state bit.
+public static const uint FEATURE_SSS = 1u;               // LabPBR subsurface scattering
+public static const uint FEATURE_WEATHER_LIGHTING = 2u;  // rain/storm sky darkening + light attenuation
+public static const uint FEATURE_DENOISER = 4u;          // temporal/spatial denoising filter is active
+
+// WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
+public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
+public static const uint WORLD_FLAG_WAVES = 16u;   // bit4: animated water wave normals
+
+// Flag accessors live here, next to the bit definitions, and take the push explicitly: world.rmiss
+// loads its own WorldPush and must NOT import world_core (that module declares the raygen bindings).
+// world_core re-exports the same predicates against its module-level `worldPush` for every other pass.
+public bool worldFeature(WorldPush push, uint feature) { return (push.featureFlags & feature) != 0u; }
+public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
 // uses three unsigned 10-bit coordinates; the geometric normal is reconstructed from the half axes.

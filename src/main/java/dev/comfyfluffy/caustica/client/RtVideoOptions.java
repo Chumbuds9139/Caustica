@@ -38,6 +38,11 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             waterWaves(),
+            // Grouped: the three new effect/quality toggles sit together, and OptionsList.addSmall
+            // pairs them two per row, so they read as one block rather than scattered checkboxes.
+            subsurfaceScattering(),
+            weatherLighting(),
+            denoiser(),
             handFov(),
             dlssQuality(),
             hdrEnabled(),
@@ -198,6 +203,30 @@ public final class RtVideoOptions {
 
     private static OptionInstance<Boolean> waterWaves() {
         return bool("caustica.options.rt.waterWaves", CausticaConfig.Rt.Composite.WATER_WAVES);
+    }
+
+    /**
+     * LabPBR subsurface scattering: backlit foliage glow. Only materials that author an SSS channel are
+     * affected, but each eligible shading vertex costs an extra shadow ray, so this is a real
+     * performance lever in dense vegetation.
+     */
+    private static OptionInstance<Boolean> subsurfaceScattering() {
+        return bool("caustica.options.rt.sss", CausticaConfig.Rt.Composite.SSS);
+    }
+
+    /** Rain/thunderstorm sun-and-sky dimming. Off keeps clear-sky lighting in every weather state. */
+    private static OptionInstance<Boolean> weatherLighting() {
+        return bool("caustica.options.rt.weatherLighting", CausticaConfig.Rt.Composite.WEATHER_LIGHTING);
+    }
+
+    /**
+     * The denoising filter (DLSS Ray Reconstruction). Turning it off shows the raw path-traced image —
+     * a correct but noisy reference view — and, because RR also owns the upscale, moves the trace to
+     * full display resolution. Safe to toggle live: {@code RtComposite.ensureOutput} re-sizes the trace
+     * targets on the next frame.
+     */
+    private static OptionInstance<Boolean> denoiser() {
+        return bool("caustica.options.rt.denoiser", CausticaConfig.Rt.Composite.DENOISER);
     }
 
     /**
