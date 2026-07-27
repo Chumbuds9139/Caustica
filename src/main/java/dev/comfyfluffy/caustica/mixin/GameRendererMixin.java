@@ -5,6 +5,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
+import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.rt.RtComposite;
@@ -12,6 +13,7 @@ import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
@@ -35,6 +37,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
+	/** Vanilla's fixed viewmodel FOV, per {@code Camera.calculateHudFov()}. */
+	private static final float CAUSTICA$VANILLA_HAND_FOV = 70.0f;
+
 	@Shadow
 	@Final
 	private RenderTarget mainRenderTarget;
@@ -168,6 +173,49 @@ public abstract class GameRendererMixin {
 			// after its transient command buffer has been placed later in the same graphics submission.
 			RtComposite.INSTANCE.finishGraphicsUse();
 		}
+	}
+
+	// ---- Hand FOV (viewmodel FOV) ----------------------------------------------------------------
+	//
+	// Vanilla draws the first-person viewmodel through a dedicated "3d hud" perspective built from
+	// CameraRenderState.hudFov, which Camera.calculateHudFov() pins to a constant 70 degrees
+	// (modulated only by the death/fluid factor). That deliberately isolates the arm from the FOV
+	// slider so it never changes size.
+	//
+	// With Hand FOV enabled we rescale that single argument by fovSlider / 70 before the projection is
+	// built. Because hudFov is exactly modifyFovBasedOnDeathOrFluid(70) and that helper only ever
+	// multiplies/divides its input, hudFov * (slider / 70) is identical to feeding the slider value
+	// through the same helper — the death and underwater/lava FOV modulation stays intact, and the
+	// viewmodel now widens with a higher FOV (arm pushed away) and narrows with a lower one.
+	//
+	// Deliberately keyed to the FOV slider rather than Camera.getFov(): the latter also carries the
+	// transient sprint/zoom multiplier (and the spyglass' ~0.1x zoom), which would make the arm pump
+	// while sprinting and balloon while scoped. Legacy Minecraft, back when the hand did follow FOV,
+	// likewise built the hand projection with changingFov = false.
+	//
+	// Hooking the setupPerspective argument (rather than the hand render itself) keeps the change in
+	// exactly one place: the hand, the screen effects and the 3D crosshair all share this "3d hud"
+	// projection and stay mutually consistent, matching how those overlays behaved historically. When
+	// the toggle is off the argument passes through untouched and the projection is bit-identical to
+	// vanilla's.
+	@ModifyArg(method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
+			at = @At(value = "INVOKE",
+					target = "Lnet/minecraft/client/renderer/Projection;setupPerspective(FFFFF)V"),
+			index = 2)
+	private float caustica$applyHandFov(float hudFov) {
+		if (!CausticaConfig.Rt.Hand.FOV_FOLLOWS_CAMERA.value()) {
+			return hudFov;
+		}
+		Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft == null || minecraft.options == null) {
+			return hudFov;
+		}
+		Integer sliderFov = minecraft.options.fov().get();
+		if (sliderFov == null || sliderFov <= 0) {
+			return hudFov;
+		}
+		// Clamped so a hostile config value can never produce a degenerate projection matrix.
+		return Math.clamp(hudFov * (sliderFov / CAUSTICA$VANILLA_HAND_FOV), 1.0f, 179.0f);
 	}
 
 	// Composite the redirected UI overlay back over the world once the GUI has fully rendered into it.
