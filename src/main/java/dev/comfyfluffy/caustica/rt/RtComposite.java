@@ -922,9 +922,7 @@ public final class RtComposite {
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     new Float4(CausticaConfig.Rt.Lights.BLOCK_INTENSITY.value(),
                             CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY.value(),
-                            0.0f, 0.0f),
-                    0,
-                    new WorldPushData.DynamicLight[0]
+                            0.0f, 0.0f)
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
