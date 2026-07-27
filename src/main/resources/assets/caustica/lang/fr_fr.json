@@ -30,6 +30,9 @@
 	"caustica.options.rt.waterWaves": "Eau animée",
 	"caustica.options.rt.waterWaves.tooltip": "Anime les normales de surface de l'eau pour des reflets de vagues en mouvement.",
 
+	"caustica.options.rt.handFov": "Champ de vision de la main",
+	"caustica.options.rt.handFov.tooltip": "Fait suivre au bras et à l'objet en première personne le champ de vision du jeu. Activé, un champ de vision plus large éloigne le bras et un champ plus étroit le rapproche. Désactivé, rétablit le champ de vision fixe d'origine.",
+
 	"caustica.options.rt.hdr": "Sortie HDR",
 	"caustica.options.rt.hdr.tooltip": "Présente en HDR (ST.2084/PQ) au lieu du SDR lorsque l'écran le prend en charge. Prend effet après le redémarrage du jeu.",
 
@@ -60,8 +63,6 @@
 
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
-	"caustica.options.rt.dynamicLightIntensity": "Dynamic Light Intensity",
-	"caustica.options.rt.dynamicLightIntensity.tooltip": "Scales analytic lights created by luminous held items such as torches, lanterns, glowstone and lava buckets.",
 	"caustica.options.rt.blockEmissiveIntensity": "Emissive Block Intensity",
 	"caustica.options.rt.blockEmissiveIntensity.tooltip": "Scales light emitted by blocks placed in the world, including torches, glowstone, lanterns, lava and other emissive surfaces.",
 	"caustica.options.rt.tonemapOperator": "Tonemap Operator",

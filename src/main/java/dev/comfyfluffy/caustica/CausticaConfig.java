@@ -58,7 +58,7 @@ public final class CausticaConfig {
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
+            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
     }
@@ -96,9 +96,16 @@ public final class CausticaConfig {
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
+        FILE.setComment("hand",
+                " First-person viewmodel (held item / arm) controls.\n"
+                        + " fov-follows-camera: false (vanilla) renders the hand through its own fixed 70-degree\n"
+                        + " projection, isolated from the FOV setting. true scales that projection to the\n"
+                        + " configured FOV instead, so raising the FOV pushes the arm away and lowering it pulls\n"
+                        + " the arm closer, the way the rest of the scene reacts.");
         FILE.setComment("lights",
                 " Direct lighting controls. dynamic-intensity scales analytic lights created from luminous\n"
-                        + " held items (torches, lanterns, lava buckets, ...). block-emissive-intensity scales\n"
+                        + " held items (torches, lanterns, lava buckets, ...) and is config-only — the Video\n"
+                        + " Settings screen exposes block-emissive-intensity alone. block-emissive-intensity scales\n"
                         + " emissive blocks placed in the world, both their direct-hit emission and the RIS\n"
                         + " sampled area-light contribution. ris-candidates = 0 disables RIS emitter NEE\n"
                         + " entirely (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
@@ -575,8 +582,35 @@ public final class CausticaConfig {
             }
         }
 
+        /**
+         * First-person viewmodel (held item / arm) rendering.
+         *
+         * <p>Vanilla draws the hand through {@code GameRenderer.hudProjection}, a separate perspective built
+         * from {@code CameraRenderState.hudFov} — a constant 70° (see {@code Camera.calculateHudFov}) that is
+         * deliberately isolated from the FOV slider so the arm never changes size. Enabling
+         * {@link #FOV_FOLLOWS_CAMERA} scales that constant to the player's configured FOV instead, so a
+         * higher FOV pushes the arm away and a lower FOV pulls it closer.
+         *
+         * <p>It follows the FOV <em>setting</em>, not {@code Camera.getFov()}: the latter also folds in the
+         * transient sprint/zoom multiplier, which would make the arm pump while sprinting and balloon while
+         * a spyglass is scoped. The death and underwater/lava FOV modulation baked into {@code hudFov} is
+         * preserved either way.
+         */
+        public static final class Hand {
+            public static final BooleanSetting FOV_FOLLOWS_CAMERA =
+                    bool("caustica.rt.handFov", "hand.fov-follows-camera", false);
+
+            private Hand() {
+            }
+        }
+
         /** Runtime light scaling and RIS block-emitter lights. {@code ris-candidates = 0} disables RIS. */
         public static final class Lights {
+            /**
+             * Scales the analytic lights created from luminous held items. Caustica's stock held-item
+             * dynamic lighting stays on and unchanged at the default 1.0; this remains a config/system-property
+             * knob only — the Video Settings screen intentionally exposes just {@link #BLOCK_INTENSITY}.
+             */
             public static final FloatSetting DYNAMIC_INTENSITY =
                     lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);
             public static final FloatSetting BLOCK_INTENSITY =

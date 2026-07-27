@@ -38,6 +38,7 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             waterWaves(),
+            handFov(),
             dlssQuality(),
             hdrEnabled(),
             hdrPaperWhite(),
@@ -46,10 +47,15 @@ public final class RtVideoOptions {
         };
     }
 
-    /** Light-emission options (dynamic held-item lights and emissive block scaling). */
+    /**
+     * Light-emission options. Only the emissive-block multiplier is surfaced: it controls the brightness of
+     * torches, lanterns, glowstone, lava and every other emitter placed in the world. Held-item dynamic
+     * lighting keeps working exactly as Caustica ships it — its multiplier
+     * ({@code CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY}) is simply not given a slider here and stays at the
+     * config/system-property default.
+     */
     public static OptionInstance<?>[] lightOptions() {
         return new OptionInstance<?>[] {
-            dynamicLightIntensity(),
             blockEmissiveIntensity(),
         };
     }
@@ -132,11 +138,6 @@ public final class RtVideoOptions {
     }
 
 
-    private static OptionInstance<Integer> dynamicLightIntensity() {
-        return multiplier("caustica.options.rt.dynamicLightIntensity",
-                CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY, 0, 160);
-    }
-
     private static OptionInstance<Integer> blockEmissiveIntensity() {
         return multiplier("caustica.options.rt.blockEmissiveIntensity",
                 CausticaConfig.Rt.Lights.BLOCK_INTENSITY, 0, 160);
@@ -197,6 +198,14 @@ public final class RtVideoOptions {
 
     private static OptionInstance<Boolean> waterWaves() {
         return bool("caustica.options.rt.waterWaves", CausticaConfig.Rt.Composite.WATER_WAVES);
+    }
+
+    /**
+     * ON makes the first-person viewmodel share the camera's FOV (raising FOV pushes the arm away, lowering
+     * it pulls the arm closer); OFF restores vanilla's fixed, FOV-isolated hand projection.
+     */
+    private static OptionInstance<Boolean> handFov() {
+        return bool("caustica.options.rt.handFov", CausticaConfig.Rt.Hand.FOV_FOLLOWS_CAMERA);
     }
 
     // NVSDK_NGX_PerfQuality_Value, ordered performance -> quality for the slider. Per NVIDIA's DLSS-RR
