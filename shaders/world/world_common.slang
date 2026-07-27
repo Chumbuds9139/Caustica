@@ -170,10 +170,10 @@ public static const uint MATERIAL_DIELECTRIC = 3u;
 // Entity per-triangle record (48 B). The final lane mirrors TerrainPrim's integer material metadata.
 public struct Prim {
     public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
-    public float4 tint;
+    public float4 tint;   // rgb = un-premultiplied vertex/model tint, w = bindless albedo texture slot
     public uint materialId;
     public uint flags;
-    public uint aux0;
+    public uint aux0;     // asfloat(aux0) = primitive coverage multiplier for stochastic alpha/glint
     public uint aux1;
 };
 

@@ -47,6 +47,11 @@ public final class RtEntityCapture implements VertexConsumer {
     // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
     // opaque. RtEntityCollector assigns this from the RenderPipeline before every known submission.
     int currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+    // Extra coverage multiplier for alpha-blended submissions. Vertex/tint alpha is multiplied by this
+    // and stored per primitive in aux0 (float bits); world.rahit then folds it into stochastic coverage.
+    // This is especially important for enchantment-glint render types: vanilla blends their opaque purple
+    // texture additively, so texture alpha alone would make the ray-traced layer fully opaque.
+    float currentOpacity = 1.0f;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
@@ -83,6 +88,7 @@ public final class RtEntityCapture implements VertexConsumer {
         currentTexSlot = 0;
         currentMaterialId = 0;
         currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        currentOpacity = 1.0f;
         currentOrder = 0;
         uvRemap = false;
     }
@@ -136,6 +142,7 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentTexSlot = currentTexSlot;
         target.currentMaterialId = currentMaterialId;
         target.currentAlphaBucket = currentAlphaBucket;
+        target.currentOpacity = currentOpacity;
         target.currentOrder = currentOrder;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
@@ -386,10 +393,15 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base + 2);
         idx.add(base + 3);
         // Vertex colour as a flat per-prim tint (ARGB → rgb). White (-1) for most models → grey when lit.
+        // Keep alpha separately as stochastic coverage for blended render types; RGB stays un-premultiplied
+        // because accepted samples shade the actual surface colour, while world.rahit decides whether the
+        // ray sees through to the layer behind.
         int c = color;
         float tr = ((c >> 16) & 0xFF) * (1f / 255f);
         float tg = ((c >> 8) & 0xFF) * (1f / 255f);
         float tb = (c & 0xFF) * (1f / 255f);
+        float ta = ((c >>> 24) & 0xFF) * (1f / 255f);
+        float opacity = Math.max(0.0f, Math.min(1.0f, ta * currentOpacity));
         for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle
             prim.add(nx);
             prim.add(ny);
@@ -401,7 +413,7 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add((float) currentTexSlot); // tint.w = bindless texture slot
             prim.add(Float.intBitsToFloat(currentMaterialId));
             prim.add(0f); // flags
-            prim.add(0f); // aux0
+            prim.add(opacity); // aux0 = primitive coverage multiplier (read asfloat(aux0) in shaders)
             prim.add(0f); // aux1
             alphaBuckets.add(currentAlphaBucket);
         }

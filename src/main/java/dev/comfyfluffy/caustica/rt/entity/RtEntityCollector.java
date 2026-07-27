@@ -82,6 +82,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private static final float LEASH_WIDTH = 0.05f;
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
+    // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
+    // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
+    // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
+    private static final float ENCHANTMENT_GLINT_OPACITY = 0.28f;
+    // Push glint decals just above the armour surface so the any-hit shader sees the overlay first; when
+    // it stochastically ignores the glint, traversal continues to the base geometry behind it.
+    private static final int ENCHANTMENT_GLINT_ORDER = 1;
 
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
@@ -147,17 +154,21 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (outlineColor != 0) {
             this.outlineColor = outlineColor;
         }
+        boolean glint = isGlint(renderType);
         // Vanilla gives the base-colour banner pass order 0 even though it is drawn after an uncoloured,
         // exactly coplanar cloth pass. Move every banner-pattern pass out one rank: base colour becomes 1,
         // and the explicitly ordered emblem layers become 2+. Otherwise the BVH can select white cloth.
-        capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0);
+        // Glint is another coplanar overlay; offset it so alpha pass-through reaches the base armour.
+        capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0)
+                + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
+        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
-        boolean stochasticAlpha = isTranslucent(renderType);
-        capture.currentAlphaBucket = alphaBucket(renderType);
+        boolean stochasticAlpha = glint || isTranslucent(renderType);
+        capture.currentAlphaBucket = glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType);
         // Resolve this submission's texture to a bindless slot; the capture stamps it on every prim.
         // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
         // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
@@ -314,6 +325,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentAlphaBucket = alphaBucket(q.materialInfo().layer(), false);
         setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
                 transmissive, false);
+        capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
     }
@@ -395,6 +407,18 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         Object setup = ((RenderTypeAccessor) renderType).caustica$state();
         RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
         return "minecraft:pipeline/banner_pattern".equals(pipeline.getLocation().toString());
+    }
+
+    /** Vanilla enchantment/foil glint pipelines include "glint" in their resource path
+     *  (entity_glint, armor_entity_glint, glint_direct, etc.). */
+    private static boolean isGlint(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+        RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+        String location = pipeline.getLocation().toString();
+        return location.contains("glint");
     }
 
     /** Resolve a quad's tint colour from its tint index + the submission's tint layers (white if untinted). */
@@ -481,6 +505,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             capture.currentAlphaBucket = alphaBucket(renderType);
             capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+            capture.currentOpacity = 1.0f;
             capture.currentOrder = 0;
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
@@ -572,6 +597,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentOpacity = 1.0f;
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -788,6 +814,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
                     transmissive, stochasticAlpha);
         }
+        capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         for (int i = 0; i < 4; i++) {
             pose.transformPosition(quad.x(i) + offsetX, quad.y(i) + offsetY, quad.z(i) + offsetZ, meshPos);
@@ -856,10 +883,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             return;
         }
 
-        capture.currentOrder = pendingOrder;
+        boolean glint = !lines && isGlint(renderType);
+        capture.currentOrder = pendingOrder + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
-        boolean stochasticAlpha = isTranslucent(renderType);
+        boolean stochasticAlpha = glint || isTranslucent(renderType);
+        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         capture.currentTexSlot = lines ? RtEntityTextures.INSTANCE.whiteSlot()
@@ -867,7 +896,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentMaterialId = lines
                 ? RtMaterialRegistry.INSTANCE.entityFallbackId(false)
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
-        capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE : alphaBucket(renderType);
+        capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE
+                : (glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType));
 
         if (lines) {
             lineVertexConsumer.begin();
