@@ -206,12 +206,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
 
             float3 v = -rd;
-            // Analytic dynamic held-item lights (torches/lava buckets) move every frame and are shaded
-            // directly rather than through the static block-emitter RIS hierarchy.
-            if (worldPush.dynamicLightCount > 0u) {
-                L += throughput * shadeDynamicLights(hitPos, n, v, rd, albedo,
-                        float3(0.0, 0.0, 0.0), 1.0, true, 0.0);
-            }
 
             // RIS direct lighting from block emitters (lava, glowstone, torches, ...) — same reservoir
             // sampler as terrain/entities, but two-sided: a billboard has no back face, so light
@@ -306,11 +300,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         }
 
         float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
-        // Analytic dynamic held-item lights (torches/lava buckets) move every frame and are shaded
-        // directly rather than through the static block-emitter RIS hierarchy.
-        if (worldPush.dynamicLightCount > 0u) {
-            L += throughput * shadeDynamicLights(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss);
-        }
 
         // RIS direct lighting from block emitters (single-frame only, no temporal reservoir reuse).
         // Front lobe + SSS backlighting are resampled together and share ONE shadow ray — a light can

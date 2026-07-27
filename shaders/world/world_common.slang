@@ -40,16 +40,6 @@ public struct BreakEntry {
 // Per-frame world data, read through a 64-bit device address. WorldPushData.java is generated from this
 // reflected type, including its serializer, byte size, vector/matrix types, and fixed-array capacities.
 
-// Small analytic point lights injected every frame for luminous held items. They are deliberately kept
-// separate from the static RIS block-emitter hierarchy so hand-held torches/lava buckets can move every
-// frame without rebuilding the section light grid. posIntensity.xyz is rebased world space; .w is a
-// normalized light level (0..1, vanilla level / 15). colorRadius.rgb is linear light color; .w is a soft
-// source radius in blocks for inverse-square attenuation clamping.
-public struct DynamicLight {
-    public float4 posIntensity;
-    public float4 colorRadius;
-};
-
 public struct WorldPush {
     public float4x4 invViewProj;
     public float3   camOffset;
@@ -77,9 +67,7 @@ public struct WorldPush {
     public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
     public uint     lightCount;       // packed Light records in pc.lightBufAddr
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
-    public float4   lightScales;      // x block emitter scale, y dynamic/entity emission scale, z point-light scale
-    public uint     dynamicLightCount;
-    public DynamicLight dynamicLights[4];
+    public float4   lightScales;      // x block emitter scale, y dynamic/entity emission scale
 };
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
