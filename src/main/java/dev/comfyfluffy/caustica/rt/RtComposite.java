@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
-import dev.comfyfluffy.caustica.rt.gen.WorldPushData.DynamicLight;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
@@ -25,15 +24,11 @@ import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.item.BlockItem;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
@@ -71,7 +66,7 @@ import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
-import java.util.ArrayList;
+
 
 /**
  * On-screen composite. Each frame, ray-trace into a render-res storage image (+ guide buffers), use
@@ -891,7 +886,6 @@ public final class RtComposite {
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
-            DynamicLight[] dynamicLights = dynamicLights(terrain);
             SkyPush sky = skyPush();
             new WorldPushData(
                     frameInvViewProj,
@@ -928,9 +922,9 @@ public final class RtComposite {
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     new Float4(CausticaConfig.Rt.Lights.BLOCK_INTENSITY.value(),
                             CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY.value(),
-                            CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY.value(), 0.0f),
-                    dynamicLights.length,
-                    dynamicLights
+                            0.0f, 0.0f),
+                    0,
+                    new WorldPushData.DynamicLight[0]
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1077,88 +1071,6 @@ public final class RtComposite {
         return count == result.length ? result : java.util.Arrays.copyOf(result, count);
     }
 
-
-    /**
-     * Luminous held items (torches, lanterns, lava buckets, ...) move every frame, so they are pushed as a
-     * tiny analytic point-light list instead of being baked into the static section light hierarchy. The
-     * shader scales the normalized level by {@code lights.dynamic-intensity}.
-     */
-    private DynamicLight[] dynamicLights(RtTerrain terrain) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) {
-            return new DynamicLight[0];
-        }
-        ArrayList<DynamicLight> result = new ArrayList<>(2);
-        addHeldLight(result, mc.player.getMainHandItem(), terrain);
-        addHeldLight(result, mc.player.getOffhandItem(), terrain);
-        return result.toArray(DynamicLight[]::new);
-    }
-
-    private void addHeldLight(ArrayList<DynamicLight> out, ItemStack stack, RtTerrain terrain) {
-        if (stack == null || stack.isEmpty() || out.size() >= WorldPushData.DYNAMIC_LIGHTS_CAPACITY) {
-            return;
-        }
-        int level = heldLightLevel(stack);
-        if (level <= 0) {
-            return;
-        }
-        Float4 color = heldLightColor(stack);
-        // Use the camera/eye position rather than the first-person hand mesh: vanilla renders that hand in
-        // the UI overlay, while the ray-traced world still needs the light to originate near the player.
-        float x = (float) (camX - terrain.blockX);
-        float y = (float) (camY - terrain.blockY - 0.20);
-        float z = (float) (camZ - terrain.blockZ);
-        float normalizedLevel = Math.clamp(level / 15.0f, 0.0f, 1.0f);
-        out.add(new DynamicLight(new Float4(x, y, z, normalizedLevel),
-                new Float4(color.x(), color.y(), color.z(), 0.35f)));
-    }
-
-    private static int heldLightLevel(ItemStack stack) {
-        Item item = stack.getItem();
-        if (item instanceof BlockItem blockItem) {
-            int max = 0;
-            for (var state : blockItem.getBlock().getStateDefinition().getPossibleStates()) {
-                max = Math.max(max, state.getLightEmission());
-            }
-            if (max > 0) {
-                return max;
-            }
-        }
-        Identifier id = BuiltInRegistries.ITEM.getKey(item);
-        String path = id != null ? id.getPath() : "";
-        if (path.contains("lava_bucket")) return 15;
-        if (path.contains("torch")) return path.contains("soul") ? 10 : 14;
-        if (path.contains("lantern")) return path.contains("soul") ? 10 : 15;
-        if (path.contains("glowstone") || path.contains("jack_o_lantern")
-                || path.contains("redstone_lamp") || path.contains("beacon")) return 15;
-        if (path.contains("glow_berries")) return 14;
-        if (path.contains("end_rod")) return 14;
-        if (path.contains("sea_pickle")) return 6;
-        if (path.contains("magma")) return 3;
-        if (path.contains("blaze_rod")) return 10;
-        return 0;
-    }
-
-    private static Float4 heldLightColor(ItemStack stack) {
-        Identifier id = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        String path = id != null ? id.getPath() : "";
-        if (path.contains("soul")) {
-            return new Float4(0.25f, 0.55f, 1.0f, 0.0f);
-        }
-        if (path.contains("sea_lantern") || path.contains("end_rod")) {
-            return new Float4(0.75f, 0.90f, 1.0f, 0.0f);
-        }
-        if (path.contains("redstone")) {
-            return new Float4(1.0f, 0.12f, 0.04f, 0.0f);
-        }
-        if (path.contains("lava") || path.contains("magma")) {
-            return new Float4(1.0f, 0.36f, 0.08f, 0.0f);
-        }
-        if (path.contains("glowstone") || path.contains("shroomlight") || path.contains("froglight")) {
-            return new Float4(1.0f, 0.86f, 0.48f, 0.0f);
-        }
-        return new Float4(1.0f, 0.68f, 0.36f, 0.0f);
-    }
 
     private record SkyPush(Float4 sunDir, Float4 lightDir, Float4 lightRadiance, Float4 moonDir,
                            Float4 celestial, Float4 sunUv, Float4 moonUv) {}
