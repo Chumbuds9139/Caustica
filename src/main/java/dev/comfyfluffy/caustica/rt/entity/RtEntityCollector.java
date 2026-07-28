@@ -509,7 +509,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
             capture.currentAlphaBucket = alphaBucket(renderType);
-            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
+            // Resolve the glyph's atlas page from the renderable's LIVE texture view, not from the
+            // RenderType. Font pages are destroyed and re-created when the font is re-selected (toggling
+            // Force Unicode Font) while the RenderType identity is memoized per texture name and survives,
+            // so the RenderType-keyed cache would pin a handle to the destroyed image and every glyph
+            // would sample garbage. See RtEntityTextures.slotForTextureView.
+            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForTextureView(renderable.textureView());
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
             capture.currentOpacity = 1.0f;
             capture.currentOrder = 0;

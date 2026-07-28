@@ -17,9 +17,7 @@ import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.resources.Identifier;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -58,20 +56,17 @@ public final class RtEntityTextures {
     // stay cached and skip the costly RenderType.prepare().
     private final Map<RenderType, Long> viewCache = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
-    // Resolved image-view handle → bindless slot. The slot identifies a *texture*, not a RenderType, so
-    // many render types that differ only by a texture transform we don't replicate (the swirl's scroll)
-    // collapse to ONE slot — instead of leaking a slot per frame until the array exhausts and everything
-    // falls back to slot 0 (the block atlas). Append-only: a handle's slot never changes once assigned,
-    // so update-after-bind writes for new slots never disturb in-flight frames.
-    private final Map<Long, Integer> viewSlotCache = new HashMap<>();
+    // Image-view handle → bindless slot, plus the descriptor writes those allocations still owe. The slot
+    // identifies a *texture*, not a RenderType, so many render types that differ only by a texture
+    // transform we don't replicate (the swirl's scroll) collapse to ONE slot — instead of leaking a slot
+    // per frame until the array exhausts and everything falls back to slot 0 (the block atlas).
+    private final RtBindlessSlotTable slots = new RtBindlessSlotTable(this::slotLimit);
     // Atlas-location → bindless slot, for items/blocks (which texture from an atlas, not a per-type
     // file). Seeded with the block atlas = slot 0 (also the fallback). Items use a separate item atlas.
     private final Map<Identifier, Integer> atlasSlotCache = new HashMap<>();
-    private final List<Pending> pending = new ArrayList<>(); // albedo slots awaiting descriptor upload
     // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
-    private int nextSlot = 1;
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons); see whiteSlot().
@@ -80,9 +75,6 @@ public final class RtEntityTextures {
 
     // Cached RenderSetup.TextureBinding#location() (the class is package-private, the method public).
     private Method locationMethod;
-
-    private record Pending(int slot, long view) {
-    }
 
     private RtEntityTextures() {
     }
@@ -134,6 +126,41 @@ public final class RtEntityTextures {
     }
 
     /**
+     * The bindless slot for an <b>already-resolved</b> {@link GpuTextureView}, bypassing the
+     * {@link RenderType}-keyed {@link #viewCache} entirely.
+     *
+     * <p>For font atlas pages that bypass is the whole point. Unlike {@code zombie.png} — one file, loaded
+     * once per resource reload — a font page is a texture the font system allocates lazily as glyphs are
+     * stitched into it and <em>throws away and re-creates</em> when the font is re-selected, most notably
+     * when the user toggles <b>Force Unicode Font</b>. The {@code RenderType} that in-world text hands us
+     * is memoized per texture <i>name</i>, and the name is reused for the replacement page, so the same
+     * RenderType identity survives while the image underneath it does not: {@link #resolveView}'s cache
+     * would keep returning a handle to the destroyed image, and every glyph would sample whatever the
+     * driver has since put there — unreadable garbage that persists until a resource reload clears the
+     * cache. Callers holding a live view (glyph rendering does, via {@code TextRenderable.textureView()})
+     * must therefore resolve through here rather than through {@link #slotFor(RenderType)}.
+     *
+     * <p>Resolved by view <b>object identity</b> ({@link RtBindlessSlotTable#perOwner}), not by the raw
+     * handle: Vulkan explicitly permits a driver to hand a destroyed object's handle value back to the next
+     * creation, so a handle-keyed hit cannot distinguish "the page I already have a slot for" from "a
+     * different page that inherited the dead one's handle". Trusting that hit is what makes the corruption
+     * <em>sticky</em>: the lookup succeeds, no descriptor write is queued, and the slot keeps describing
+     * the destroyed image even after the option is switched back off.
+     *
+     * <p>A replacement page therefore takes a <b>new</b> slot and queues its own descriptor write, rather
+     * than rewriting the slot the dead page used — slots stay append-only, so this never disturbs a frame
+     * still in flight that is reading the old slot. Superseded slots are reclaimed wholesale by the next
+     * {@link #reset} (pipeline rebuild / resource reload); font pages are few and only replaced on a font
+     * change, so the interim cost is a handful of slots out of {@link #maxTextures()}.
+     */
+    public int slotForTextureView(GpuTextureView view) {
+        if (view == null) {
+            return 0;
+        }
+        return slots.perOwner(view, vkImageView(view));
+    }
+
+    /**
      * Bindless slot of a solid-white 1x1 texture, for untextured geometry (leashes, custom line
      * ribbons) whose colour comes entirely from the per-prim tint. Slot 0 (the block atlas) is NOT a
      * substitute: the hit shader multiplies albedo by the sampled texel, and UV (0,0) lands on
@@ -159,31 +186,14 @@ public final class RtEntityTextures {
      * texture share a slot instead of each consuming one.
      */
     private int slotForView(long view) {
-        if (view == 0L) {
-            return 0;
-        }
-        Integer cached = viewSlotCache.get(view);
-        if (cached != null) {
-            return cached;
-        }
-        if (nextSlot >= slotLimit()) {
-            return 0;
-        }
-        int slot = nextSlot++;
-        viewSlotCache.put(view, slot);
-        pending.add(new Pending(slot, view));
-        return slot;
+        return slots.shared(view);
     }
 
     /** Write any newly-registered entity textures into the pipeline's bindless set (before the trace). */
     public void uploadPending(RtPipeline pipeline, long sampler) {
-        if (pending.isEmpty()) {
-            return;
+        for (RtBindlessSlotTable.Write w : slots.drainPending()) {
+            pipeline.setEntityAlbedoTexture(w.slot(), w.handle(), sampler);
         }
-        for (Pending p : pending) {
-            pipeline.setEntityAlbedoTexture(p.slot(), p.view(), sampler);
-        }
-        pending.clear();
     }
 
     /** Drop the registry (call when the world pipeline / bindless set is recreated, or textures reload). */
@@ -196,11 +206,9 @@ public final class RtEntityTextures {
         capacity = Math.max(1, descriptorCapacity);
         viewCache.clear();
         locationCache.clear();
-        viewSlotCache.clear();
+        slots.reset();
         atlasSlotCache.clear();
         atlasSlotCache.put(TextureAtlas.LOCATION_BLOCKS, 0); // block atlas = the slot-0 fallback
-        pending.clear();
-        nextSlot = 1;
     }
 
     private int slotLimit() {
