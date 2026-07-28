@@ -36,6 +36,15 @@
 	"caustica.options.rt.weatherLighting": "Weather Lighting",
 	"caustica.options.rt.weatherLighting.tooltip": "Dim sunlight and moonlight and darken the sky during rain and thunderstorms, and hide the sun, moon and stars behind the clouds. Off keeps clear-sky lighting in all weather.",
 
+	"caustica.options.rt.clouds": "Ray-Traced Clouds",
+	"caustica.options.rt.clouds.tooltip": "Draw a cloud deck in the ray-traced sky. Caustica replaces the vanilla world renderer, which is where vanilla's own clouds are drawn, so this is what puts clouds back in the sky. The deck is visible in reflections and can shadow the world below.",
+
+	"caustica.options.rt.cloudShadowStrength": "Cloud Shadows",
+	"caustica.options.rt.cloudShadowStrength.tooltip": "How much the cloud deck dims the sunlight and moonlight reaching the ground under it. 0% draws clouds that cast no shadow at all; 100% lets a solid cloud block the sun completely. Costs no extra rays.",
+
+	"caustica.options.rt.cloudOpacity": "Cloud Transparency",
+	"caustica.options.rt.cloudOpacity.tooltip": "How solid the clouds are. 0% makes them fully transparent (and skips drawing them); 100% completely hides the sky, sun and stars behind them. Lower values let the sky show through thin cloud.",
+
 	"caustica.options.rt.denoiser": "Denoising Filter",
 	"caustica.options.rt.denoiser.tooltip": "Apply the DLSS Ray Reconstruction denoising filter to the path-traced image. Off shows the raw, noisy trace at full resolution — useful as a reference view, but far grainier at low sample counts. Requires DLSS Ray Reconstruction support.",
 

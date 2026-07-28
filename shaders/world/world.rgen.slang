@@ -29,6 +29,7 @@ import trace;
 import trace_ser;
 #endif
 import lighting;
+import clouds;
 
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
@@ -220,6 +221,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                // Particles are lit by the same sun as everything else, so they must dim under the same
+                // cloud. Skipping this would leave rain/smoke/spell particles glowing at full strength
+                // inside the shadow of a cloud that darkened the ground beneath them.
+                vis *= cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
                 }
@@ -307,9 +312,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
         float ndl = celestialLit ? max(0.0, dot(n, lightDir)) : 0.0;
+        // Cloud occlusion of the celestial light at this shading point. Computed ONCE here and shared by
+        // the front-face NEE below and the SSS transmission pass further down: both are the same sun
+        // arriving at the same point, so a cloud that shades one must shade the other by exactly the
+        // same amount — backlit leaves under a cloud should dim with the ground around them, not stay
+        // lit. Evaluating it twice would also double the cost for an identical answer.
+        //
+        // This is an analytic plane query, not a traced ray: it adds no shadow ray, no variance, and
+        // nothing for the denoiser to resolve, which is why cloud shadows are affordable at every
+        // vertex of every path rather than only on primary hits. The gate mirrors the union of the two
+        // consumers' own conditions exactly, so this is never evaluated for a vertex that would discard
+        // it — in particular it costs nothing in the Nether and the End, where celestialLit is always
+        // false.
+        float cloudShadow = (ndl > 0.0 || (sss > 0.0 && celestialLit))
+                ? cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir) : 1.0;
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance;
+            float3 vis = shadow.transmittance * cloudShadow;
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
@@ -353,7 +372,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                float3 visB = shadowBack.transmittance;
+                // Same cloud attenuation as the front-face NEE above — see cloudShadow.
+                float3 visB = shadowBack.transmittance * cloudShadow;
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
                 if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {

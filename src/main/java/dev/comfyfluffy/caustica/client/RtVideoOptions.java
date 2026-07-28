@@ -42,6 +42,11 @@ public final class RtVideoOptions {
             // pairs them two per row, so they read as one block rather than scattered checkboxes.
             subsurfaceScattering(),
             weatherLighting(),
+            // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
+            // the other two reads immediately before them.
+            clouds(),
+            cloudShadowStrength(),
+            cloudOpacity(),
             denoiser(),
             handFov(),
             dlssQuality(),
@@ -220,6 +225,31 @@ public final class RtVideoOptions {
     }
 
     /**
+     * The ray-traced cloud deck. Caustica cancels vanilla's world renderer, and vanilla's clouds are
+     * drawn inside it, so this switch is what puts clouds in the sky at all.
+     */
+    private static OptionInstance<Boolean> clouds() {
+        return bool("caustica.options.rt.clouds", CausticaConfig.Rt.Composite.CLOUDS);
+    }
+
+    /**
+     * How strongly the cloud deck shadows the world beneath it, as a percentage. 0% draws clouds that
+     * cast nothing; 100% lets a solid cloud block the sun outright.
+     */
+    private static OptionInstance<Integer> cloudShadowStrength() {
+        return percent("caustica.options.rt.cloudShadowStrength",
+                CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH);
+    }
+
+    /**
+     * How opaque the deck is, as a percentage: 0% is fully transparent (invisible, and the cloud path is
+     * skipped entirely), 100% completely hides the sky behind it.
+     */
+    private static OptionInstance<Integer> cloudOpacity() {
+        return percent("caustica.options.rt.cloudOpacity", CausticaConfig.Rt.Composite.CLOUD_OPACITY);
+    }
+
+    /**
      * The denoising filter (DLSS Ray Reconstruction). Turning it off shows the raw path-traced image —
      * a correct but noisy reference view — and, because RR also owns the upscale, moves the trace to
      * full display resolution. Safe to toggle live: {@code RtComposite.ensureOutput} re-sizes the trace
@@ -305,6 +335,20 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(minTenths, maxTenths),
             Math.clamp(Math.round(setting.value() * 10.0f), minTenths, maxTenths),
             tenths -> setting.set(tenths / 10.0f));
+    }
+
+    /**
+     * A 0..1 float exposed as a 0..100% slider. The setting itself is clamped to [0,1] in the config, so
+     * the slider range and the stored domain are the same thing expressed in different units.
+     */
+    private static OptionInstance<Integer> percent(String captionKey, FloatSetting setting) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, Component.literal(value + "%")),
+            new OptionInstance.IntRange(0, 100),
+            Math.clamp(Math.round(setting.value() * 100.0f), 0, 100),
+            value -> setting.set(value / 100.0f));
     }
 
     private static OptionInstance<Integer> hundredths(String captionKey, FloatSetting setting, int min, int max) {

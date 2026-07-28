@@ -594,6 +594,45 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting DENOISER =
                     bool("caustica.rt.denoiser", "composite.denoiser", true);
+            /**
+             * Flat, vanilla-style cloud deck drawn by the sky shader.
+             *
+             * <p>Caustica cancels vanilla's {@code LevelRenderer}, and vanilla's cloud pass lives inside
+             * it, so without this the ray-traced world has no clouds at all. Off restores that
+             * (cloudless) behaviour; the deck also follows the vanilla Clouds video option, so setting
+             * that to OFF hides it regardless of this toggle.
+             */
+            public static final BooleanSetting CLOUDS =
+                    bool("caustica.rt.clouds", "composite.clouds", true);
+            /**
+             * How much the cloud deck darkens the sun/moon light reaching the ground beneath it.
+             *
+             * <p>0 means clouds are visible in the sky but cast nothing; 1 means a fully opaque cloud
+             * blocks the celestial light completely. The shadow is an analytic query against the same
+             * density function the visible deck is drawn from, so it costs no extra ray and the shadow
+             * on the ground always matches the cloud overhead.
+             */
+            public static final FloatSetting CLOUD_SHADOW_STRENGTH =
+                    clampedFloat("caustica.rt.cloudShadowStrength", "composite.cloud-shadow-strength",
+                            0.75f, 0.0f, 1.0f);
+            /**
+             * Opacity of the cloud deck. 0 is invisible (and skips the whole cloud path), 1 fully hides
+             * the sky behind a cloud. Values in between let the sky, sun and stars show through.
+             */
+            public static final FloatSetting CLOUD_OPACITY =
+                    clampedFloat("caustica.rt.cloudOpacity", "composite.cloud-opacity", 0.9f, 0.0f, 1.0f);
+            /**
+             * World Y the cloud deck sits at, matching vanilla's Overworld cloud height. A config knob
+             * rather than a slider: it is a world constant, not a look preference.
+             */
+            public static final FloatSetting CLOUD_HEIGHT =
+                    clampedFloat("caustica.rt.cloudHeight", "composite.cloud-height", 192.0f, -512.0f, 1024.0f);
+            /**
+             * Fraction of the sky the deck covers in clear weather. Rain drives this toward fully
+             * overcast on top of whatever is set here (see {@code RtComposite.cloudState}).
+             */
+            public static final FloatSetting CLOUD_COVERAGE =
+                    clampedFloat("caustica.rt.cloudCoverage", "composite.cloud-coverage", 0.55f, 0.0f, 1.0f);
             public static final FloatSetting SUN_ANGULAR_RADIUS =
                     radians("caustica.rt.sunAngularRadius", "composite.sun-angular-radius-deg", 0.6f);
             public static final FloatSetting MOON_ANGULAR_RADIUS =

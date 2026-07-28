@@ -20,6 +20,7 @@
 // disc isn't double-counted against the direct light → fireflies). The atmosphere gradient + stars are
 // added on every miss (any bounce): stars aren't a NEE light, so they never double-count.
 import world_common;
+import clouds;
 
 [[vk::push_constant]] WorldPushConstants pc;
 
@@ -379,11 +380,23 @@ void main(inout Payload payload) {
     // starBrightness), so this must NOT re-apply the rain factor or the fade would be squared.
     col += stars(dir, starBrightness, VdotS, worldPush.celestial);
 
+    // The sky WITHOUT the celestial discs, kept for the cloud composite below: it is the ambient fill a
+    // cloud's underside receives from the sky dome around it. It must exclude the sun/moon, or an opaque
+    // cloud would still leak the disc through the fill and the sun would burn through solid cover.
+    float3 skyAmbient = col;
+
     // Sun & moon discs — sampled from the vanilla celestials atlas, gated to rays that haven't already
     // accounted for the light via diffuse NEE. squareBody gives the body-local [-1,1] coord; the
-    // sprite's own texel coverage (alpha) shapes the disc. Rain hides both bodies (vanilla does the
-    // same): discVisible reaches zero as the cloud deck closes over.
-    float discVisible = 1.0 - rainStrength;
+    // sprite's own texel coverage (alpha) shapes the disc.
+    //
+    // Hiding the discs during rain is a STAND-IN for the cloud deck that used to be missing: with no
+    // clouds drawn, fading the sun out was the only way for an overcast sky to not have a blazing sun in
+    // it. Now that the deck is real and occludes the discs geometrically, applying both would hide the
+    // sun twice — it would vanish in light rain even through a genuine gap in the clouds. So the
+    // stand-in is used only when the deck is not being drawn, and the clouds are authoritative when it
+    // is. Rain still closes the deck over (cloudState raises coverage), so an overcast sky still hides
+    // the sun — it just does it with an actual cloud now.
+    float discVisible = cloudsEnabled(worldPush) ? 1.0 : 1.0 - rainStrength;
     if (showCelestial && discVisible > 0.0) {
         float2 local;
         squareBody(dir, sd, SUN_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
@@ -408,6 +421,33 @@ void main(inout Payload payload) {
             // shape from the texture. The transmittance tint gives a warm amber moon at moonrise/set.
             float m = smoothstep(0.0, 1.0, min(length(t), 1.0)) * 1.3;
             col += MOON_DISC_RADIANCE * transmittanceToSpace(dir) * t * m * pow2(1.0 - day) * moonUp * discVisible;
+        }
+    }
+
+    // ---- Cloud deck. Composited LAST, over the finished sky: the deck is nearer than the atmosphere,
+    // the stars and the sun/moon discs, so it must occlude all three rather than be added to them. That
+    // ordering is also what makes the sun genuinely disappear behind a cloud instead of burning through
+    // it, and it is why this is a lerp toward the cloud radiance rather than a `+=`.
+    //
+    // No showCelestial gate here. Unlike the sun/moon discs, the deck is not a NEE light — nothing
+    // samples it explicitly — so a diffuse bounce that sees it is not double-counting anything, and
+    // hiding it from those rays would instead punch cloud-shaped holes in the sky fill lighting the
+    // ground. Every escaping ray gets the same sky, which is what keeps reflections consistent.
+    //
+    // The ray's own origin is used, not the camera: a reflection off water starts at the water surface,
+    // and parallax against a deck 128 blocks up is very visible over even a short offset. Both this and
+    // the shadow query work in camera-relative space (WorldRayOrigin is in the terrain's rebased space),
+    // so neither is affected when the terrain rebase origin shifts.
+    if (cloudsEnabled(worldPush)) {
+        float3 originRel = WorldRayOrigin() - worldPush.camOffset;
+        CloudHit hit = cloudTrace(worldPush, originRel, dir);
+        if (hit.hit) {
+            float density = cloudDensity(worldPush, hit.samplePos);
+            float alpha = cloudAlpha(worldPush, hit, density);
+            if (alpha > 0.0) {
+                // skyAmbient (no discs) is the fill; `col` (with discs) is what the cloud covers.
+                col = lerp(col, cloudRadiance(worldPush, hit, dir, skyAmbient, density), alpha);
+            }
         }
     }
 
