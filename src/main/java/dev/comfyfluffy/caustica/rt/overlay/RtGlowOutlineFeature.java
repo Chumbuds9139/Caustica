@@ -34,8 +34,9 @@ import dev.comfyfluffy.caustica.rt.entity.RtEntities;
  * entity itself emissive.
  */
 final class RtGlowOutlineFeature implements RtOverlayFeature {
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
-    private static final int MASK_PUSH_BYTES = 96;
+    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B)
+    //   + vec2 jitterNdc (96, 8B, padded to 16B) = 112B.
+    private static final int MASK_PUSH_BYTES = 112;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
     private RtContext ctx;
@@ -152,10 +153,15 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
                 VK10.vkCmdBindIndexBuffer(cmd, ibo.handle, 0, VK10.VK_INDEX_TYPE_UINT32);
                 ByteBuffer push = stack.malloc(MASK_PUSH_BYTES);
                 viewProj.get(0, push);
+                float jitterX = RtComposite.INSTANCE.currentJitterNdcX();
+                float jitterY = RtComposite.INSTANCE.currentJitterNdcY();
                 for (int i = 0; i < drawCount; i++) {
+                    // All writes are absolute (Matrix4f.get / putFloat(index, value)), so the matrix
+                    // stays intact across loop iterations — only per-entity varying fields are updated.
                     push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
                     push.putFloat(80, colorRgba[i * 4]).putFloat(84, colorRgba[i * 4 + 1])
                             .putFloat(88, colorRgba[i * 4 + 2]).putFloat(92, colorRgba[i * 4 + 3]);
+                    push.putFloat(96, jitterX).putFloat(100, jitterY);
                     VK10.vkCmdPushConstants(cmd, maskPipeline.layout,
                             VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
                     VK10.vkCmdDrawIndexed(cmd, indexCount[i], 1, firstIndex[i], 0, 0);
