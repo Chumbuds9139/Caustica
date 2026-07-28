@@ -70,7 +70,28 @@ public static const int   CLOUD_MARCH_STEPS = 24;
 public static const int   CLOUD_LIGHT_STEPS = 6;
 public static const int   CLOUD_MARCH_STEPS_CHEAP = 6;
 public static const int   CLOUD_LIGHT_STEPS_CHEAP = 2;
+// Upper bounds used when the step count is scaled to the path length (see cloudMarch). A fixed step
+// COUNT means a deeper slab silently gets coarser steps, which bands: cloud lobes are tens of blocks
+// wide, so a 60-block step walks straight past them. These cap the cost of that scaling.
+public static const int   CLOUD_MARCH_STEPS_MAX = 48;
+public static const int   CLOUD_MARCH_STEPS_CHEAP_MAX = 12;
+// Target distance between samples. Comfortably finer than a lobe, so the march resolves shape.
+public static const float CLOUD_TARGET_STEP_BLOCKS = 6.0;
 public static const float CLOUD_EXTINCTION = 0.115; // per block, at density 1
+// Optical depth is normalised against this thickness, so making the deck taller adds VOLUME without
+// making it more opaque. Without it, tau = density * sigma * pathLength grows with the slab depth and
+// the thickness slider silently doubles as a second opacity slider.
+public static const float CLOUD_REFERENCE_THICKNESS = 40.0;
+// Longest in-slab path a single ray may integrate, in slab depths. Bounds the grazing/horizon case
+// (see cloudMarch); a few crossings already saturate a real cloud.
+public static const float CLOUD_MAX_SLAB_CROSSINGS = 3.5;
+// Horizontal scale of the volumetric field, relative to the classic 12-block cell grid. Below 1 the
+// lobes get WIDER (the field is sampled more slowly), which is what lets cloud width grow together with
+// the extra height so the result reads as heaped cumulus rather than a stretched sheet.
+public static const float CLOUD_VOLUMETRIC_SCALE = 0.45;
+// How much wider a cloud gets around its belly than at its base/crown. Turns a straight-sided extrusion
+// into a rounded, bulging mass — see the note in cloudVolumeDensity.
+public static const float CLOUD_BULGE = 0.30;
 public static const float CLOUD_HG_G = 0.72;        // forward-scattering anisotropy of cloud droplets
 public static const float CLOUD_HG_BACK = -0.28;    // weak backward lobe (see cloudPhase)
 public static const float CLOUD_POWDER_STRENGTH = 0.7; // dark-edge / multiple-scattering approximation
@@ -362,42 +383,69 @@ float cloudVolumeDensity(WorldPush push, float3 posRel, float heightFrac) {
     }
 
     // ---- Volumetric cumulus.
-    float base = cloudCoverageField(samplePos);
+    //
+    // The goal here is HEAPED cloud — thick, wide, vertically developed, the way real cumulus and
+    // Photon-style shader clouds look. The previous version was flat for a measurable reason: its lobes
+    // were ~24 blocks across but only ~14 blocks of real density tall (a 1.7:1 layer), because the
+    // profile faded out over the top 65% of the slab. Real cumulus is roughly 1:1 to 1:2 width:height.
+    // Three changes fix that, and they are all about the aspect ratio rather than about adding detail:
+    //   * the body now holds full density across most of the slab and only rounds off at the very top,
+    //     so the cloud actually USES the height the thickness slider gives it;
+    //   * the horizontal field is sampled at a larger scale, making lobes broader and puffier instead
+    //     of small and busy — width and height grow together, so it reads as heaped, not stretched;
+    //   * erosion is concentrated at the extreme top and bottom, leaving the middle solid, which is
+    //     what gives a cloud a dense core with a cauliflower crown rather than uniform fluff.
+    float base = cloudCoverageField(samplePos * CLOUD_VOLUMETRIC_SCALE);
     float threshold = 1.0 - clamp(push.clouds.x, 0.0, 1.0);
     float coverage = smoothstep(threshold, threshold + CLOUD_EDGE_SOFTNESS, base);
     if (coverage <= 0.0) {
         return 0.0;
     }
 
-    // Asymmetric cumulus profile: a flat base that fills in quickly, a wide bulging body, and a rounded
-    // crown that falls away slowly. Multiplying the two smoothsteps at different widths is what makes
-    // the shape read as a dome sitting on a flat bottom rather than a symmetric lens.
-    float bottom = smoothstep(0.0, 0.12, hf);
-    float top = 1.0 - smoothstep(0.35, 1.0, hf);
-    float profile = bottom * top;
-    // Widen the body: pushing the profile through a power < 1 keeps it near 1 across the middle of the
-    // slab instead of peaking at a single height, so the cloud has volume rather than a thin core.
-    profile = pow(clamp(profile, 0.0, 1.0), 0.55);
+    // Vertical development. A cumulus has a hard flat base (condensation level), a tall body that stays
+    // dense, and a rounded crown. The top fade starts high (0.62) so the body occupies most of the slab
+    // instead of tapering away from the middle — this is the single change that makes the cloud thick.
+    // Taller clouds also get to be taller: coverage scales how far up the crown reaches, so dense
+    // regions billow upward into towers while thin edges stay low and flat, exactly like the real sky.
+    float towerTop = lerp(0.35, 1.0, coverage);
+    float bottom = smoothstep(0.0, 0.10, hf);
+    float top = 1.0 - smoothstep(towerTop * 0.62, towerTop, hf);
+    float profile = clamp(bottom * top, 0.0, 1.0);
 
-    // Domain warp. The warp amplitude grows with height, so cloud tops curl and billow while the base
-    // stays comparatively flat — exactly how cumulus behaves.
-    float2 warpUv = samplePos / (CLOUD_CELL_BLOCKS * 3.0);
+    // BULGE. Without this the cloud is a vertical extrusion with straight sides — tall, but reading as a
+    // wall rather than as heaped cloud. Real cumulus is widest around its lower-middle and narrows
+    // toward both the base and the crown, so the coverage THRESHOLD is relaxed there and tightened at
+    // the extremes: the same cloud grows sideways in its belly and pulls in at top and bottom. That
+    // rounded silhouette is most of what makes the Photon-style clouds look voluminous.
+    float belly = 1.0 - abs(hf - 0.42) * 2.0;
+    coverage = clamp(coverage + smoothstep(0.0, 1.0, max(belly, 0.0)) * CLOUD_BULGE - CLOUD_BULGE * 0.35,
+                     0.0, 1.0);
+    if (coverage <= 0.0) {
+        return 0.0;
+    }
+
+    // Domain warp, amplitude growing with height: bases stay flat, crowns curl into rounded lobes.
+    float2 warpUv = samplePos * CLOUD_VOLUMETRIC_SCALE / (CLOUD_CELL_BLOCKS * 2.0);
     float2 warp = float2(cloudNoise(warpUv), cloudNoise(warpUv + float2(41.0, 17.0))) - 0.5;
-    float2 warped = samplePos + warp * CLOUD_CELL_BLOCKS * (1.2 + 2.4 * hf);
+    float2 warped = samplePos * CLOUD_VOLUMETRIC_SCALE
+            + warp * CLOUD_CELL_BLOCKS * (1.0 + 3.0 * hf);
 
-    // Billow detail: inverted noise octaves (1 - |2n-1|) produce rounded, cellular lobes rather than the
-    // cloudy blur plain value noise gives, which is what reads as cauliflower.
-    float d1 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.55));
-    float d2 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.22) + float2(19.0, 7.0));
-    float billow = (1.0 - abs(d1 * 2.0 - 1.0)) * 0.65 + (1.0 - abs(d2 * 2.0 - 1.0)) * 0.35;
+    // Billow detail: inverted noise (1 - |2n-1|) gives rounded cellular lobes rather than a cloudy blur,
+    // which is what reads as cauliflower. Scales chosen so the lobes are a fraction of a cloud's width,
+    // not a fraction of a cell — small lobes on a big cloud is exactly the cumulus look.
+    float d1 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.9));
+    float d2 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.35) + float2(19.0, 7.0));
+    float billow = (1.0 - abs(d1 * 2.0 - 1.0)) * 0.7 + (1.0 - abs(d2 * 2.0 - 1.0)) * 0.3;
 
-    // Erode with the billow, weighted by how close to an edge we are: cores stay solid, rims dissolve
-    // into lobes. Erosion also strengthens toward the crown so tops break up before bases do.
+    // Erosion concentrated at the extremes: the crown breaks into lobes and the base frays, but the
+    // middle of the cloud stays solid. Uniform erosion is what makes procedural clouds look like fog.
+    float extremes = smoothstep(0.55, 1.0, hf) * 0.85 + smoothstep(0.18, 0.0, hf) * 0.5;
     float edge = 1.0 - coverage;
-    float erosion = billow * edge * (0.45 + 0.55 * hf);
-    // Boost the core so the interior actually saturates; without this the march can never reach an
-    // opaque cloud and everything looks like haze.
-    float density = coverage * (0.55 + 0.85 * coverage) - erosion;
+    float erosion = billow * (edge * 0.55 + extremes * 0.45);
+
+    // Dense core: cumulus interiors are optically thick, and a field that peaks at ~0.5 can never look
+    // like anything but haze no matter how deep the slab is.
+    float density = coverage * (0.85 + 0.75 * coverage) - erosion;
     return clamp(density, 0.0, 1.0) * profile;
 }
 
@@ -465,6 +513,15 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     }
     t0 = max(t0, 0.0);
     t1 = min(t1, min(maxDistance, push.cloudAnchor.w));
+    // Cap how far a single ray may travel INSIDE the slab. A ray looking at the horizon enters the deck
+    // at a grazing angle and stays in it for hundreds of blocks, accumulating an optical depth no
+    // vertical view ever reaches — which is why distant cloud went solid white even at low opacity and
+    // low thickness, while the same cloud overhead looked correct. Real cumulus does not behave like an
+    // infinite slab either: you see individual clouds with sky between them, not a continuous wall.
+    //
+    // A few slab depths is enough to fully develop a cloud, so clamping here costs nothing in the
+    // near-field and removes the horizon wall entirely.
+    t1 = min(t1, t0 + thickness * CLOUD_MAX_SLAB_CROSSINGS);
     if (t1 <= t0) {
         return result;
     }
@@ -480,12 +537,21 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     float cosT = dot(dir, push.lightDir.xyz);
     float phase = cloudPhase(cosT);
     float opacity = clamp(push.clouds.y, 0.0, 1.0);
+    // Scale the step count to the distance actually being marched, so a thick deck is sampled as finely
+    // as a thin one instead of just taking longer strides. Clamped both ways: never coarser than the
+    // base count, never more expensive than the cap.
+    int stepCap = highQuality ? CLOUD_MARCH_STEPS_MAX : CLOUD_MARCH_STEPS_CHEAP_MAX;
+    marchSteps = clamp(int((t1 - t0) / CLOUD_TARGET_STEP_BLOCKS), marchSteps, stepCap);
     float stepLen = (t1 - t0) / float(marchSteps);
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
     // Classic clouds are opaque boxes, not haze: they need a much higher extinction so a box saturates
     // within its own thickness instead of reading as translucent fog. Vanilla's clouds you cannot see
     // through, and that is the property being reproduced.
-    float sigma = CLOUD_EXTINCTION * (classic ? CLOUD_CLASSIC_EXTINCTION_SCALE : 1.0) * opacity * fade;
+    // Extinction is normalised by the slab depth: a 100-block bank and a 10-block sheet reach the same
+    // optical depth straight down, so THICKNESS controls shape and OPACITY controls see-through, with
+    // no cross-talk. opacity is deliberately NOT folded in here — see the cap after the march.
+    float sigma = CLOUD_EXTINCTION * (classic ? CLOUD_CLASSIC_EXTINCTION_SCALE : 1.0)
+            * (CLOUD_REFERENCE_THICKNESS / max(thickness, 1.0)) * fade;
     // Vanilla shades cloud faces by ORIENTATION with flat, constant tones — no smooth lighting model.
     // Reproducing that inside the march is what keeps the classic style looking like Minecraft even
     // though it is now a real volume: the box's top is bright, its underside dark, its vertical sides
@@ -530,6 +596,20 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
             break; // fully saturated; further steps cannot contribute
         }
     }
+
+    // ---- Opacity as a genuine ceiling, applied ONCE to the finished march.
+    //
+    // It used to scale the extinction, which is per unit length — so the total optical depth still grew
+    // with the slab depth and with the path length through it. That is why a low opacity still went
+    // fully solid at 100% thickness, and why even a thin deck turned opaque toward the horizon, where a
+    // grazing ray traverses hundreds of blocks of slab. The slider had no ceiling at all.
+    //
+    // Capping the finished result instead makes it exactly a blend between "no cloud" and "this cloud":
+    // at 20% the cloud can never be more than 20% opaque, at any thickness, at any view angle. Scatter
+    // is premultiplied so it scales by the same factor, which keeps
+    // `background * transmittance + scatter` energy-correct.
+    result.scatter *= opacity;
+    result.transmittance = 1.0 - (1.0 - result.transmittance) * opacity;
     return result;
 }
 

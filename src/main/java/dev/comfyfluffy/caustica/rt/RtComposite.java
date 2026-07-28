@@ -174,7 +174,11 @@ public final class RtComposite {
     // Deck thickness at the slider's 100%. Both styles march a real slab now, so this is the depth the
     // clouds actually have in the world: at full thickness a bank is tall enough to fly into, while the
     // slider at 0 collapses the deck to the old flat plane.
-    private static final float CLOUD_MAX_THICKNESS_BLOCKS = 40.0f;
+    // Real cumulus is as tall as it is wide, often taller — a bank whose base sits at cloud height can
+    // easily tower 100+ blocks. 40 was too shallow for the deck to ever read as heaped rather than
+    // layered, and since extinction is now normalised by the slab depth (CLOUD_REFERENCE_THICKNESS in
+    // clouds.slang) raising this adds VOLUME without making the clouds more opaque.
+    private static final float CLOUD_MAX_THICKNESS_BLOCKS = 110.0f;
     // Mirrors clouds.slang's CLOUD_STYLE_* constants.
     private static final int CLOUD_STYLE_VOLUMETRIC = 1;
     // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
