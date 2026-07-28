@@ -171,11 +171,10 @@ public final class RtComposite {
     private static final double CLOUD_FIELD_PERIOD_BLOCKS = 12.0 * 512.0;
     // Vanilla's clouds drift at 0.03 blocks/tick; matched so the sky moves at a familiar speed.
     private static final double CLOUD_WIND_BLOCKS_PER_TICK = 0.03;
-    // Vertical extent of the flat deck. Only used to bound the slab; the classic style shades a plane.
-    private static final float CLOUD_SLAB_THICKNESS = 4.0f;
-    // The volumetric style marches a real slab, so it needs genuine depth to have anything to integrate
-    // through — a 4-block slab would render as a flat sheet with extra cost and no extra look.
-    private static final float CLOUD_VOLUMETRIC_THICKNESS = 28.0f;
+    // Deck thickness at the slider's 100%. Both styles march a real slab now, so this is the depth the
+    // clouds actually have in the world: at full thickness a bank is tall enough to fly into, while the
+    // slider at 0 collapses the deck to the old flat plane.
+    private static final float CLOUD_MAX_THICKNESS_BLOCKS = 40.0f;
     // Mirrors clouds.slang's CLOUD_STYLE_* constants.
     private static final int CLOUD_STYLE_VOLUMETRIC = 1;
     // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
@@ -1326,10 +1325,11 @@ public final class RtComposite {
         // on, so the pattern stays pinned to the world while the camera moves through it.
         double anchorX = camX + drift;
         double anchorZ = camZ;
-        // Volumetric clouds are a true slab, so they need real vertical extent to march through; the
-        // flat deck is shaded as a plane and only uses the thickness to bound its slab test.
-        float thickness = CausticaConfig.Rt.Composite.cloudStyleIndex() == CLOUD_STYLE_VOLUMETRIC
-                ? CLOUD_VOLUMETRIC_THICKNESS : CLOUD_SLAB_THICKNESS;
+        // Player-controlled thickness, shared by both styles. At 0 the shader takes its flat-plane path
+        // (see CLOUD_FLAT_EPSILON in clouds.slang), so the slider bottoming out is genuinely a flat deck
+        // rather than a degenerate zero-length march.
+        float thickness = Math.clamp(CausticaConfig.Rt.Composite.CLOUD_THICKNESS.value(), 0f, 1f)
+                * CLOUD_MAX_THICKNESS_BLOCKS;
         return new CloudPush(
                 new Float4(Math.clamp(coverage, 0f, 1f), Math.clamp(opacity, 0f, 1f),
                         Math.clamp(shadow, 0f, 1f), (float) (height - cameraY)),

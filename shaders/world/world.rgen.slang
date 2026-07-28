@@ -36,6 +36,31 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 ro = seg.ro;
     float3 rd = seg.rd;
     float3 throughput = seg.throughput;
+
+    // ---- Cloud over the prefix Pass A already consumed.
+    //
+    // Pass A hands back a segment that starts AT THE CAMERA for an opaque hit, but for a dielectric
+    // (water, glass, ice) it consumes the camera->surface hop itself and queues continuations that
+    // start at the surface. Pass A has no radiance accumulator, so it cannot apply the cloud crossed on
+    // the way there — and Pass B's loop only ever sees the post-surface segments. The result was the
+    // reported bug: looking down at an ocean from above the clouds, the water was drawn at full
+    // brightness with no cloud in front of it, while the terrain beside it was correctly dimmed.
+    //
+    // Recover it here by integrating the cloud over camera -> seg.ro for any segment that does not
+    // start at the camera. Applying it to BOTH split branches is exact rather than a double count: the
+    // two branches carry throughputs F and (1 - F), so their prefix contributions sum to exactly one
+    // crossing (F*S + (1-F)*S = S), and each branch's own throughput picks up the same transmittance
+    // the real prefix would have applied.
+    if (seg.bounce > 0) {
+        float3 toStart = ro - worldPush.camOffset;
+        float prefixDist = length(toStart);
+        if (prefixDist > 1.0e-4) {
+            CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
+                                           prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
+            L += throughput * pre.scatter;
+            throughput *= pre.transmittance;
+        }
+    }
     // Pass A is fixed at one sample per pixel. Decorrelate each Pass B resample here so configured SPP
     // produces independent lighting/BSDF paths from the shared terminal continuation.
     uint seed = seg.seed ^ sampleIndex * 2246822519u;

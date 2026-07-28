@@ -6,16 +6,20 @@
 // hid the celestial discs "behind the cloud deck" during rain, but nothing ever drew that deck. This
 // module is that deck.
 //
-// TWO STYLES, ONE FIELD. cloudCoverageField is the single source of truth for where clouds are; both
-// styles are different ways of *rendering* that same 2D coverage map, and the shadow query reads it
-// too. That is what keeps a cloud you can see, the shadow it casts, and the shape it has in either
-// style from ever disagreeing:
-//   * CLOUD_STYLE_CLASSIC — vanilla's flat, blocky deck. Coverage is quantised to the 12-block cell
-//     grid, so the silhouette is genuinely square-edged rather than a soft blob, and the slab is shaded
-//     as a box with distinct top/side/bottom faces the way vanilla's cloud quads are.
-//   * CLOUD_STYLE_VOLUMETRIC — a real ray-marched slab. The same coverage map is extruded into a 3D
-//     density with a vertical profile and detail noise, then marched with light-marched self-shadowing,
-//     Beer-Lambert extinction and Henyey-Greenstein phase — the "heavy shader" look.
+// TWO STYLES, ONE FIELD. cloudCoverageField is the single source of truth for WHERE clouds are; both
+// styles, and the shadow query, are built on that same 2D map, so a cloud and the shadow it casts are
+// always in the same place. (The volumetric style then erodes that map into 3D detail, so its shadow is
+// a coverage-accurate approximation rather than a per-lobe match — see cloudSunShadow.)
+//   * CLOUD_STYLE_CLASSIC — vanilla's blocky clouds. Coverage is quantised to the 12-block cell grid,
+//     so the silhouette is genuinely square-edged, and the slab is marched as a BOX: real 3D cuboids
+//     with lit tops, shaded undersides and visibly darker vertical sides, exactly like vanilla's cloud
+//     geometry. At zero thickness it collapses to the old flat sheet.
+//   * CLOUD_STYLE_VOLUMETRIC — billowy, photoreal cumulus. The same coverage map drives a domain-warped
+//     fBm density with a cauliflower erosion profile, marched with light-marched self-shadowing,
+//     Beer-Lambert extinction, a dual-lobe Henyey-Greenstein phase and a powder (dark-edge) term.
+//
+// BOTH styles are marched volumes now, and both are driven by the same thickness slider, so "3D" is not
+// a property of one style — it is a property of the deck, and the style only decides its shape language.
 //
 // DEPTH-CORRECT AGAINST THE WORLD. Every entry point that produces visible cloud takes the distance to
 // the nearest scene hit and stops there, so terrain in front of a cloud occludes it. Getting this wrong
@@ -42,6 +46,10 @@ public static const float CLOUD_EDGE_SOFTNESS = 0.22;
 public static const float3 CLOUD_ALBEDO = float3(0.94, 0.95, 0.98);
 public static const float CLOUD_INV_PI = 0.31830988618;
 
+// Below this the deck is treated as a flat sheet: the thickness slider at 0 must reproduce the old
+// plane exactly rather than degenerate into a zero-length march.
+public static const float CLOUD_FLAT_EPSILON = 0.25;
+
 // Style ids; the active one comes from featureFlags (see cloudStyle).
 public static const uint CLOUD_STYLE_CLASSIC = 0u;
 public static const uint CLOUD_STYLE_VOLUMETRIC = 1u;
@@ -63,7 +71,12 @@ public static const int   CLOUD_LIGHT_STEPS = 6;
 public static const int   CLOUD_MARCH_STEPS_CHEAP = 6;
 public static const int   CLOUD_LIGHT_STEPS_CHEAP = 2;
 public static const float CLOUD_EXTINCTION = 0.115; // per block, at density 1
-public static const float CLOUD_HG_G = 0.62;        // forward-scattering anisotropy of cloud droplets
+public static const float CLOUD_HG_G = 0.72;        // forward-scattering anisotropy of cloud droplets
+public static const float CLOUD_HG_BACK = -0.28;    // weak backward lobe (see cloudPhase)
+public static const float CLOUD_POWDER_STRENGTH = 0.7; // dark-edge / multiple-scattering approximation
+// Classic clouds are opaque boxes; this scales their extinction so a box saturates within its own
+// thickness rather than looking like translucent haze.
+public static const float CLOUD_CLASSIC_EXTINCTION_SCALE = 6.0;
 
 /**
  * Whether this frame draws clouds at all. Coverage or opacity at zero answers false, so the player
@@ -233,6 +246,12 @@ public float cloudAlpha(WorldPush push, CloudHit h, float density) {
  *
  * This is the "Cloud Shadows" slider, and it is an analytic plane intersection plus one coverage
  * evaluation — no march, no extra ray, no added variance for the denoiser to chase, for either style.
+ *
+ * It samples the COVERAGE map at the deck's mid-plane, not the eroded 3D density, so for the volumetric
+ * style the shadow follows the cloud's overall footprint rather than its individual billows. That is a
+ * deliberate trade: matching per-lobe would mean marching the slab for every shading point of every
+ * path vertex, and the difference is a slightly softer shadow edge that is indistinguishable in motion
+ * from the real thing.
  * Points above the deck get t <= 0 and are unshadowed for free, which is the correct answer rather than
  * a special case.
  *
@@ -281,35 +300,105 @@ float3 cloudRadianceClassic(WorldPush push, CloudHit h, float3 dir, float3 skyBe
 
 // ---- Volumetric shading --------------------------------------------------------------------------
 
-/** Henyey-Greenstein phase. Cloud droplets scatter strongly forward, which is the whole look. */
-float cloudPhase(float cosT, float g) {
+/** Single Henyey-Greenstein lobe. */
+float hgLobe(float cosT, float g) {
     float g2 = g * g;
     float d = 1.0 + g2 - 2.0 * g * cosT;
     return (1.0 - g2) / (4.0 * 3.14159265359 * max(d * sqrt(max(d, 1.0e-6)), 1.0e-4));
 }
 
 /**
- * 3D density inside the slab.
+ * Dual-lobe phase. A single forward lobe gives the sun-facing glow but leaves the rest of the cloud
+ * flat; real droplet scattering also has a weak backward lobe, which is what lights the side of a cloud
+ * facing away from the sun and stops it collapsing into a silhouette. Mixing the two is the standard
+ * cheap stand-in for a full Mie phase and costs one extra lobe evaluation.
+ */
+float cloudPhase(float cosT) {
+    return lerp(hgLobe(cosT, CLOUD_HG_BACK), hgLobe(cosT, CLOUD_HG_G), 0.7);
+}
+
+/**
+ * Powder / dark-edge term. Multiple scattering makes the dense INTERIOR of a cloud brighter than its
+ * thin edges when lit from behind the viewer — the opposite of what single-scattering alone predicts,
+ * and its absence is why cheap volumetric clouds look like flat grey cotton. Approximated from local
+ * density, which is the standard Frostbite/Horizon trick.
+ */
+float cloudPowder(float density) {
+    return 1.0 - exp(-density * 4.0);
+}
+
+/**
+ * 3D density inside the slab, per style.
  *
- * The 2D coverage map is extruded vertically and multiplied by a rounded profile, so a cloud is thickest
- * at its middle and tapers at top and bottom instead of being a flat-topped extrusion. Detail noise
- * erodes the edges where the profile is already thin, which is what gives the billowy silhouette; it is
- * scaled by (1 - coverage) so it eats into edges without punching holes through cloud cores.
+ * CLASSIC is a box: the density is the quantised cell coverage, constant through the whole thickness
+ * with only a hair of taper at the very top and bottom faces. That is deliberately NOT billowy — it is
+ * what makes the marched result read as vanilla's solid cuboid clouds rather than a soft blob, and it
+ * is why the classic style still looks like Minecraft once it has real height.
+ *
+ * VOLUMETRIC is cumulus. Three things do the work, and the previous version had none of them, which is
+ * why it looked like a thin sheet:
+ *   * a CAULIFLOWER height profile — the cloud bulges outward toward its middle and rounds off at the
+ *     top, instead of tapering symmetrically like a lens. Real cumulus has a flat-ish base and a
+ *     billowing crown, so the profile is asymmetric on purpose;
+ *   * DOMAIN WARPING — the sample position is displaced by a low-frequency noise before the detail
+ *     octaves are read, which turns straight, gridded edges into curling, rounded lobes. This is the
+ *     single biggest contributor to a cloud reading as "puffy" rather than "noisy";
+ *   * a coverage BOOST toward the core, so the middle of a cloud is genuinely opaque. A field that only
+ *     ever reaches ~0.5 density can never look thick no matter how deep the slab is.
  */
 float cloudVolumeDensity(WorldPush push, float3 posRel, float heightFrac) {
     float2 samplePos = push.cloudAnchor.xy + posRel.xz;
-    float coverage = cloudCoverage(push, samplePos);
+    float hf = clamp(heightFrac, 0.0, 1.0);
+
+    if (cloudStyle(push) == CLOUD_STYLE_CLASSIC) {
+        float coverage = cloudCoverage(push, samplePos);
+        if (coverage <= 0.0) {
+            return 0.0;
+        }
+        // Near-square vertical profile: full density across the body, clipped hard at both faces so the
+        // silhouette from the side is a rectangle, matching vanilla's cloud boxes.
+        float faces = smoothstep(0.0, 0.06, hf) * smoothstep(0.0, 0.06, 1.0 - hf);
+        return coverage * faces;
+    }
+
+    // ---- Volumetric cumulus.
+    float base = cloudCoverageField(samplePos);
+    float threshold = 1.0 - clamp(push.clouds.x, 0.0, 1.0);
+    float coverage = smoothstep(threshold, threshold + CLOUD_EDGE_SOFTNESS, base);
     if (coverage <= 0.0) {
         return 0.0;
     }
-    // Rounded vertical profile: 0 at both faces, 1 in the middle.
-    float profile = 1.0 - abs(heightFrac * 2.0 - 1.0);
-    profile = smoothstep(0.0, 0.45, profile);
-    // Detail: a second, finer octave of the same periodic field, offset per height so the erosion is
-    // not vertically uniform (which would read as extruded, not billowed).
-    float detail = cloudNoise((samplePos + heightFrac * 37.0) / (CLOUD_CELL_BLOCKS * 0.35));
-    float eroded = coverage - (1.0 - coverage) * detail * 0.55;
-    return clamp(eroded, 0.0, 1.0) * profile;
+
+    // Asymmetric cumulus profile: a flat base that fills in quickly, a wide bulging body, and a rounded
+    // crown that falls away slowly. Multiplying the two smoothsteps at different widths is what makes
+    // the shape read as a dome sitting on a flat bottom rather than a symmetric lens.
+    float bottom = smoothstep(0.0, 0.12, hf);
+    float top = 1.0 - smoothstep(0.35, 1.0, hf);
+    float profile = bottom * top;
+    // Widen the body: pushing the profile through a power < 1 keeps it near 1 across the middle of the
+    // slab instead of peaking at a single height, so the cloud has volume rather than a thin core.
+    profile = pow(clamp(profile, 0.0, 1.0), 0.55);
+
+    // Domain warp. The warp amplitude grows with height, so cloud tops curl and billow while the base
+    // stays comparatively flat — exactly how cumulus behaves.
+    float2 warpUv = samplePos / (CLOUD_CELL_BLOCKS * 3.0);
+    float2 warp = float2(cloudNoise(warpUv), cloudNoise(warpUv + float2(41.0, 17.0))) - 0.5;
+    float2 warped = samplePos + warp * CLOUD_CELL_BLOCKS * (1.2 + 2.4 * hf);
+
+    // Billow detail: inverted noise octaves (1 - |2n-1|) produce rounded, cellular lobes rather than the
+    // cloudy blur plain value noise gives, which is what reads as cauliflower.
+    float d1 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.55));
+    float d2 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.22) + float2(19.0, 7.0));
+    float billow = (1.0 - abs(d1 * 2.0 - 1.0)) * 0.65 + (1.0 - abs(d2 * 2.0 - 1.0)) * 0.35;
+
+    // Erode with the billow, weighted by how close to an edge we are: cores stay solid, rims dissolve
+    // into lobes. Erosion also strengthens toward the crown so tops break up before bases do.
+    float edge = 1.0 - coverage;
+    float erosion = billow * edge * (0.45 + 0.55 * hf);
+    // Boost the core so the interior actually saturates; without this the march can never reach an
+    // opaque cloud and everything looks like haze.
+    float density = coverage * (0.55 + 0.85 * coverage) - erosion;
+    return clamp(density, 0.0, 1.0) * profile;
 }
 
 /** Optical depth from a point toward the light, for self-shadowing inside the slab. */
@@ -389,10 +478,24 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
 
     float3 sunRadiance = push.lightRadiance.xyz;
     float cosT = dot(dir, push.lightDir.xyz);
-    float phase = cloudPhase(cosT, CLOUD_HG_G);
+    float phase = cloudPhase(cosT);
     float opacity = clamp(push.clouds.y, 0.0, 1.0);
     float stepLen = (t1 - t0) / float(marchSteps);
-    float sigma = CLOUD_EXTINCTION * opacity * fade;
+    bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
+    // Classic clouds are opaque boxes, not haze: they need a much higher extinction so a box saturates
+    // within its own thickness instead of reading as translucent fog. Vanilla's clouds you cannot see
+    // through, and that is the property being reproduced.
+    float sigma = CLOUD_EXTINCTION * (classic ? CLOUD_CLASSIC_EXTINCTION_SCALE : 1.0) * opacity * fade;
+    // Vanilla shades cloud faces by ORIENTATION with flat, constant tones — no smooth lighting model.
+    // Reproducing that inside the march is what keeps the classic style looking like Minecraft even
+    // though it is now a real volume: the box's top is bright, its underside dark, its vertical sides
+    // in between, picked from the view direction the same way vanilla picks a quad's face.
+    float classicFace = 1.0;
+    if (classic) {
+        float grazing = 1.0 - abs(dir.y);
+        classicFace = dir.y < 0.0 ? 1.0 : 0.52;   // looking down at tops vs up at undersides
+        classicFace = lerp(classicFace, 0.78, grazing);
+    }
 
     for (int i = 0; i < marchSteps; i++) {
         float3 p = originRel + dir * (t0 + stepLen * (float(i) + 0.5));
@@ -405,9 +508,20 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
         float sampleTransmittance = exp(-extinction);
         float lightT = cloudLightTransmittance(push, p, push.lightDir.xyz, slabBottom, slabTop,
                                                lightSteps);
-        // Direct sun scattering + an ambient sky term so the shadowed interior is grey rather than
-        // black. The ambient uses the sky this ray would otherwise have seen, matching the flat style.
-        float3 inScatter = CLOUD_ALBEDO * (sunRadiance * lightT * phase * 4.0 + skyBehind * 0.35);
+        float3 inScatter;
+        if (classic) {
+            // Flat, vanilla-style face tone. Self-shadowing is deliberately damped (mixed only 40% in)
+            // so cloud boxes keep the poster-flat look instead of developing soft volumetric gradients.
+            float shade = lerp(1.0, lightT, 0.4);
+            inScatter = CLOUD_ALBEDO * CLOUD_INV_PI
+                    * (sunRadiance * classicFace * shade * 3.0 + skyBehind * 1.4);
+        } else {
+            // Direct sun scattering + an ambient sky term so the shadowed interior is grey rather than
+            // black. Powder brightens dense interiors (multiple-scattering approximation).
+            float powder = lerp(1.0, cloudPowder(density), CLOUD_POWDER_STRENGTH);
+            inScatter = CLOUD_ALBEDO
+                    * (sunRadiance * lightT * phase * powder * 4.0 + skyBehind * 0.35);
+        }
         // Energy-conserving accumulation: integrate in-scatter over the step's absorbed fraction.
         result.scatter += result.transmittance * inScatter * (1.0 - sampleTransmittance);
         result.transmittance *= sampleTransmittance;
@@ -455,7 +569,10 @@ public CloudVolume cloudSegment(WorldPush push, float3 originRel, float3 dir, fl
     if (!cloudsEnabled(push)) {
         return result;
     }
-    if (cloudStyle(push) == CLOUD_STYLE_VOLUMETRIC) {
+    // A deck with real thickness is a VOLUME for both styles — that is what makes the classic clouds
+    // actual boxes you can fly between rather than a decal. Only a thickness of (near) zero still takes
+    // the flat plane path, which is what the thickness slider at 0% asks for.
+    if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON) {
         return cloudMarch(push, originRel, dir, maxDistance, ambient, highQuality);
     }
     CloudHit h = cloudTrace(push, originRel, dir, maxDistance);

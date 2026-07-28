@@ -46,6 +46,7 @@ public final class RtVideoOptions {
             // the other two reads immediately before them.
             clouds(),
             cloudStyle(),
+            cloudThickness(),
             cloudShadowStrength(),
             cloudOpacity(),
             denoiser(),
@@ -254,6 +255,17 @@ public final class RtVideoOptions {
             new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
             CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
             setting::set);
+    }
+
+    /**
+     * Cloud thickness, as a percentage of the maximum deck depth. Applies to both styles: 0% is a flat
+     * sheet, 100% is a deep bank you can fly into. Classic clouds become real boxes with lit tops and
+     * darker sides, the way vanilla's cloud geometry looks; volumetric clouds gain the depth their
+     * shading needs. Thicker clouds cost more to march.
+     */
+    private static OptionInstance<Integer> cloudThickness() {
+        return percent("caustica.options.rt.cloudThickness",
+                CausticaConfig.Rt.Composite.CLOUD_THICKNESS);
     }
 
     /**

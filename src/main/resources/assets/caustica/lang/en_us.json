@@ -44,6 +44,9 @@
 	"caustica.options.rt.cloudStyle.classic": "Classic",
 	"caustica.options.rt.cloudStyle.volumetric": "Volumetric",
 
+	"caustica.options.rt.cloudThickness": "Cloud Thickness",
+	"caustica.options.rt.cloudThickness.tooltip": "How tall the clouds are. 0% makes them a flat sheet; higher values give them real 3D depth you can fly into. Classic clouds become solid boxes with bright tops and darker sides like vanilla's, and volumetric clouds become deep, billowing banks. Thicker clouds cost more performance.",
+
 	"caustica.options.rt.cloudShadowStrength": "Cloud Shadows",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "How much the cloud deck dims the sunlight and moonlight reaching the ground under it. 0% draws clouds that cast no shadow at all; 100% lets a solid cloud block the sun completely. Costs no extra rays.",
 

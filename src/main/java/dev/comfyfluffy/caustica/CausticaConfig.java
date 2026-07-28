@@ -620,6 +620,16 @@ public final class CausticaConfig {
                     string("caustica.rt.cloudStyle", "composite.cloud-style", "classic",
                             Composite::sanitizeCloudStyle);
             /**
+             * Cloud thickness, 0..1, as a fraction of {@link #CLOUD_MAX_THICKNESS_BLOCKS}.
+             *
+             * <p>0 is a flat sheet (the deck collapses to a plane and takes the cheap non-marched
+             * path); 1 is a deep bank. Applies to BOTH styles — classic clouds become real vanilla-like
+             * boxes with lit tops and shaded sides rather than a decal, and volumetric clouds gain the
+             * depth their shading needs to read as cumulus.
+             */
+            public static final FloatSetting CLOUD_THICKNESS =
+                    clampedFloat("caustica.rt.cloudThickness", "composite.cloud-thickness", 0.5f, 0.0f, 1.0f);
+            /**
              * How much the cloud deck darkens the sun/moon light reaching the ground beneath it.
              *
              * <p>0 means clouds are visible in the sky but cast nothing; 1 means a fully opaque cloud
