@@ -331,15 +331,6 @@ public final class RtComposite {
     private int staticAccumFrames;
     /** Previous frame's block-breaking overlay set — crack stages change albedo with no geometry edit. */
     private BreakEntry[] prevBreakingEntries = new BreakEntry[0];
-    /**
-     * Frames of DLSS-RR history reset still owed after a near-player geometry change. Terrain edits are
-     * rebuilt asynchronously on worker threads, so the near-player geometry serial can bump across
-     * successive frames as each section (the target plus its dirty-expanded neighbours) finishes and
-     * publishes; a single-frame reset lets RR start re-accumulating between those publishes, smearing the
-     * old TLAS content against the new and producing the visible flicker when mining/placing. Holding the
-     * reset for a short window covers that publish tail without noticeably hurting convergence elsewhere.
-     */
-    private int rrResetHoldFrames;
 
     // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
     private final Matrix4f frameProjection = new Matrix4f();
@@ -348,10 +339,6 @@ public final class RtComposite {
     private double camY;
     private double camZ;
     private boolean frameCaptured;
-    // This frame's sub-pixel jitter in DISPLAY-NDC space (computed after render/display sizes are known in
-    // recordFrame; 0 when RR is off). Read by overlay raster passes via currentJitterNdc{X,Y}().
-    private float currentJitterNdcX;
-    private float currentJitterNdcY;
     private long celestialUvAtlasHandle;
     private int celestialUvMoonPhase = -1;
     private float sunU0;
@@ -458,22 +445,6 @@ public final class RtComposite {
     }
 
     /**
-     * Sub-pixel jitter applied to the primary ray this frame, already scaled to DISPLAY-NDC units and in
-     * the same sign convention reported to DLSS-RR. Overlay raster passes translate {@code gl_Position.xy}
-     * by this in their vertex shaders so their rasterized geometry lands on the exact same subpixel sample
-     * the primary trace used — using the un-jittered projection directly leaves them about half a display
-     * pixel away from the ray-traced content, and the Halton-sequence wobble reads as a one-pixel flicker.
-     * Both components are 0 when RR is off (no-jitter reference path).
-     */
-    public float currentJitterNdcX() {
-        return currentJitterNdcX;
-    }
-
-    public float currentJitterNdcY() {
-        return currentJitterNdcY;
-    }
-
-    /**
      * Reset per-frame present state at the very start of {@link net.minecraft.client.renderer.GameRenderer}
      * render (before any RT work). Critical for menu/no-world frames: {@link #composite()} is only called
      * while a level is rendering ({@code WorldRenderScaler} opens its window in {@code renderLevel}), so on
@@ -542,17 +513,9 @@ public final class RtComposite {
         // frame. DLSS-RR's temporal history predates that geometry, and it only reprojects by camera
         // motion — flush the history NOW, the same frame the new sections first reach the TLAS,
         // instead of letting the old block smear over the new one (ghosting while standing still).
-        // Hold the reset for a handful of frames: dirty-section expansion re-extracts neighbours on
-        // successive worker completions, and crack-stage advances / block-entity animations tied to
-        // the edit can trail the first publish by a frame or two, so a single reset leaves RR smearing
-        // the old TLAS against the new.
         long terrainGeometrySerial = RtTerrain.nearbyGeometryChangeSerial();
         if (terrainGeometrySerial != lastSeenTerrainGeometrySerial) {
             lastSeenTerrainGeometrySerial = terrainGeometrySerial;
-            rrResetHoldFrames = 4;
-        }
-        if (rrResetHoldFrames > 0) {
-            rrResetHoldFrames--;
             RtDlssRr.INSTANCE.invalidateHistory();
         }
         if (RtTerrain.currentOrNull() == null || !frameCaptured || Minecraft.getInstance().level == null) {
@@ -922,18 +885,6 @@ public final class RtComposite {
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
-            // Convert render-pixel jitter into DISPLAY-NDC units so overlay vertex shaders can translate
-            // their clip-space position by the same subpixel offset the primary ray used. After RR's
-            // upscale shifts content by exactly this offset, the overlaid lines/quads land pixel-exact
-            // on the reconstructed geometry instead of wobbling half a pixel behind it.
-            //
-            // Scale: jitter is in RENDER pixels (worldPush.jitter is added in render-pixel UV space in
-            // world_primary.rgen). The overlay rasterizes at DISPLAY resolution, and DLSS-RR reconstructs
-            // the display image as if the primary ray had been cast through the display pixel's jittered
-            // sample — so a render-pixel jitter of jX maps to a display-NDC shift of 2*jX/renderW (same
-            // direction, since RR already accounts for the upscale).
-            currentJitterNdcX = rrPath ? (2.0f * jitterX / renderW) : 0f;
-            currentJitterNdcY = rrPath ? (2.0f * jitterY / renderH) : 0f;
             capTemporalAccumulation(rrPath);
 
             boolean rrDone = false;

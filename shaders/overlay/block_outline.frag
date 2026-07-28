@@ -11,7 +11,6 @@ layout(push_constant) uniform Push {
     mat4 curViewProj; // 0, 64B (unused here; kept so both stages share one push range)
     vec3 camOffset;   // 64, padded to 16B — camera's position in the terrain's rebase space
     vec4 color;       // 80, 16B
-    vec2 jitterNdc;   // 96, 8B (padded to 16B; unused in frag, kept for layout parity with vert)
 } pc;
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
