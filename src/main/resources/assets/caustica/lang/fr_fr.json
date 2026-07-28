@@ -69,6 +69,8 @@
 	"caustica.options.rt.debugView.5": "Mouvement",
 	"caustica.options.rt.debugView.6": "Spéculaire",
 	"caustica.options.rt.debugView.7": "Mouvement spéculaire",
+	"caustica.options.rt.debugView.8": "Masque d’émission",
+	"caustica.options.rt.debugView.9": "Source d’émission",
 
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
