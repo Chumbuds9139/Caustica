@@ -647,11 +647,16 @@ public final class CausticaConfig {
             public static final FloatSetting CLOUD_OPACITY =
                     clampedFloat("caustica.rt.cloudOpacity", "composite.cloud-opacity", 0.9f, 0.0f, 1.0f);
             /**
-             * World Y the cloud deck sits at, matching vanilla's Overworld cloud height. A config knob
-             * rather than a slider: it is a world constant, not a look preference.
+             * World Y the BASE of the cloud deck sits at. Vanilla's clouds sit at 192; the default is
+             * higher because Caustica's clouds have real thickness and a deck whose base is at vanilla
+             * height reads as much closer to the ground than vanilla's flat sheet does.
+             *
+             * <p>Exposed as a slider: with volumetric clouds the deck's distance is a strong part of the
+             * look, and the right value depends on the world's terrain height and the player's taste.
+             * The range comfortably spans from just above build height to far overhead.
              */
             public static final FloatSetting CLOUD_HEIGHT =
-                    clampedFloat("caustica.rt.cloudHeight", "composite.cloud-height", 192.0f, -512.0f, 1024.0f);
+                    clampedFloat("caustica.rt.cloudHeight", "composite.cloud-height", 320.0f, 128.0f, 1024.0f);
             /**
              * Fraction of the sky the deck covers in clear weather. Rain drives this toward fully
              * overcast on top of whatever is set here (see {@code RtComposite.cloudState}).

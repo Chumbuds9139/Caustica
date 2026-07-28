@@ -88,7 +88,24 @@ public static const float CLOUD_MAX_SLAB_CROSSINGS = 3.5;
 // Horizontal scale of the volumetric field, relative to the classic 12-block cell grid. Below 1 the
 // lobes get WIDER (the field is sampled more slowly), which is what lets cloud width grow together with
 // the extra height so the result reads as heaped cumulus rather than a stretched sheet.
-public static const float CLOUD_VOLUMETRIC_SCALE = 0.45;
+//
+// MUST be a reciprocal power of two, and CLOUD_FIELD_PERIOD_BLOCKS (Java) must be a whole multiple of
+// CLOUD_CELL_BLOCKS * CLOUD_PERIOD_CELLS / this. The volumetric field samples at samplePos * SCALE, so
+// the anchor wrap is only seamless if the wrap distance is an exact multiple of the hash period IN THAT
+// SCALED SPACE. At 0.45 it was not: every wrap landed 230.4 cells off and the whole cloudscape snapped
+// to a different pattern — visible as clouds abruptly changing shape while walking, in the volumetric
+// style only (classic samples unscaled, so it always wrapped cleanly). A power of two also makes the
+// multiply exact in binary floating point, so the identity holds bit-for-bit rather than approximately.
+public static const float CLOUD_VOLUMETRIC_SCALE = 0.5;
+// Octave divisors for the warp and the two billow layers. ALL must be powers of two, for the same
+// reason CLOUD_VOLUMETRIC_SCALE must be: each is another space the periodic hash is sampled in, and the
+// anchor wrap has to be a whole hash period in every one of them simultaneously. The largest divisor is
+// the binding constraint on CLOUD_FIELD_PERIOD_BLOCKS (Java): period >= 512 * CELL * maxDiv / SCALE.
+// These were 2.0 / 0.9 / 0.35, and the two non-power-of-two ones desynced the detail layers at every
+// wrap even after the base field was fixed — the same pop, just from the erosion instead of the shape.
+public static const float CLOUD_WARP_DIV = 2.0;
+public static const float CLOUD_BILLOW_DIV_COARSE = 1.0;
+public static const float CLOUD_BILLOW_DIV_FINE = 0.25;
 // How much wider a cloud gets around its belly than at its base/crown. Turns a straight-sided extrusion
 // into a rounded, bulging mass — see the note in cloudVolumeDensity.
 public static const float CLOUD_BULGE = 0.30;
@@ -425,7 +442,7 @@ float cloudVolumeDensity(WorldPush push, float3 posRel, float heightFrac) {
     }
 
     // Domain warp, amplitude growing with height: bases stay flat, crowns curl into rounded lobes.
-    float2 warpUv = samplePos * CLOUD_VOLUMETRIC_SCALE / (CLOUD_CELL_BLOCKS * 2.0);
+    float2 warpUv = samplePos * CLOUD_VOLUMETRIC_SCALE / (CLOUD_CELL_BLOCKS * CLOUD_WARP_DIV);
     float2 warp = float2(cloudNoise(warpUv), cloudNoise(warpUv + float2(41.0, 17.0))) - 0.5;
     float2 warped = samplePos * CLOUD_VOLUMETRIC_SCALE
             + warp * CLOUD_CELL_BLOCKS * (1.0 + 3.0 * hf);
@@ -433,8 +450,8 @@ float cloudVolumeDensity(WorldPush push, float3 posRel, float heightFrac) {
     // Billow detail: inverted noise (1 - |2n-1|) gives rounded cellular lobes rather than a cloudy blur,
     // which is what reads as cauliflower. Scales chosen so the lobes are a fraction of a cloud's width,
     // not a fraction of a cell — small lobes on a big cloud is exactly the cumulus look.
-    float d1 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.9));
-    float d2 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * 0.35) + float2(19.0, 7.0));
+    float d1 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * CLOUD_BILLOW_DIV_COARSE));
+    float d2 = cloudNoise(warped / (CLOUD_CELL_BLOCKS * CLOUD_BILLOW_DIV_FINE) + float2(19.0, 7.0));
     float billow = (1.0 - abs(d1 * 2.0 - 1.0)) * 0.7 + (1.0 - abs(d2 * 2.0 - 1.0)) * 0.3;
 
     // Erosion concentrated at the extremes: the crown breaks into lobes and the base frays, but the

@@ -165,10 +165,24 @@ public final class RtComposite {
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
     // penumbrae). Radii in degrees; the real sun/moon are ~0.27°, but a touch larger reads pleasantly.
     private static final int WATER_ANCHOR_MASK = 4095;
-    // ---- Cloud deck. These four mirror clouds.slang and must stay in lock-step with it.
-    // The field repeats exactly every CLOUD_CELL_BLOCKS * CLOUD_PERIOD_CELLS = 12 * 512 blocks, which is
-    // what makes wrapping the anchor to this period invisible (see cloudState).
-    private static final double CLOUD_FIELD_PERIOD_BLOCKS = 12.0 * 512.0;
+    // ---- Cloud deck. These mirror clouds.slang and must stay in lock-step with it.
+    //
+    // The classic field repeats every CLOUD_CELL_BLOCKS * CLOUD_PERIOD_CELLS = 12 * 512 = 6144 blocks,
+    // but the VOLUMETRIC field samples the same hash at CLOUD_VOLUMETRIC_SCALE (0.5), so in its own
+    // sampled space 6144 blocks is only half a period. Wrapping the anchor there landed mid-period and
+    // snapped the entire cloudscape to a different pattern — clouds visibly changing shape while
+    // walking, in the volumetric style only.
+    //
+    // The wrap must therefore be a whole period in EVERY space the field is sampled in: the base
+    // octaves, the domain warp, and both billow layers. The binding constraint is the largest octave
+    // divisor (CLOUD_WARP_DIV = 2.0 in clouds.slang):
+    //
+    //     period = 512 cells * 12 blocks/cell * maxDivisor(2.0) / scale(0.5) = 24576 blocks
+    //
+    // Every divisor there is a power of two, so all of these multiplies are exact in binary floating
+    // point and the wrap identity holds bit-for-bit rather than approximately. Verified: the full
+    // density function (base octaves + warp + billow) is now identical across a wrap to 0.0.
+    private static final double CLOUD_FIELD_PERIOD_BLOCKS = 512.0 * 12.0 * 2.0 / 0.5;
     // Vanilla's clouds drift at 0.03 blocks/tick; matched so the sky moves at a familiar speed.
     private static final double CLOUD_WIND_BLOCKS_PER_TICK = 0.03;
     // Deck thickness at the slider's 100%. Both styles march a real slab now, so this is the depth the
@@ -184,6 +198,11 @@ public final class RtComposite {
     // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
     // into an aliasing band; the shader fades coverage out over the last stretch of this distance.
     private static final float CLOUD_VIEW_LIMIT_BLOCKS = 3072.0f;
+    // The view limit has to scale with how far up the deck is, or a high deck fades out at a steep
+    // elevation: the fade is measured as horizontal distance, and looking 30 degrees up at a deck 1000
+    // blocks overhead is already ~1750 blocks out. Keeping at least this many multiples of the deck's
+    // height in view means the fade always stays down near the horizon where it belongs.
+    private static final float CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE = 6.0f;
     private static final Identifier SUN_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_IDS = createMoonIds();
     // Celestial rotation axis (the pole the sun/moon arc about): perpendicular to the east-west arc,
@@ -1334,11 +1353,29 @@ public final class RtComposite {
         // rather than a degenerate zero-length march.
         float thickness = Math.clamp(CausticaConfig.Rt.Composite.CLOUD_THICKNESS.value(), 0f, 1f)
                 * CLOUD_MAX_THICKNESS_BLOCKS;
+        // The slider sets the deck's BASE, but the shader's slab is centred on the pushed height, so the
+        // half-thickness is added back here. Pushing the base directly would make the clouds appear to
+        // sink as the thickness slider is raised (the slab would grow downward as well as upward), which
+        // would make the two sliders fight each other — the base is the edge the player actually sees
+        // and judges the height by.
+        float deckCentre = height + thickness * 0.5f;
         return new CloudPush(
                 new Float4(Math.clamp(coverage, 0f, 1f), Math.clamp(opacity, 0f, 1f),
-                        Math.clamp(shadow, 0f, 1f), (float) (height - cameraY)),
+                        Math.clamp(shadow, 0f, 1f), (float) (deckCentre - cameraY)),
                 new Float4(wrapCloudAnchor(anchorX), wrapCloudAnchor(anchorZ),
-                        thickness, CLOUD_VIEW_LIMIT_BLOCKS));
+                        thickness, cloudViewLimit(deckCentre - (float) cameraY)));
+    }
+
+    /**
+     * How far out clouds stay visible, in blocks of horizontal distance.
+     *
+     * <p>Scales with the deck's height above the camera so a high deck does not fade out while still
+     * well up in the sky — see {@link #CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE}. A deck at or below the camera
+     * falls back to the flat limit.
+     */
+    private static float cloudViewLimit(float deckAboveCamera) {
+        return Math.max(CLOUD_VIEW_LIMIT_BLOCKS,
+                Math.abs(deckAboveCamera) * CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE);
     }
 
     /** Reduce a world coordinate into the cloud field's exact repeat period — see {@link #cloudState}. */

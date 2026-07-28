@@ -46,6 +46,7 @@ public final class RtVideoOptions {
             // the other two reads immediately before them.
             clouds(),
             cloudStyle(),
+            cloudHeight(),
             cloudThickness(),
             cloudShadowStrength(),
             cloudOpacity(),
@@ -236,6 +237,12 @@ public final class RtVideoOptions {
 
     private static final List<String> CLOUD_STYLES = List.of("classic", "volumetric");
 
+    // Cloud-height slider bounds, in world Y. Must stay inside CausticaConfig's own clamp on
+    // CLOUD_HEIGHT, which is what actually guards the value.
+    private static final int CLOUD_HEIGHT_MIN = 128;
+    private static final int CLOUD_HEIGHT_MAX = 1024;
+    private static final int CLOUD_HEIGHT_STEP = 8;
+
     /**
      * Cloud rendering style: vanilla's flat blocky deck, or a ray-marched volumetric slab.
      *
@@ -255,6 +262,29 @@ public final class RtVideoOptions {
             new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
             CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
             setting::set);
+    }
+
+    /**
+     * World Y the base of the cloud deck sits at, in blocks.
+     *
+     * <p>Stepped in 8-block increments: the slider spans nearly 900 blocks, and single-block precision
+     * on a deck hundreds of blocks overhead is below what the eye can resolve, so coarser steps make it
+     * far easier to land on a value.
+     */
+    private static OptionInstance<Integer> cloudHeight() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.CLOUD_HEIGHT;
+        int steps = (CLOUD_HEIGHT_MAX - CLOUD_HEIGHT_MIN) / CLOUD_HEIGHT_STEP;
+        int initial = Math.clamp(
+                Math.round((setting.value() - CLOUD_HEIGHT_MIN) / CLOUD_HEIGHT_STEP), 0, steps);
+        return new OptionInstance<>(
+            "caustica.options.rt.cloudHeight",
+            OptionInstance.cachedConstantTooltip(
+                    Component.translatable("caustica.options.rt.cloudHeight.tooltip")),
+            (caption, step) -> Options.genericValueLabel(caption,
+                    Component.literal("Y " + (CLOUD_HEIGHT_MIN + step * CLOUD_HEIGHT_STEP))),
+            new OptionInstance.IntRange(0, steps),
+            initial,
+            step -> setting.set((float) (CLOUD_HEIGHT_MIN + step * CLOUD_HEIGHT_STEP)));
     }
 
     /**
