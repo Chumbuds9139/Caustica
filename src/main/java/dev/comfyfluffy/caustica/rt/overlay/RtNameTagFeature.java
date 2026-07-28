@@ -52,8 +52,9 @@ import dev.comfyfluffy.caustica.rt.entity.RtEntities;
  * two shared corners per quad isn't worth an index buffer.
  */
 final class RtNameTagFeature implements RtOverlayFeature {
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) = 80B.
-    private static final int PUSH_BYTES = 80;
+    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B)
+    //   + vec2 jitterNdc (80, 8B, padded to 16B) = 96B.
+    private static final int PUSH_BYTES = 96;
     private static final int VERTEX_STRIDE = RtOverlayPipelines.VertexFormat.POSITION_TEX_COLOR.stride; // 24B
     // Vanilla's unoccluded name tag is actually two overlaid copies (opaque depth-tested + translucent
     // see-through-with-background) — see SubmitNodeCollection.submitNameTag. We draw a single pass
@@ -177,6 +178,8 @@ final class RtNameTagFeature implements RtOverlayFeature {
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             viewProj.get(0, push);
             push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
+            push.putFloat(80, RtComposite.INSTANCE.currentJitterNdcX())
+                    .putFloat(84, RtComposite.INSTANCE.currentJitterNdcY());
             VK10.vkCmdPushConstants(cmd, pipeline.layout, VK10.VK_SHADER_STAGE_VERTEX_BIT, 0, push);
             for (DrawPage page : drawPages) {
                 long set = pageSets.computeIfAbsent(page.view,

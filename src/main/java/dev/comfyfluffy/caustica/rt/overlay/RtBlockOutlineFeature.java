@@ -66,8 +66,9 @@ import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
  * no {@code sampleShading}), so occlusion itself stays pixel-rate; only the silhouette edges get antialiased.
  */
 final class RtBlockOutlineFeature implements RtOverlayFeature {
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
-    private static final int PUSH_BYTES = 96;
+    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B)
+    //   + vec2 jitterNdc (96, 8B, padded to 16B) = 112B.
+    private static final int PUSH_BYTES = 112;
     // Vanilla's default (non-high-contrast) outline colour: ARGB.black(102) ~= rgba(0,0,0,0.4).
     private static final float OUTLINE_ALPHA = 102f / 255f;
     // Reference thickness at REFERENCE_HEIGHT display pixels; record() scales this by the actual display
@@ -243,6 +244,8 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
                 push.putFloat(64, entities.glowCamOffsetX()).putFloat(68, entities.glowCamOffsetY())
                         .putFloat(72, entities.glowCamOffsetZ());
                 push.putFloat(80, 0f).putFloat(84, 0f).putFloat(88, 0f).putFloat(92, OUTLINE_ALPHA);
+                push.putFloat(96, RtComposite.INSTANCE.currentJitterNdcX())
+                        .putFloat(100, RtComposite.INSTANCE.currentJitterNdcY());
                 VK10.vkCmdPushConstants(cmd, pipeline.layout,
                         VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
                 VK10.vkCmdDraw(cmd, vertexCount, 1, 0, 0);
