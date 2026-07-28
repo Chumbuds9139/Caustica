@@ -29,12 +29,38 @@ import trace;
 import trace_ser;
 #endif
 import lighting;
+import clouds;
 
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
     float3 rd = seg.rd;
     float3 throughput = seg.throughput;
+
+    // ---- Cloud over the prefix Pass A already consumed.
+    //
+    // Pass A hands back a segment that starts AT THE CAMERA for an opaque hit, but for a dielectric
+    // (water, glass, ice) it consumes the camera->surface hop itself and queues continuations that
+    // start at the surface. Pass A has no radiance accumulator, so it cannot apply the cloud crossed on
+    // the way there — and Pass B's loop only ever sees the post-surface segments. The result was the
+    // reported bug: looking down at an ocean from above the clouds, the water was drawn at full
+    // brightness with no cloud in front of it, while the terrain beside it was correctly dimmed.
+    //
+    // Recover it here by integrating the cloud over camera -> seg.ro for any segment that does not
+    // start at the camera. Applying it to BOTH split branches is exact rather than a double count: the
+    // two branches carry throughputs F and (1 - F), so their prefix contributions sum to exactly one
+    // crossing (F*S + (1-F)*S = S), and each branch's own throughput picks up the same transmittance
+    // the real prefix would have applied.
+    if (seg.bounce > 0) {
+        float3 toStart = ro - worldPush.camOffset;
+        float prefixDist = length(toStart);
+        if (prefixDist > 1.0e-4) {
+            CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
+                                           prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
+            L += throughput * pre.scatter;
+            throughput *= pre.transmittance;
+        }
+    }
     // Pass A is fixed at one sample per pixel. Decorrelate each Pass B resample here so configured SPP
     // produces independent lighting/BSDF paths from the shared terminal continuation.
     uint seed = seg.seed ^ sampleIndex * 2246822519u;
@@ -116,6 +142,26 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             AmbientFog segFog = evalAmbientFog(worldPush.ambientFog, payload.hitT);
             L += throughput * segFog.inScatter;
             throughput *= segFog.transmittance;
+        }
+
+        // Cloud crossed on the way to this hit. The deck is a real volume in the world, so a ray that
+        // ends on GEOMETRY can still pass through cloud before it gets there — looking down at the
+        // ground from above the deck is exactly that case, and it is the one that was broken: clouds
+        // were composited only in the miss shader, which a terrain hit never reaches, so the world
+        // showed straight through them. Bounded by payload.hitT, so cloud in front of the surface is
+        // drawn and cloud behind it is rejected.
+        //
+        // Written as the same in-scatter/transmittance pair as the fog directly above, because it is
+        // the same kind of thing: a participating medium along this segment. Being in the path integral
+        // rather than at a display seam is what makes it correct in reflections and refractions too.
+        {
+            // showCelestial marks the rays whose clouds are seen directly (camera + specular bounces),
+            // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
+            CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
+                                                payload.hitT, cloudSkyAmbient(worldPush),
+                                                showCelestial);
+            L += throughput * segCloud.scatter;
+            throughput *= segCloud.transmittance;
         }
 
         float3 n = payload.normal; // oriented toward the incoming ray by the closest-hit
@@ -220,6 +266,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                // Particles are lit by the same sun as everything else, so they must dim under the same
+                // cloud. Skipping this would leave rain/smoke/spell particles glowing at full strength
+                // inside the shadow of a cloud that darkened the ground beneath them.
+                vis *= cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
                 }
@@ -307,9 +357,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
         float ndl = celestialLit ? max(0.0, dot(n, lightDir)) : 0.0;
+        // Cloud occlusion of the celestial light at this shading point. Computed ONCE here and shared by
+        // the front-face NEE below and the SSS transmission pass further down: both are the same sun
+        // arriving at the same point, so a cloud that shades one must shade the other by exactly the
+        // same amount — backlit leaves under a cloud should dim with the ground around them, not stay
+        // lit. Evaluating it twice would also double the cost for an identical answer.
+        //
+        // This is an analytic plane query, not a traced ray: it adds no shadow ray, no variance, and
+        // nothing for the denoiser to resolve, which is why cloud shadows are affordable at every
+        // vertex of every path rather than only on primary hits. The gate mirrors the union of the two
+        // consumers' own conditions exactly, so this is never evaluated for a vertex that would discard
+        // it — in particular it costs nothing in the Nether and the End, where celestialLit is always
+        // false.
+        float cloudShadow = (ndl > 0.0 || (sss > 0.0 && celestialLit))
+                ? cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir) : 1.0;
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance;
+            float3 vis = shadow.transmittance * cloudShadow;
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
@@ -353,7 +417,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                float3 visB = shadowBack.transmittance;
+                // Same cloud attenuation as the front-face NEE above — see cloudShadow.
+                float3 visB = shadowBack.transmittance * cloudShadow;
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
                 if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {

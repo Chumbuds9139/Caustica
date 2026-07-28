@@ -121,6 +121,8 @@ public final class RtComposite {
     private static final int FEATURE_SSS = 1;
     private static final int FEATURE_WEATHER_LIGHTING = 2;
     private static final int FEATURE_DENOISER = 4;
+    private static final int FEATURE_CLOUDS = 8;
+    private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -142,6 +144,14 @@ public final class RtComposite {
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
         }
+        if (CausticaConfig.Rt.Composite.CLOUDS.value()) {
+            flags |= FEATURE_CLOUDS;
+            // The style is a feature bit, not a packed float lane: featureFlags is exactly the word for
+            // player-facing effect toggles, and an integer bit survives every float quirk.
+            if (CausticaConfig.Rt.Composite.cloudStyleIndex() == CLOUD_STYLE_VOLUMETRIC) {
+                flags |= FEATURE_CLOUDS_VOLUMETRIC;
+            }
+        }
         // Reports what the pipeline is ACTUALLY doing, not just what the option asks for:
         // RtDlssRr.enabled() already folds in the backend switch, and a debug view suppresses RR
         // entirely (see recordFrame's rrPath), so a shader reading this flag learns whether its output
@@ -155,6 +165,44 @@ public final class RtComposite {
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
     // penumbrae). Radii in degrees; the real sun/moon are ~0.27°, but a touch larger reads pleasantly.
     private static final int WATER_ANCHOR_MASK = 4095;
+    // ---- Cloud deck. These mirror clouds.slang and must stay in lock-step with it.
+    //
+    // The classic field repeats every CLOUD_CELL_BLOCKS * CLOUD_PERIOD_CELLS = 12 * 512 = 6144 blocks,
+    // but the VOLUMETRIC field samples the same hash at CLOUD_VOLUMETRIC_SCALE (0.5), so in its own
+    // sampled space 6144 blocks is only half a period. Wrapping the anchor there landed mid-period and
+    // snapped the entire cloudscape to a different pattern — clouds visibly changing shape while
+    // walking, in the volumetric style only.
+    //
+    // The wrap must therefore be a whole period in EVERY space the field is sampled in: the base
+    // octaves, the domain warp, and both billow layers. The binding constraint is the largest octave
+    // divisor (CLOUD_WARP_DIV = 2.0 in clouds.slang):
+    //
+    //     period = 512 cells * 12 blocks/cell * maxDivisor(2.0) / scale(0.5) = 24576 blocks
+    //
+    // Every divisor there is a power of two, so all of these multiplies are exact in binary floating
+    // point and the wrap identity holds bit-for-bit rather than approximately. Verified: the full
+    // density function (base octaves + warp + billow) is now identical across a wrap to 0.0.
+    private static final double CLOUD_FIELD_PERIOD_BLOCKS = 512.0 * 12.0 * 2.0 / 0.5;
+    // Vanilla's clouds drift at 0.03 blocks/tick; matched so the sky moves at a familiar speed.
+    private static final double CLOUD_WIND_BLOCKS_PER_TICK = 0.03;
+    // Deck thickness at the slider's 100%. Both styles march a real slab now, so this is the depth the
+    // clouds actually have in the world: at full thickness a bank is tall enough to fly into, while the
+    // slider at 0 collapses the deck to the old flat plane.
+    // Real cumulus is as tall as it is wide, often taller — a bank whose base sits at cloud height can
+    // easily tower 100+ blocks. 40 was too shallow for the deck to ever read as heaped rather than
+    // layered, and since extinction is now normalised by the slab depth (CLOUD_REFERENCE_THICKNESS in
+    // clouds.slang) raising this adds VOLUME without making the clouds more opaque.
+    private static final float CLOUD_MAX_THICKNESS_BLOCKS = 110.0f;
+    // Mirrors clouds.slang's CLOUD_STYLE_* constants.
+    private static final int CLOUD_STYLE_VOLUMETRIC = 1;
+    // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
+    // into an aliasing band; the shader fades coverage out over the last stretch of this distance.
+    private static final float CLOUD_VIEW_LIMIT_BLOCKS = 3072.0f;
+    // The view limit has to scale with how far up the deck is, or a high deck fades out at a steep
+    // elevation: the fade is measured as horizontal distance, and looking 30 degrees up at a deck 1000
+    // blocks overhead is already ~1750 blocks out. Keeping at least this many multiples of the deck's
+    // height in view means the fade always stays down near the horizon where it belongs.
+    private static final float CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE = 6.0f;
     private static final Identifier SUN_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_IDS = createMoonIds();
     // Celestial rotation axis (the pole the sun/moon arc about): perpendicular to the east-west arc,
@@ -937,6 +985,8 @@ public final class RtComposite {
             WeatherState weather = weatherState(level,
                     Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false));
             SkyPush sky = skyPush(dimension, weather);
+            // Two lanes, resolved together from the same weather + camera state the sky above used.
+            CloudPush clouds = cloudState(dimension, weather, camY);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -976,6 +1026,8 @@ public final class RtComposite {
                     new Float4(weather.rain(), weather.thunder(), weather.skyDarken(),
                             weather.lightAttenuation()),
                     ambientFog(dimension, weather),
+                    clouds.clouds(),
+                    clouds.anchor(),
                     dimension,
                     featureFlags()
             ).write(push);
@@ -1149,6 +1201,19 @@ public final class RtComposite {
     }
 
     /**
+     * The two {@code WorldPush} cloud lanes, resolved together by {@link #cloudState} so a caller cannot
+     * push a deck's parameters with a mismatched anchor.
+     *
+     * @param clouds x coverage, y opacity, z shadow strength, w camera-relative deck height
+     * @param anchor xy wrapped sample anchor, z slab thickness, w view limit
+     */
+    private record CloudPush(Float4 clouds, Float4 anchor) {
+        /** No deck at all: a zeroed coverage/opacity pair short-circuits every cloud path in the shader. */
+        static final CloudPush NONE =
+                new CloudPush(new Float4(0f, 0f, 0f, 0f), new Float4(0f, 0f, 0f, 0f));
+    }
+
+    /**
      * Read vanilla's interpolated rain/thunder levels and turn them into the sky/light multipliers.
      *
      * <p>The curve: overcast rain keeps about 35% of the clear-sky light and 45% of the sky's own
@@ -1234,6 +1299,93 @@ public final class RtComposite {
                         0.0035f * weather.rain());
             }
         };
+    }
+
+    /**
+     * Resolve this frame's cloud deck into the two {@link WorldPushData} lanes {@code clouds.slang}
+     * reads: {@code clouds} (coverage, opacity, shadow strength, camera-relative deck height) and
+     * {@code cloudAnchor} (wind-scrolled sample anchor, slab thickness, view limit).
+     *
+     * <p><b>Coverage and weather.</b> Rain pushes coverage toward fully overcast on top of the
+     * configured clear-sky value, and thunder finishes closing it. That is the same rain/thunder pair
+     * the sky darkening and the light attenuation come from, so a storm's dark sky, its dimmer sunlight
+     * and its solid cloud cover are three readings of one state and cannot drift apart — the invariant
+     * {@link #weatherState} already establishes for the rest of the weather look. It also fixes the
+     * thing the sky shader always claimed but could never show: it hides the sun "behind the cloud
+     * deck" during rain, and now there is an actual deck there to hide it.
+     *
+     * <p><b>The anchor.</b> Clouds drift with world time, so the sample offset grows without bound; the
+     * camera can also stand 30M blocks out at the world border. Either alone would destroy float
+     * precision in the shader's noise lookup (visible as the pattern coarsening into stripes and then
+     * freezing). The anchor is therefore reduced modulo the cloud field's exact repeat period, which is
+     * seamless precisely because {@code clouds.slang} wraps its cell hash to that same period, so the
+     * wrapped anchor selects the identical pattern the unwrapped one would have.
+     *
+     * <p><b>Height.</b> Pushed camera-relative, matching every other position in the push (the terrain
+     * rebase means absolute world coordinates are not meaningful in the shader).
+     */
+    private CloudPush cloudState(int dimension, WeatherState weather, double cameraY) {
+        float coverage = CausticaConfig.Rt.Composite.CLOUD_COVERAGE.value();
+        float opacity = CausticaConfig.Rt.Composite.CLOUD_OPACITY.value();
+        float shadow = CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH.value();
+        if (dimension != DIMENSION_OVERWORLD) {
+            // Neither the Nether nor the End has a sky to put clouds in; both draw a closed skybox.
+            return CloudPush.NONE;
+        }
+        // Overcast ramp: rain closes most of the remaining gap toward full cover, thunder the rest.
+        float overcast = Math.min(1f, weather.rain() * 0.85f + weather.thunder() * 0.15f);
+        coverage = coverage + (1f - coverage) * overcast;
+        float height = CausticaConfig.Rt.Composite.CLOUD_HEIGHT.value();
+        // Wind drift, in blocks, from world time. Wrapped with the anchor below.
+        double gameTime = 0.0;
+        var level = Minecraft.getInstance().level;
+        if (level != null) {
+            gameTime = level.getGameTime()
+                    + Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
+        }
+        double drift = gameTime * CLOUD_WIND_BLOCKS_PER_TICK;
+        // camX/camZ place the deck in world space; the shader adds the ray's camera-relative offset back
+        // on, so the pattern stays pinned to the world while the camera moves through it.
+        double anchorX = camX + drift;
+        double anchorZ = camZ;
+        // Player-controlled thickness, shared by both styles. At 0 the shader takes its flat-plane path
+        // (see CLOUD_FLAT_EPSILON in clouds.slang), so the slider bottoming out is genuinely a flat deck
+        // rather than a degenerate zero-length march.
+        float thickness = Math.clamp(CausticaConfig.Rt.Composite.CLOUD_THICKNESS.value(), 0f, 1f)
+                * CLOUD_MAX_THICKNESS_BLOCKS;
+        // The slider sets the deck's BASE, but the shader's slab is centred on the pushed height, so the
+        // half-thickness is added back here. Pushing the base directly would make the clouds appear to
+        // sink as the thickness slider is raised (the slab would grow downward as well as upward), which
+        // would make the two sliders fight each other — the base is the edge the player actually sees
+        // and judges the height by.
+        float deckCentre = height + thickness * 0.5f;
+        return new CloudPush(
+                new Float4(Math.clamp(coverage, 0f, 1f), Math.clamp(opacity, 0f, 1f),
+                        Math.clamp(shadow, 0f, 1f), (float) (deckCentre - cameraY)),
+                new Float4(wrapCloudAnchor(anchorX), wrapCloudAnchor(anchorZ),
+                        thickness, cloudViewLimit(deckCentre - (float) cameraY)));
+    }
+
+    /**
+     * How far out clouds stay visible, in blocks of horizontal distance.
+     *
+     * <p>Scales with the deck's height above the camera so a high deck does not fade out while still
+     * well up in the sky — see {@link #CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE}. A deck at or below the camera
+     * falls back to the flat limit.
+     */
+    private static float cloudViewLimit(float deckAboveCamera) {
+        return Math.max(CLOUD_VIEW_LIMIT_BLOCKS,
+                Math.abs(deckAboveCamera) * CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE);
+    }
+
+    /** Reduce a world coordinate into the cloud field's exact repeat period — see {@link #cloudState}. */
+    private static float wrapCloudAnchor(double blocks) {
+        double period = CLOUD_FIELD_PERIOD_BLOCKS;
+        double wrapped = blocks % period;
+        if (wrapped < 0.0) {
+            wrapped += period;
+        }
+        return (float) wrapped;
     }
 
     /**

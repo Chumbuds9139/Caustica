@@ -594,6 +594,75 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting DENOISER =
                     bool("caustica.rt.denoiser", "composite.denoiser", true);
+            /**
+             * Flat, vanilla-style cloud deck drawn by the sky shader.
+             *
+             * <p>Caustica cancels vanilla's {@code LevelRenderer}, and vanilla's cloud pass lives inside
+             * it, so without this the ray-traced world has no clouds at all. Off restores that
+             * (cloudless) behaviour; the deck also follows the vanilla Clouds video option, so setting
+             * that to OFF hides it regardless of this toggle.
+             */
+            public static final BooleanSetting CLOUDS =
+                    bool("caustica.rt.clouds", "composite.clouds", true);
+            /**
+             * Cloud rendering style.
+             *
+             * <p>{@code classic} reproduces vanilla's flat, blocky deck: coverage is quantised to the
+             * 12-block cell grid so the silhouette is genuinely square-edged, and the slab is shaded
+             * with vanilla's distinct top/side/bottom faces. {@code volumetric} extrudes the same
+             * coverage map into a ray-marched slab with self-shadowing and forward scattering — the
+             * look heavy shaderpacks produce, at a real GPU cost.
+             *
+             * <p>Both styles read one shared coverage field, so switching does not move the clouds and
+             * the cloud shadows stay identical between them.
+             */
+            public static final StringSetting CLOUD_STYLE =
+                    string("caustica.rt.cloudStyle", "composite.cloud-style", "classic",
+                            Composite::sanitizeCloudStyle);
+            /**
+             * Cloud thickness, 0..1, as a fraction of {@link #CLOUD_MAX_THICKNESS_BLOCKS}.
+             *
+             * <p>0 is a flat sheet (the deck collapses to a plane and takes the cheap non-marched
+             * path); 1 is a deep bank. Applies to BOTH styles — classic clouds become real vanilla-like
+             * boxes with lit tops and shaded sides rather than a decal, and volumetric clouds gain the
+             * depth their shading needs to read as cumulus.
+             */
+            public static final FloatSetting CLOUD_THICKNESS =
+                    clampedFloat("caustica.rt.cloudThickness", "composite.cloud-thickness", 0.5f, 0.0f, 1.0f);
+            /**
+             * How much the cloud deck darkens the sun/moon light reaching the ground beneath it.
+             *
+             * <p>0 means clouds are visible in the sky but cast nothing; 1 means a fully opaque cloud
+             * blocks the celestial light completely. The shadow is an analytic query against the same
+             * density function the visible deck is drawn from, so it costs no extra ray and the shadow
+             * on the ground always matches the cloud overhead.
+             */
+            public static final FloatSetting CLOUD_SHADOW_STRENGTH =
+                    clampedFloat("caustica.rt.cloudShadowStrength", "composite.cloud-shadow-strength",
+                            0.75f, 0.0f, 1.0f);
+            /**
+             * Opacity of the cloud deck. 0 is invisible (and skips the whole cloud path), 1 fully hides
+             * the sky behind a cloud. Values in between let the sky, sun and stars show through.
+             */
+            public static final FloatSetting CLOUD_OPACITY =
+                    clampedFloat("caustica.rt.cloudOpacity", "composite.cloud-opacity", 0.9f, 0.0f, 1.0f);
+            /**
+             * World Y the BASE of the cloud deck sits at. Vanilla's clouds sit at 192; the default is
+             * higher because Caustica's clouds have real thickness and a deck whose base is at vanilla
+             * height reads as much closer to the ground than vanilla's flat sheet does.
+             *
+             * <p>Exposed as a slider: with volumetric clouds the deck's distance is a strong part of the
+             * look, and the right value depends on the world's terrain height and the player's taste.
+             * The range comfortably spans from just above build height to far overhead.
+             */
+            public static final FloatSetting CLOUD_HEIGHT =
+                    clampedFloat("caustica.rt.cloudHeight", "composite.cloud-height", 320.0f, 128.0f, 1024.0f);
+            /**
+             * Fraction of the sky the deck covers in clear weather. Rain drives this toward fully
+             * overcast on top of whatever is set here (see {@code RtComposite.cloudState}).
+             */
+            public static final FloatSetting CLOUD_COVERAGE =
+                    clampedFloat("caustica.rt.cloudCoverage", "composite.cloud-coverage", 0.55f, 0.0f, 1.0f);
             public static final FloatSetting SUN_ANGULAR_RADIUS =
                     radians("caustica.rt.sunAngularRadius", "composite.sun-angular-radius-deg", 0.6f);
             public static final FloatSetting MOON_ANGULAR_RADIUS =
@@ -606,6 +675,21 @@ public final class CausticaConfig {
                     finiteFloat("caustica.rt.jitterSignY", "composite.jitter-sign-y", -1.0f);
 
             private Composite() {
+            }
+
+            /** Shader-side style id; mirrors {@code clouds.slang}'s CLOUD_STYLE_* constants. */
+            public static int cloudStyleIndex() {
+                return "volumetric".equals(CLOUD_STYLE.get()) ? 1 : 0;
+            }
+
+            private static String sanitizeCloudStyle(String value) {
+                if (value == null) {
+                    return "classic";
+                }
+                return switch (value.toLowerCase(java.util.Locale.ROOT).replace('-', '_')) {
+                    case "volumetric", "volumetrics", "realistic", "3d" -> "volumetric";
+                    default -> "classic";
+                };
             }
         }
 

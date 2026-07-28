@@ -25,6 +25,8 @@ changes while the renderer is being built.
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support, including toggleable subsurface scattering
 - Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
+- Volumetric 3D clouds in classic (vanilla-style boxes) or photoreal cumulus form,
+  with adjustable thickness, opacity and cloud shadows, visible in reflections
 - Dedicated Nether and End skyboxes with per-dimension ambient fog
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 
@@ -82,7 +84,7 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [ ] Nether/End sky, weather, volumetric fog/clouds
+- [ ] Multi-layer / cirrus clouds and cloud-shadow softening
 - [ ] NRD + FSR for non-NVIDIA GPUs
 - [ ] LOD
 - [ ] ReSTIR

@@ -42,6 +42,14 @@ public final class RtVideoOptions {
             // pairs them two per row, so they read as one block rather than scattered checkboxes.
             subsurfaceScattering(),
             weatherLighting(),
+            // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
+            // the other two reads immediately before them.
+            clouds(),
+            cloudStyle(),
+            cloudHeight(),
+            cloudThickness(),
+            cloudShadowStrength(),
+            cloudOpacity(),
             denoiser(),
             handFov(),
             dlssQuality(),
@@ -220,6 +228,94 @@ public final class RtVideoOptions {
     }
 
     /**
+     * The ray-traced cloud deck. Caustica cancels vanilla's world renderer, and vanilla's clouds are
+     * drawn inside it, so this switch is what puts clouds in the sky at all.
+     */
+    private static OptionInstance<Boolean> clouds() {
+        return bool("caustica.options.rt.clouds", CausticaConfig.Rt.Composite.CLOUDS);
+    }
+
+    private static final List<String> CLOUD_STYLES = List.of("classic", "volumetric");
+
+    // Cloud-height slider bounds, in world Y. Must stay inside CausticaConfig's own clamp on
+    // CLOUD_HEIGHT, which is what actually guards the value.
+    private static final int CLOUD_HEIGHT_MIN = 128;
+    private static final int CLOUD_HEIGHT_MAX = 1024;
+    private static final int CLOUD_HEIGHT_STEP = 8;
+
+    /**
+     * Cloud rendering style: vanilla's flat blocky deck, or a ray-marched volumetric slab.
+     *
+     * <p>Both styles are two readings of one shared coverage field, so switching does not move the
+     * clouds — the same cloud is simply drawn flat or with depth — and the cloud shadows are unchanged
+     * between them. Volumetric costs real GPU time (it marches the slab and light-marches for
+     * self-shadowing); classic is nearly free.
+     */
+    private static OptionInstance<String> cloudStyle() {
+        StringSetting setting = CausticaConfig.Rt.Composite.CLOUD_STYLE;
+        return new OptionInstance<>(
+            "caustica.options.rt.cloudStyle",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.cloudStyle.tooltip")),
+            // CycleButton (used for Enum values) already prepends "caption: " itself, so this must
+            // return only the value's text, not caption + value again.
+            (caption, value) -> Component.translatable("caustica.options.rt.cloudStyle." + value),
+            new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
+            CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
+            setting::set);
+    }
+
+    /**
+     * World Y the base of the cloud deck sits at, in blocks.
+     *
+     * <p>Stepped in 8-block increments: the slider spans nearly 900 blocks, and single-block precision
+     * on a deck hundreds of blocks overhead is below what the eye can resolve, so coarser steps make it
+     * far easier to land on a value.
+     */
+    private static OptionInstance<Integer> cloudHeight() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.CLOUD_HEIGHT;
+        int steps = (CLOUD_HEIGHT_MAX - CLOUD_HEIGHT_MIN) / CLOUD_HEIGHT_STEP;
+        int initial = Math.clamp(
+                Math.round((setting.value() - CLOUD_HEIGHT_MIN) / CLOUD_HEIGHT_STEP), 0, steps);
+        return new OptionInstance<>(
+            "caustica.options.rt.cloudHeight",
+            OptionInstance.cachedConstantTooltip(
+                    Component.translatable("caustica.options.rt.cloudHeight.tooltip")),
+            (caption, step) -> Options.genericValueLabel(caption,
+                    Component.literal("Y " + (CLOUD_HEIGHT_MIN + step * CLOUD_HEIGHT_STEP))),
+            new OptionInstance.IntRange(0, steps),
+            initial,
+            step -> setting.set((float) (CLOUD_HEIGHT_MIN + step * CLOUD_HEIGHT_STEP)));
+    }
+
+    /**
+     * Cloud thickness, as a percentage of the maximum deck depth. Applies to both styles: 0% is a flat
+     * sheet, 100% is a deep bank you can fly into. Classic clouds become real boxes with lit tops and
+     * darker sides, the way vanilla's cloud geometry looks; volumetric clouds gain the depth their
+     * shading needs. Thicker clouds cost more to march.
+     */
+    private static OptionInstance<Integer> cloudThickness() {
+        return percent("caustica.options.rt.cloudThickness",
+                CausticaConfig.Rt.Composite.CLOUD_THICKNESS);
+    }
+
+    /**
+     * How strongly the cloud deck shadows the world beneath it, as a percentage. 0% draws clouds that
+     * cast nothing; 100% lets a solid cloud block the sun outright.
+     */
+    private static OptionInstance<Integer> cloudShadowStrength() {
+        return percent("caustica.options.rt.cloudShadowStrength",
+                CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH);
+    }
+
+    /**
+     * How opaque the deck is, as a percentage: 0% is fully transparent (invisible, and the cloud path is
+     * skipped entirely), 100% completely hides the sky behind it.
+     */
+    private static OptionInstance<Integer> cloudOpacity() {
+        return percent("caustica.options.rt.cloudOpacity", CausticaConfig.Rt.Composite.CLOUD_OPACITY);
+    }
+
+    /**
      * The denoising filter (DLSS Ray Reconstruction). Turning it off shows the raw path-traced image —
      * a correct but noisy reference view — and, because RR also owns the upscale, moves the trace to
      * full display resolution. Safe to toggle live: {@code RtComposite.ensureOutput} re-sizes the trace
@@ -305,6 +401,20 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(minTenths, maxTenths),
             Math.clamp(Math.round(setting.value() * 10.0f), minTenths, maxTenths),
             tenths -> setting.set(tenths / 10.0f));
+    }
+
+    /**
+     * A 0..1 float exposed as a 0..100% slider. The setting itself is clamped to [0,1] in the config, so
+     * the slider range and the stored domain are the same thing expressed in different units.
+     */
+    private static OptionInstance<Integer> percent(String captionKey, FloatSetting setting) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, Component.literal(value + "%")),
+            new OptionInstance.IntRange(0, 100),
+            Math.clamp(Math.round(setting.value() * 100.0f), 0, 100),
+            value -> setting.set(value / 100.0f));
     }
 
     private static OptionInstance<Integer> hundredths(String captionKey, FloatSetting setting, int min, int max) {

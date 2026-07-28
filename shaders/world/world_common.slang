@@ -76,6 +76,12 @@ public struct WorldPush {
     // Uniform ambient in-scattering along every path segment: the Nether's thick haze, the End's void
     // dust, and the Overworld's rain murk all reduce to one colour + one per-block density.
     public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
+    // Flat vanilla-style cloud deck (clouds.slang). Coverage already folds in the weather on the Java
+    // side (RtComposite.cloudState), so the shader reads one resolved state rather than re-deriving the
+    // storm ramp the sky darkening also depends on. The two slider lanes (shadow strength, opacity) are
+    // pushed raw so a mid-frame change takes effect on the next frame like every other RT option.
+    public float4   clouds;           // x coverage 0..1, y opacity 0..1, z shadow strength 0..1, w deck height (camera-relative blocks)
+    public float4   cloudAnchor;      // xy wind-scrolled sample anchor (blocks, wrapped), z slab thickness, w view limit
     public uint     dimension;        // DIMENSION_OVERWORLD / DIMENSION_NETHER / DIMENSION_END
     public uint     featureFlags;     // FEATURE_* toggles resolved from CausticaConfig
 };
@@ -93,6 +99,8 @@ public static const uint DIMENSION_END = 2u;
 public static const uint FEATURE_SSS = 1u;               // LabPBR subsurface scattering
 public static const uint FEATURE_WEATHER_LIGHTING = 2u;  // rain/storm sky darkening + light attenuation
 public static const uint FEATURE_DENOISER = 4u;          // temporal/spatial denoising filter is active
+public static const uint FEATURE_CLOUDS = 8u;            // cloud deck in the sky + its sun shadow
+public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marched, not a flat deck
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
