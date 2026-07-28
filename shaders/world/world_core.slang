@@ -62,18 +62,12 @@ public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED
 /** SSS strength after the player toggle: the material value, or a hard zero when SSS is disabled. */
 public float payloadActiveSss() { return sssEnabled() ? payloadSss() : 0.0; }
 
-// Firefly ceilings, lerped between by WorldPush.temporalAccum. A rare very bright sample is exactly
-// the energy a full-strength temporal filter is built to absorb, and clamping it would darken the
-// image; with no accumulation at all that same sample is a permanent white speck in every frame —
-// the single worst artefact of the raw reference view at low SPP. world.rgen therefore scales the
-// ceiling by the EFFECTIVE temporal-stability amount for the frame: 0 (denoiser off, debug view, or
-// the Temporal Accumulation slider bottomed out) reproduces the old unconditional undenoised clamp,
-// and lowering the slider tightens toward it as there is progressively less history to average a
-// spike out. The denoised ceiling stays finite instead of skipping the clamp entirely so a
-// pathological spike can never poison fresh history right after a reset; at 1e6 luminance nothing
-// legitimate (sun disc, NEE highlights) ever reaches it.
+// Firefly ceiling for the UNDENOISED path. With RR running, a rare very bright sample is exactly the
+// energy the temporal filter is built to absorb, and clamping it would darken the image. With RR off
+// there is no accumulation at all, so that same sample is a permanent white speck in every frame — the
+// single worst artefact of the raw reference view at low SPP. Applied only when the denoiser is off,
+// which keeps the denoised path bit-identical to before this option existed.
 public static const float UNDENOISED_FIREFLY_MAX_LUMINANCE = 24.0;
-public static const float DENOISED_FIREFLY_MAX_LUMINANCE = 1.0e6;
 
 public static const float PI = 3.14159265359;
 public static const float INV_PI = 0.31830988618;

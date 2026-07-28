@@ -59,8 +59,7 @@ public final class CausticaConfig {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
-            Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED,
-            Rt.DlssRr.TEMPORAL_ACCUMULATION, Rt.Fg.ENABLED,
+            Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
@@ -96,12 +95,6 @@ public final class CausticaConfig {
                         + " thunderstorms. Off keeps clear-sky lighting in all weather.\n"
                         + " denoiser: the DLSS Ray Reconstruction denoise+upscale filter. Off presents the raw\n"
                         + " path-traced image at full resolution (noisy reference view). Requires dlss-rr.enabled.");
-        FILE.setComment("dlss-rr",
-                " DLSS Ray Reconstruction backend. enabled is the backend/capability switch; the\n"
-                        + " player-facing exposure of the same feature is composite.denoiser, and both must be\n"
-                        + " on for the filter to run. temporal-accumulation (0..1) controls how aggressively\n"
-                        + " frames blend over time: lower values react faster to scene changes (less ghosting\n"
-                        + " after block edits, more visible noise), 1.0 keeps maximum temporal stability.");
         FILE.setComment("terrain",
                 " Render-thread terrain work is bounded by dispatch/result counts per streaming pass.\n"
                         + " Buffer fill and BLAS/OMM preparation run on workers. max-inflight-sections bounds\n"
@@ -755,27 +748,6 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.dlssRr", "dlss-rr.enabled", true);
             public static final IntSetting PRESET = intValue("caustica.rt.dlssRr.preset", "dlss-rr.preset", 0);
             public static final IntSetting QUALITY = intValue("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0);
-            /**
-             * Temporal stability knob for the denoising filter, 0..1 ("Temporal Accumulation" in Video
-             * Settings). DLSS-RR owns the actual history buffer and exposes no blend factor, so this
-             * drives the levers the renderer itself controls:
-             *
-             * <ul>
-             *   <li>a cap on how many consecutive static-view frames may blend before history is
-             *       force-reset (see {@code RtComposite}'s accumulation budget) — 1.0 is unlimited,
-             *       the historical behaviour where a perfectly still view integrates forever;
-             *   <li>how much firefly energy the shaders trust temporal accumulation to absorb
-             *       ({@code WorldPush.temporalAccum}), which tightens the firefly clamp as the value
-             *       drops toward the undenoised ceiling.
-             * </ul>
-             *
-             * <p>Lower values trade noise reduction for responsiveness to scene changes (block edits,
-             * break-crack stages); higher values keep the most stable image but smear changes into
-             * longer ghost trails. Block edits near the player always reset history on the frame they
-             * publish, regardless of this setting.
-             */
-            public static final FloatSetting TEMPORAL_ACCUMULATION = clampedFloat(
-                    "caustica.rt.dlssRr.temporalAccumulation", "dlss-rr.temporal-accumulation", 1.0f, 0.0f, 1.0f);
 
             private DlssRr() {
             }

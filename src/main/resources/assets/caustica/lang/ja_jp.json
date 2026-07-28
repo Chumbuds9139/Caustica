@@ -39,9 +39,6 @@
 	"caustica.options.rt.denoiser": "ノイズ除去フィルター",
 	"caustica.options.rt.denoiser.tooltip": "パストレーシング画像に DLSS Ray Reconstruction のノイズ除去フィルターを適用します。オフにすると、生のノイズを含むトレース結果をフル解像度で表示します。参照用としては便利ですが、サンプル数が少ないと非常に粗くなります。DLSS Ray Reconstruction 対応が必要です。",
 
-	"caustica.options.rt.temporalAccumulation": "時間的アキュムレーション",
-	"caustica.options.rt.temporalAccumulation.tooltip": "フィルターがフレームを時間方向にどれだけ強くブレンドするかを調整します。値を上げるとより安定してノイズの少ない映像になりますが、シーンの変化がゴーストの残像として残りやすくなります。値を下げるとブロック編集や破壊アニメーションへの追従が速くなる代わりにノイズが目立ちます。近くのブロック編集では常に履歴がリセットされます。この設定は完全に静止しているときのブレンド量の上限です。",
-
 	"caustica.options.rt.handFov": "手の視野角",
 	"caustica.options.rt.handFov.tooltip": "一人称の手と手持ちアイテムをゲームの視野角に連動させます。オンにすると視野角を広げるほど腕が遠ざかり、狭めるほど近づきます。オフにすると通常の固定された手の視野角に戻ります。",
 
