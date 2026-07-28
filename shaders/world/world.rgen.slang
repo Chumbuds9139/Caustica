@@ -446,14 +446,15 @@ void main() {
         recordIndex = packed.nextRecord;
     }
     float3 radiance = frameRadiance / float(spp);
-    // Firefly clamp for the raw (undenoised) view only — see UNDENOISED_FIREFLY_MAX_LUMINANCE. Scaling
-    // the whole colour by the luminance ratio preserves hue and saturation, so a clamped highlight
-    // desaturates toward nothing rather than shifting colour.
-    if (!denoiserEnabled()) {
-        float lum = luminance(radiance);
-        if (lum > UNDENOISED_FIREFLY_MAX_LUMINANCE) {
-            radiance *= UNDENOISED_FIREFLY_MAX_LUMINANCE / lum;
-        }
+    // Firefly clamp scaled by the frame's effective temporal stability (WorldPush.temporalAccum) —
+    // see UNDENOISED/DENOISED_FIREFLY_MAX_LUMINANCE. Scaling the whole colour by the luminance ratio
+    // preserves hue and saturation, so a clamped highlight desaturates toward nothing rather than
+    // shifting colour.
+    float lum = luminance(radiance);
+    float fireflyCeiling = lerp(UNDENOISED_FIREFLY_MAX_LUMINANCE, DENOISED_FIREFLY_MAX_LUMINANCE,
+                                clamp(worldPush.temporalAccum, 0.0, 1.0));
+    if (lum > fireflyCeiling) {
+        radiance *= fireflyCeiling / lum;
     }
     outImage[pix] = float4(radiance, 1.0);
 }

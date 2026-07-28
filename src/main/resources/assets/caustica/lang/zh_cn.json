@@ -39,6 +39,9 @@
 	"caustica.options.rt.denoiser": "降噪滤镜",
 	"caustica.options.rt.denoiser.tooltip": "对路径追踪图像应用 DLSS Ray Reconstruction 降噪滤镜。关闭后将以完整分辨率显示原始的带噪追踪结果——可作为参考画面，但在低采样数下颗粒感明显更强。需要 DLSS Ray Reconstruction 支持。",
 
+	"caustica.options.rt.temporalAccumulation": "时间累积",
+	"caustica.options.rt.temporalAccumulation.tooltip": "滤镜随时间混合帧的强度。数值越高，画面越稳定、噪点越少，但场景变化会以残影拖尾停留更久；数值越低，对方块编辑和破坏裂纹动画的响应越快，代价是噪点更明显。附近的方块编辑总会清空时间历史——该选项限制的是画面完全静止时的混合时长。",
+
 	"caustica.options.rt.handFov": "手部视野",
 	"caustica.options.rt.handFov.tooltip": "让第一人称的手和手持物品跟随游戏视野设置。开启时，视野越大手臂越远，视野越小手臂越近。关闭时恢复原版固定的手部视野。",
 

@@ -78,6 +78,14 @@ public struct WorldPush {
     public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
     public uint     dimension;        // DIMENSION_OVERWORLD / DIMENSION_NETHER / DIMENSION_END
     public uint     featureFlags;     // FEATURE_* toggles resolved from CausticaConfig
+    // Effective temporal-stability amount 0..1 (CausticaConfig.Rt.DlssRr.TEMPORAL_ACCUMULATION,
+    // the "Temporal Accumulation" Video Settings slider), already resolved on the CPU to what this
+    // frame's image will actually experience: the player's setting while DLSS-RR runs, 0 for the
+    // raw/debug paths (no temporal filter at all). Shaders use it to scale how much firefly energy a
+    // temporal filter can be trusted to absorb — fewer blended frames ⇒ clamp harder, because less
+    // history exists to average a spike out. The CPU also uses the setting to cap consecutive
+    // static-frame blending with periodic history resets; that half never reaches the shaders.
+    public float    temporalAccum;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

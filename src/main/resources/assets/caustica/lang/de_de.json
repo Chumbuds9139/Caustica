@@ -39,6 +39,9 @@
 	"caustica.options.rt.denoiser": "Rauschunterdrückungsfilter",
 	"caustica.options.rt.denoiser.tooltip": "Wendet den Rauschunterdrückungsfilter von DLSS Ray Reconstruction auf das pfadverfolgte Bild an. Aus zeigt den rohen, verrauschten Trace in voller Auflösung – als Referenzansicht nützlich, bei wenigen Samples aber deutlich körniger. Erfordert DLSS-Ray-Reconstruction-Unterstützung.",
 
+	"caustica.options.rt.temporalAccumulation": "Temporale Akkumulation",
+	"caustica.options.rt.temporalAccumulation.tooltip": "Wie stark der Filter Einzelbilder über die Zeit mischt. Höhere Werte liefern ein stabileres, saubereres Bild, lassen Szenenänderungen aber als Geisterbilder nachziehen; niedrigere Werte reagieren schneller auf Blockänderungen und Zerstöranimationen auf Kosten von sichtbarerem Rauschen. Blockänderungen in der Nähe leeren die Historie immer – dieser Wert begrenzt das Mischen bei völlig stiller Ansicht.",
+
 	"caustica.options.rt.handFov": "Hand-Sichtfeld",
 	"caustica.options.rt.handFov.tooltip": "Lässt die Hand und das gehaltene Item in der Ego-Perspektive dem Sichtfeld des Spiels folgen. An: Ein größeres Sichtfeld schiebt den Arm weiter weg, ein kleineres holt ihn näher heran. Aus: stellt das feste Sichtfeld der Hand wieder her.",
 
