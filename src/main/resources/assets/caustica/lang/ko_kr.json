@@ -69,6 +69,8 @@
 	"caustica.options.rt.debugView.5": "모션",
 	"caustica.options.rt.debugView.6": "스페큘러",
 	"caustica.options.rt.debugView.7": "스페큘러 모션",
+	"caustica.options.rt.debugView.8": "발광 마스크",
+	"caustica.options.rt.debugView.9": "발광 소스",
 
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",

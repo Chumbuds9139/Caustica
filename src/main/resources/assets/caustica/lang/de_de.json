@@ -69,6 +69,8 @@
 	"caustica.options.rt.debugView.5": "Bewegung",
 	"caustica.options.rt.debugView.6": "Spiegelnd",
 	"caustica.options.rt.debugView.7": "Spiegelnde Bewegung",
+	"caustica.options.rt.debugView.8": "Emissionsmaske",
+	"caustica.options.rt.debugView.9": "Emissionsquelle",
 
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",

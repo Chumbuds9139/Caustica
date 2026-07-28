@@ -69,6 +69,8 @@
 	"caustica.options.rt.debugView.5": "モーション",
 	"caustica.options.rt.debugView.6": "スペキュラー",
 	"caustica.options.rt.debugView.7": "スペキュラーモーション",
+	"caustica.options.rt.debugView.8": "発光マスク",
+	"caustica.options.rt.debugView.9": "発光元",
 
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
