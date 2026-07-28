@@ -39,6 +39,9 @@
 	"caustica.options.rt.denoiser": "Denoising Filter",
 	"caustica.options.rt.denoiser.tooltip": "Apply the DLSS Ray Reconstruction denoising filter to the path-traced image. Off shows the raw, noisy trace at full resolution — useful as a reference view, but far grainier at low sample counts. Requires DLSS Ray Reconstruction support.",
 
+	"caustica.options.rt.temporalAccumulation": "Temporal Accumulation",
+	"caustica.options.rt.temporalAccumulation.tooltip": "How aggressively the denoiser blends frames over time. Higher values give a more stable, cleaner image but let scene changes smear into ghost trails; lower values react faster to block edits and break animations at the cost of more visible noise. Nearby block edits always flush temporal history — this caps blending while the view is perfectly still.",
+
 	"caustica.options.rt.handFov": "Hand FOV",
 	"caustica.options.rt.handFov.tooltip": "Make the first-person hand and held item follow the game's FOV setting. On, a higher FOV pushes the arm further away and a lower FOV brings it closer. Off restores vanilla's fixed hand FOV.",
 

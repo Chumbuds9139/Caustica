@@ -39,6 +39,9 @@
 	"caustica.options.rt.denoiser": "Filtre de débruitage",
 	"caustica.options.rt.denoiser.tooltip": "Applique le filtre de débruitage DLSS Ray Reconstruction à l'image en path tracing. Désactivé, affiche le rendu brut et bruité en pleine résolution — utile comme vue de référence, mais bien plus granuleux à faible nombre d'échantillons. Nécessite la prise en charge de DLSS Ray Reconstruction.",
 
+	"caustica.options.rt.temporalAccumulation": "Accumulation temporelle",
+	"caustica.options.rt.temporalAccumulation.tooltip": "Agressivité avec laquelle le filtre mélange les images au fil du temps. Des valeurs élevées donnent une image plus stable et plus propre, mais font traîner les changements de scène en traînées fantômes ; des valeurs basses réagissent plus vite aux modifications de blocs et aux animations de casse, au prix d'un bruit plus visible. Les modifications de blocs proches vident toujours l'historique temporel — ceci borne le mélange lorsque la vue est parfaitement immobile.",
+
 	"caustica.options.rt.handFov": "Champ de vision de la main",
 	"caustica.options.rt.handFov.tooltip": "Fait suivre au bras et à l'objet en première personne le champ de vision du jeu. Activé, un champ de vision plus large éloigne le bras et un champ plus étroit le rapproche. Désactivé, rétablit le champ de vision fixe d'origine.",
 

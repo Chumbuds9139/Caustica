@@ -43,6 +43,7 @@ public final class RtVideoOptions {
             subsurfaceScattering(),
             weatherLighting(),
             denoiser(),
+            temporalAccumulation(),
             handFov(),
             dlssQuality(),
             hdrEnabled(),
@@ -227,6 +228,25 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> denoiser() {
         return bool("caustica.options.rt.denoiser", CausticaConfig.Rt.Composite.DENOISER);
+    }
+
+    /**
+     * Temporal accumulation (history stability), shown as a percentage. DLSS-RR exposes no blend
+     * factor of its own, so the value drives the renderer-side levers: how many consecutive
+     * static-view frames may blend before history is force-flushed, and how hard the shaders clamp
+     * fireflies the temporal filter can no longer be trusted to absorb. Read fresh every frame, so
+     * dragging the slider takes effect immediately. Block edits near the player reset history
+     * regardless of this setting — see {@code RtDlssRr.invalidateHistory}.
+     */
+    private static OptionInstance<Integer> temporalAccumulation() {
+        FloatSetting setting = CausticaConfig.Rt.DlssRr.TEMPORAL_ACCUMULATION;
+        return new OptionInstance<>(
+            "caustica.options.rt.temporalAccumulation",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.temporalAccumulation.tooltip")),
+            (caption, percent) -> Options.genericValueLabel(caption, Component.literal(percent + "%")),
+            new OptionInstance.IntRange(5, 100),
+            Math.clamp(Math.round(setting.value() * 100.0f), 5, 100),
+            percent -> setting.set(percent / 100.0f));
     }
 
     /**

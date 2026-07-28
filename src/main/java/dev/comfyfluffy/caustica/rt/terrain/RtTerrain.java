@@ -195,6 +195,25 @@ public final class RtTerrain {
     // STREAM_FALLBACK_AFTER_NANOS).
     private long lastFrameStreamNanos;
 
+    /**
+     * Sections whose AABB comes within this many blocks of the player count as "near-player" edits for
+     * temporal-history invalidation. Chosen to cover comfortable interaction range (mining, building,
+     * doors, farmland — everything within a few sections) while leaving distant chunk streaming
+     * alone: killing RR's history for every far chunk that pops in would keep a walking player's view
+     * permanently un-converged, and distant pop-in ghosts too briefly to read as a smear.
+     */
+    private static final int HISTORY_INVALIDATION_RADIUS = 48;
+
+    /**
+     * Serial bumped by {@link #applyBuildChanges} whenever published terrain geometry near the player
+     * changes. {@code RtComposite} watches it and resets DLSS-RR's temporal history on exactly the
+     * frame edited geometry enters the TLAS — RR reprojects history from camera motion alone and has
+     * no notion of world edits, so without the flush a broken block keeps smearing over the new image
+     * for the accumulator's whole convergence window (the "ghost block" when mining while standing
+     * still). Volatile only for hygiene; publishers and the watcher all run on the render thread.
+     */
+    private static volatile long nearbyGeometryChangeSerial;
+
     private RtTerrain() {
         missingIndex.defaultReturnValue(NO_MISSING_INDEX);
         queuedDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
@@ -228,6 +247,15 @@ public final class RtTerrain {
      */
     public List<RtAccel.Instance> staticInstances() {
         return table.instances;
+    }
+
+    /**
+     * Serial of the most recent near-player terrain publication — see the field's javadoc. Readers
+     * compare it against their own last-seen value to learn "geometry close to the player changed
+     * since I last looked".
+     */
+    public static long nearbyGeometryChangeSerial() {
+        return nearbyGeometryChangeSerial;
     }
 
     /** Section table device address: {@code {u64 primAddr, u64 uvAddr, u32 triBase[4]}} per section, indexed by gl_InstanceCustomIndexEXT. */
@@ -1482,6 +1510,10 @@ public final class RtTerrain {
         // asynchronously published light grid state even when no emitter changed, making the shader alternate
         // between global-only and cell proposals. Track the actual light-record diff instead.
         boolean lightsChanged = false;
+        // rbx/rby/rbz double as the player's block position this pass (see stream()'s call site).
+        // Anything published close to it must flush the denoiser's temporal history, or a static
+        // camera watches the pre-edit image smear over the new geometry (see nearbyGeometryChangeSerial).
+        boolean publishedNearPlayer = false;
         for (SectionGeom g : removed) {
             SectionGeom current = resident.get(g.key);
             boolean removesPublishedLights = current == g && hasLights(g.lights);
@@ -1489,6 +1521,7 @@ public final class RtTerrain {
             table.removePublished(resident, published, g);
             lightsChanged |= removesPublishedLights;
             if (removedLightSlot >= 0) lightSections.remove(removedLightSlot);
+            publishedNearPlayer |= sectionNearPlayer(g.sx, g.sy, g.sz, rbx, rby, rbz);
         }
         retire(ctx, lastGraphicsUse, removed);
 
@@ -1531,8 +1564,13 @@ public final class RtTerrain {
             }
             if (sectionLightsChanged || prev == null) updateLightSection(g);
             published.add(ps.key());
+            publishedNearPlayer |= sectionNearPlayer(g.sx, g.sy, g.sz, rbx, rby, rbz);
         }
         table.flushWrites();
+
+        if (publishedNearPlayer) {
+            nearbyGeometryChangeSerial++;
+        }
 
         if (resident.isEmpty()) {
             Generation emptyGeneration = table.detachGeneration();
@@ -1589,6 +1627,21 @@ public final class RtTerrain {
 
     private static boolean hasLights(float[] lights) {
         return lights != null && lights.length > 0;
+    }
+
+    /**
+     * Chebyshev distance test: is any block of the section whose world-block origin is
+     * ({@code sx},{@code sy},{@code sz}) within {@link #HISTORY_INVALIDATION_RADIUS} blocks of the
+     * block position ({@code px},{@code py},{@code pz})?
+     */
+    private static boolean sectionNearPlayer(int sx, int sy, int sz, int px, int py, int pz) {
+        return Math.max(Math.max(blockAabbDistance(px, sx), blockAabbDistance(py, sy)),
+                blockAabbDistance(pz, sz)) <= HISTORY_INVALIDATION_RADIUS;
+    }
+
+    /** Distance from block coordinate {@code p} to the 16-block section span starting at {@code sectionOrigin}. */
+    private static int blockAabbDistance(int p, int sectionOrigin) {
+        return Math.max(Math.max(sectionOrigin - p, 0), p - (sectionOrigin + 15));
     }
 
     /** Null and an empty collector result both mean that the section contributes no lights. */

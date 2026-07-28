@@ -39,6 +39,9 @@
 	"caustica.options.rt.denoiser": "Filtro di riduzione del rumore",
 	"caustica.options.rt.denoiser.tooltip": "Applica il filtro di riduzione del rumore di DLSS Ray Reconstruction all'immagine in path tracing. Disattivato, mostra il tracciamento grezzo e rumoroso a piena risoluzione: utile come vista di riferimento, ma molto più granuloso con pochi campioni. Richiede il supporto a DLSS Ray Reconstruction.",
 
+	"caustica.options.rt.temporalAccumulation": "Accumulo temporale",
+	"caustica.options.rt.temporalAccumulation.tooltip": "Quanto intensamente il filtro fonde i fotogrammi nel tempo. Valori più alti danno un'immagine più stabile e pulita, ma lasciano che i cambiamenti di scena si trascinino in scie fantasma; valori più bassi reagiscono più in fretta alle modifiche dei blocchi e alle animazioni di rottura, al costo di più rumore visibile. Le modifiche ai blocchi vicini azzerano sempre la cronologia temporale — questo limita la fusione a vista completamente ferma.",
+
 	"caustica.options.rt.handFov": "FOV della mano",
 	"caustica.options.rt.handFov.tooltip": "Fa seguire alla mano e all'oggetto in prima persona il FOV del gioco. Attivo, un FOV più ampio allontana il braccio e uno più stretto lo avvicina. Disattivo, ripristina il FOV fisso della mano originale.",
 
