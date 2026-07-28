@@ -39,9 +39,6 @@
 	"caustica.options.rt.denoiser": "노이즈 제거 필터",
 	"caustica.options.rt.denoiser.tooltip": "경로 추적 이미지에 DLSS Ray Reconstruction 노이즈 제거 필터를 적용합니다. 끄면 노이즈가 있는 원본 추적 결과를 전체 해상도로 표시합니다. 기준 화면으로는 유용하지만 샘플 수가 적으면 훨씬 거칠어집니다. DLSS Ray Reconstruction 지원이 필요합니다.",
 
-	"caustica.options.rt.temporalAccumulation": "시간 누적",
-	"caustica.options.rt.temporalAccumulation.tooltip": "필터가 프레임을 시간에 따라 얼마나 강하게 혼합하는지를 조절합니다. 값이 높을수록 더 안정적이고 깨끗한 화면이 되지만 장면 변화가 잔상 궤적으로 남기 쉽고, 값이 낮을수록 블록 편집과 파괴 애니메이션에 더 빨리 반응하는 대신 노이즈가 더 보입니다. 근처의 블록 편집 시에는 항상 시간 히스토리를 비웁니다. 이 값은 완전히 정지한 화면에서의 혼합 상한입니다.",
-
 	"caustica.options.rt.handFov": "손 시야각",
 	"caustica.options.rt.handFov.tooltip": "1인칭 손과 든 아이템이 게임 시야각을 따르도록 합니다. 켜면 시야각이 높을수록 팔이 멀어지고 낮을수록 가까워집니다. 끄면 기본 고정 손 시야각으로 돌아갑니다.",
 

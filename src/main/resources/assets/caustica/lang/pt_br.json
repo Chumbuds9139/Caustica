@@ -39,9 +39,6 @@
 	"caustica.options.rt.denoiser": "Filtro de redução de ruído",
 	"caustica.options.rt.denoiser.tooltip": "Aplica o filtro de redução de ruído do DLSS Ray Reconstruction à imagem com path tracing. Desativado, mostra o traçado bruto e ruidoso em resolução total — útil como referência, mas bem mais granulado com poucas amostras. Requer suporte a DLSS Ray Reconstruction.",
 
-	"caustica.options.rt.temporalAccumulation": "Acumulação temporal",
-	"caustica.options.rt.temporalAccumulation.tooltip": "O quão agressivamente o filtro mistura quadros ao longo do tempo. Valores mais altos dão uma imagem mais estável e limpa, mas deixam as mudanças de cena mancharem como trilhas fantasma; valores mais baixos reagem mais rápido a edições de blocos e animações de quebra, ao custo de mais ruído visível. Edições de blocos próximas sempre limpam o histórico temporal — isto limita a mistura com a visão completamente parada.",
-
 	"caustica.options.rt.handFov": "FOV da mão",
 	"caustica.options.rt.handFov.tooltip": "Faz a mão e o item em primeira pessoa seguirem o FOV do jogo. Ativado, um FOV maior afasta o braço e um FOV menor o aproxima. Desativado, retorna ao FOV fixo da mão do Minecraft original.",
 

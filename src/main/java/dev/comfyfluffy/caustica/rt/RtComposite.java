@@ -313,25 +313,6 @@ public final class RtComposite {
     private boolean failed;
     private boolean loggedActive;
 
-    // Temporal-accumulation housekeeping for RtDlssRr (see CausticaConfig.Rt.DlssRr.TEMPORAL_ACCUMULATION
-    // and RtDlssRr.invalidateHistory). DLSS-RR reprojects its history purely from camera motion, so the
-    // three things below are the renderer telling it "the world changed under the same camera".
-    /** Last terrain near-player publication serial seen — bumped by RtTerrain.applyBuildChanges. */
-    private long lastSeenTerrainGeometrySerial;
-    // Static-view accumulation budget: position/rotation/projection of the previous rrPath frame, so
-    // "perfectly static" is an exact comparison (idle camera inputs are bit-stable; any real movement,
-    // look, or FOV change breaks them).
-    private final Matrix4f accumPrevViewRotation = new Matrix4f();
-    private final Matrix4f accumPrevProjection = new Matrix4f();
-    private double accumPrevCamX;
-    private double accumPrevCamY;
-    private double accumPrevCamZ;
-    private boolean accumPrevValid;
-    /** Consecutive static frames blended since the last flush; compared against the slider budget. */
-    private int staticAccumFrames;
-    /** Previous frame's block-breaking overlay set — crack stages change albedo with no geometry edit. */
-    private BreakEntry[] prevBreakingEntries = new BreakEntry[0];
-
     // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
@@ -508,15 +489,6 @@ public final class RtComposite {
             failed = true;
             CausticaMod.LOGGER.error("RT terrain streaming failed; reverting to vanilla path", t);
             return false;
-        }
-        // A world edit near the player (block broken/placed, ...) published new terrain geometry this
-        // frame. DLSS-RR's temporal history predates that geometry, and it only reprojects by camera
-        // motion — flush the history NOW, the same frame the new sections first reach the TLAS,
-        // instead of letting the old block smear over the new one (ghosting while standing still).
-        long terrainGeometrySerial = RtTerrain.nearbyGeometryChangeSerial();
-        if (terrainGeometrySerial != lastSeenTerrainGeometrySerial) {
-            lastSeenTerrainGeometrySerial = terrainGeometrySerial;
-            RtDlssRr.INSTANCE.invalidateHistory();
         }
         if (RtTerrain.currentOrNull() == null || !frameCaptured || Minecraft.getInstance().level == null) {
             // No world this frame (incl. after quitting to the title — terrain residency + frameCaptured can
@@ -885,7 +857,6 @@ public final class RtComposite {
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
-            capTemporalAccumulation(rrPath);
 
             boolean rrDone = false;
             // Select the next BDA ring slot; the generated WorldPushData serializer fills it once all
@@ -960,14 +931,6 @@ public final class RtComposite {
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
-            // A crack overlay starting, advancing a stage, or disappearing changes those pixels with no
-            // geometry edit at all, so the terrain publish hook above never sees it — while the camera
-            // is still, RR's stale history would ghost each crack stage (and the vanished overlay after
-            // the break). Flush on any change to the active breaking set.
-            if (rrPath && breakingEntriesChanged(breaking)) {
-                RtDlssRr.INSTANCE.invalidateHistory();
-            }
-            prevBreakingEntries = breaking;
             // Dimension + weather drive the sky model, the celestial light and the ambient medium, so
             // all three are resolved together, once, from the same level and partial tick.
             int dimension = dimensionId(level);
@@ -1014,11 +977,7 @@ public final class RtComposite {
                             weather.lightAttenuation()),
                     ambientFog(dimension, weather),
                     dimension,
-                    featureFlags(),
-                    // Effective temporal-stability amount for the firefly ceiling: the player's
-                    // accumulation setting while RR actually runs, 0 for the raw-reference/debug
-                    // paths where no temporal filter exists to absorb a spike.
-                    rrPath ? CausticaConfig.Rt.DlssRr.TEMPORAL_ACCUMULATION.value() : 0.0f
+                    featureFlags()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1163,86 +1122,6 @@ public final class RtComposite {
             }
         }
         return count == result.length ? result : java.util.Arrays.copyOf(result, count);
-    }
-
-    /**
-     * Whether the active block-breaking overlay set differs from last frame's. Order-insensitive
-     * (destructionProgress() iteration order is not a contract): entries are value-equal records,
-     * matched as a multiset so a mere reorder is not mistaken for a stage change.
-     */
-    private boolean breakingEntriesChanged(BreakEntry[] current) {
-        BreakEntry[] previous = prevBreakingEntries;
-        if (current.length == 0 && previous.length == 0) {
-            return false; // the idle common case — nobody is mining anything
-        }
-        if (current.length != previous.length) {
-            return true;
-        }
-        boolean[] matched = new boolean[previous.length]; // tiny; BREAKING_CAPACITY is 8
-        outer:
-        for (BreakEntry entry : current) {
-            for (int i = 0; i < previous.length; i++) {
-                if (!matched[i] && entry.equals(previous[i])) {
-                    matched[i] = true;
-                    continue outer;
-                }
-            }
-            return true; // an entry with no counterpart last frame: a start, a stage advance, or a swap
-        }
-        return false;
-    }
-
-    /**
-     * The "Temporal Accumulation" slider, applied: cap how many consecutive PERFECTLY STATIC frames
-     * DLSS-RR may blend before its history is force-flushed (RtDlssRr.invalidateHistory). A moving
-     * view reprojects correctly through motion vectors, so it never needs the cap; the static view is
-     * where stale history smears hardest (and where the bug report lives). At the slider maximum the
-     * budget is unlimited — the historical behaviour — and block-edit invalidations do the work alone;
-     * below it, a static view periodically drops history and re-converges, the deliberate
-     * noise-vs-ghosting trade-off the option offers.
-     */
-    private void capTemporalAccumulation(boolean rrPath) {
-        if (!rrPath) {
-            accumPrevValid = false;
-            staticAccumFrames = 0;
-            return;
-        }
-        // Matrix epsilon compare (JOML's Matrix4fc.equals(Matrix4fc, float)): idle recomputed
-        // rotation/projection inputs are bit-stable, but a hair of tolerance makes "static" robust
-        // against a 1-ULP wobble sneaking in through some path. Positions stay exact doubles — any
-        // genuine server nudge or input drift must count as movement.
-        boolean viewStatic = accumPrevValid
-                && camX == accumPrevCamX && camY == accumPrevCamY && camZ == accumPrevCamZ
-                && frameViewRotation.equals(accumPrevViewRotation, 1.0e-6f)
-                && frameProjection.equals(accumPrevProjection, 1.0e-6f);
-        accumPrevViewRotation.set(frameViewRotation);
-        accumPrevProjection.set(frameProjection);
-        accumPrevCamX = camX;
-        accumPrevCamY = camY;
-        accumPrevCamZ = camZ;
-        accumPrevValid = true;
-        int budget = staticAccumulationBudget();
-        if (!viewStatic || budget == Integer.MAX_VALUE) {
-            staticAccumFrames = 0;
-            return;
-        }
-        if (++staticAccumFrames > budget) {
-            staticAccumFrames = 0;
-            RtDlssRr.INSTANCE.invalidateHistory();
-        }
-    }
-
-    /**
-     * Slider value → consecutive-static-frame budget: 2 frames at 0, 64 frames at the top, and
-     * unlimited AT exactly 1.0 so the default keeps the previous no-cap behaviour (no periodic
-     * reconvergence flicker for players who never touch the option).
-     */
-    private static int staticAccumulationBudget() {
-        float accum = CausticaConfig.Rt.DlssRr.TEMPORAL_ACCUMULATION.value();
-        if (accum >= 0.999f) {
-            return Integer.MAX_VALUE;
-        }
-        return Math.max(2, Math.round(2.0f + accum * 62.0f));
     }
 
 

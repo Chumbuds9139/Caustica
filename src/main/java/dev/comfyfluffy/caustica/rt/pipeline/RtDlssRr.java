@@ -15,7 +15,6 @@ import org.lwjgl.vulkan.VK10;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * DLSS Ray Reconstruction backend for the RT renderer. Runs the DLSSD (Ray Reconstruction) feature
@@ -71,14 +70,7 @@ public final class RtDlssRr {
     private int featureQuality = Integer.MIN_VALUE;
     private int featurePreset = Integer.MIN_VALUE;
 
-    /**
-     * One-shot "drop the temporal history" request for the next {@link #evaluate} (DLSS-RR
-     * {@code InReset}). Set here when a fresh feature is created, and by everyone noticing a world
-     * change RR cannot see: block edits near the player ({@code RtTerrain}'s near-player geometry
-     * serial, watched by {@code RtComposite}), destroy-stage overlay changes, and the static-view
-     * accumulation budget. Atomic because the invalidating threads are not always the render thread.
-     */
-    private final AtomicBoolean resetHistory = new AtomicBoolean();
+    private boolean resetHistory;
     private long lastFrameNanos;
 
     private RtDlssRr() {
@@ -86,19 +78,6 @@ public final class RtDlssRr {
 
     public boolean isReady() {
         return initialized && !failed && !isNull(feature);
-    }
-
-    /**
-     * Drop all temporal history at the next {@link #evaluate}. DLSS-RR reprojects history using only
-     * camera motion vectors — it has no notion of world edits — so a changed or broken block keeps
-     * smearing its old image into the new one until the accumulator catches up (the "ghost block"
-     * seen when breaking a block while standing still). A single reset discards that stale history at
-     * once; the image re-converges over the following frames instead of fading over them. Thread-safe.
-     * Setting this while RR is off or the feature does not exist is harmless: the flag survives until
-     * the next evaluation, and a freshly created feature resets on its first frame anyway.
-     */
-    public void invalidateHistory() {
-        resetHistory.set(true);
     }
 
     /**
@@ -121,8 +100,6 @@ public final class RtDlssRr {
                     : Math.clamp((now - lastFrameNanos) / 1_000_000.0f, 0.1f, 200.0f);
             lastFrameNanos = now;
 
-            // Consume any pending history-invalidation request exactly once (see invalidateHistory).
-            int reset = resetHistory.getAndSet(false) ? 1 : 0;
             int rc;
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment worldToViewMatrix = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
@@ -141,9 +118,10 @@ public final class RtDlssRr {
                         out.view, out.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                         renderWidth, renderHeight, displayWidth, displayHeight,
                         // jitter in render pixels; MVs are already in render-pixel units, so MV scale = 1.
-                        jitterX, jitterY, 1.0f, 1.0f, reset, frameMs,
+                        jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs,
                         worldToViewMatrix, viewToClipMatrix);
             }
+            resetHistory = false;
             if (NgxRuntime.ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_evaluate_dlssd failed: 0x" + Integer.toHexString(rc)
                         + " last=0x" + Integer.toHexString(lib.lastResult()));
@@ -249,7 +227,7 @@ public final class RtDlssRr {
                 featureDisplayHeight = displayHeight;
                 featureQuality = quality;
                 featurePreset = preset;
-                resetHistory.set(true); // a fresh feature has no temporal history
+                resetHistory = true; // a fresh feature has no temporal history
                 CausticaMod.LOGGER.info("DLSS-RR feature created: {}x{} -> {}x{} (quality {}, preset {})",
                         renderWidth, renderHeight, displayWidth, displayHeight, quality, preset);
             }

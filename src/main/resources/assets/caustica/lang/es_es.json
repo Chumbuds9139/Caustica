@@ -39,9 +39,6 @@
 	"caustica.options.rt.denoiser": "Filtro de reducción de ruido",
 	"caustica.options.rt.denoiser.tooltip": "Aplica el filtro de reducción de ruido de DLSS Ray Reconstruction a la imagen con trazado de rutas. Desactivado, muestra el trazado en bruto y con ruido a resolución completa: útil como vista de referencia, pero mucho más granulado con pocas muestras. Requiere compatibilidad con DLSS Ray Reconstruction.",
 
-	"caustica.options.rt.temporalAccumulation": "Acumulación temporal",
-	"caustica.options.rt.temporalAccumulation.tooltip": "Con qué intensidad el filtro mezcla fotogramas a lo largo del tiempo. Valores más altos dan una imagen más estable y limpia, pero dejan que los cambios de la escena se difuminen en estelas fantasma; valores más bajos reaccionan antes a las ediciones de bloques y a las animaciones de rotura a costa de más ruido visible. Las ediciones de bloques cercanas siempre vacían el historial temporal; esto limita la mezcla con la vista completamente estática.",
-
 	"caustica.options.rt.handFov": "FOV de la mano",
 	"caustica.options.rt.handFov.tooltip": "Hace que la mano y el objeto en primera persona sigan el FOV del juego. Activado, un FOV mayor aleja el brazo y uno menor lo acerca. Desactivado, restaura el FOV fijo de la mano original.",
 
