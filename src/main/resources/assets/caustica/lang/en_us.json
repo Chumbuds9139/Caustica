@@ -39,6 +39,11 @@
 	"caustica.options.rt.clouds": "Ray-Traced Clouds",
 	"caustica.options.rt.clouds.tooltip": "Draw a cloud deck in the ray-traced sky. Caustica replaces the vanilla world renderer, which is where vanilla's own clouds are drawn, so this is what puts clouds back in the sky. The deck is visible in reflections and can shadow the world below.",
 
+	"caustica.options.rt.cloudStyle": "Cloud Style",
+	"caustica.options.rt.cloudStyle.tooltip": "How clouds are drawn. Classic reproduces Minecraft's flat, blocky cloud layer. Volumetric ray-marches the clouds as real 3D shapes with depth, self-shadowing and light scattering, like heavy shaderpacks - much better looking, but noticeably more demanding. Both use the same cloud shapes, so switching does not move the clouds.",
+	"caustica.options.rt.cloudStyle.classic": "Classic",
+	"caustica.options.rt.cloudStyle.volumetric": "Volumetric",
+
 	"caustica.options.rt.cloudShadowStrength": "Cloud Shadows",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "How much the cloud deck dims the sunlight and moonlight reaching the ground under it. 0% draws clouds that cast no shadow at all; 100% lets a solid cloud block the sun completely. Costs no extra rays.",
 

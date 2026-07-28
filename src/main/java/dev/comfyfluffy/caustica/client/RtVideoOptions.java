@@ -45,6 +45,7 @@ public final class RtVideoOptions {
             // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
             // the other two reads immediately before them.
             clouds(),
+            cloudStyle(),
             cloudShadowStrength(),
             cloudOpacity(),
             denoiser(),
@@ -230,6 +231,29 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> clouds() {
         return bool("caustica.options.rt.clouds", CausticaConfig.Rt.Composite.CLOUDS);
+    }
+
+    private static final List<String> CLOUD_STYLES = List.of("classic", "volumetric");
+
+    /**
+     * Cloud rendering style: vanilla's flat blocky deck, or a ray-marched volumetric slab.
+     *
+     * <p>Both styles are two readings of one shared coverage field, so switching does not move the
+     * clouds — the same cloud is simply drawn flat or with depth — and the cloud shadows are unchanged
+     * between them. Volumetric costs real GPU time (it marches the slab and light-marches for
+     * self-shadowing); classic is nearly free.
+     */
+    private static OptionInstance<String> cloudStyle() {
+        StringSetting setting = CausticaConfig.Rt.Composite.CLOUD_STYLE;
+        return new OptionInstance<>(
+            "caustica.options.rt.cloudStyle",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.cloudStyle.tooltip")),
+            // CycleButton (used for Enum values) already prepends "caption: " itself, so this must
+            // return only the value's text, not caption + value again.
+            (caption, value) -> Component.translatable("caustica.options.rt.cloudStyle." + value),
+            new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
+            CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
+            setting::set);
     }
 
     /**

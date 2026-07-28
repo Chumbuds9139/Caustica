@@ -119,6 +119,26 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             throughput *= segFog.transmittance;
         }
 
+        // Cloud crossed on the way to this hit. The deck is a real volume in the world, so a ray that
+        // ends on GEOMETRY can still pass through cloud before it gets there — looking down at the
+        // ground from above the deck is exactly that case, and it is the one that was broken: clouds
+        // were composited only in the miss shader, which a terrain hit never reaches, so the world
+        // showed straight through them. Bounded by payload.hitT, so cloud in front of the surface is
+        // drawn and cloud behind it is rejected.
+        //
+        // Written as the same in-scatter/transmittance pair as the fog directly above, because it is
+        // the same kind of thing: a participating medium along this segment. Being in the path integral
+        // rather than at a display seam is what makes it correct in reflections and refractions too.
+        {
+            // showCelestial marks the rays whose clouds are seen directly (camera + specular bounces),
+            // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
+            CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
+                                                payload.hitT, cloudSkyAmbient(worldPush),
+                                                showCelestial);
+            L += throughput * segCloud.scatter;
+            throughput *= segCloud.transmittance;
+        }
+
         float3 n = payload.normal; // oriented toward the incoming ray by the closest-hit
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);

@@ -605,6 +605,21 @@ public final class CausticaConfig {
             public static final BooleanSetting CLOUDS =
                     bool("caustica.rt.clouds", "composite.clouds", true);
             /**
+             * Cloud rendering style.
+             *
+             * <p>{@code classic} reproduces vanilla's flat, blocky deck: coverage is quantised to the
+             * 12-block cell grid so the silhouette is genuinely square-edged, and the slab is shaded
+             * with vanilla's distinct top/side/bottom faces. {@code volumetric} extrudes the same
+             * coverage map into a ray-marched slab with self-shadowing and forward scattering — the
+             * look heavy shaderpacks produce, at a real GPU cost.
+             *
+             * <p>Both styles read one shared coverage field, so switching does not move the clouds and
+             * the cloud shadows stay identical between them.
+             */
+            public static final StringSetting CLOUD_STYLE =
+                    string("caustica.rt.cloudStyle", "composite.cloud-style", "classic",
+                            Composite::sanitizeCloudStyle);
+            /**
              * How much the cloud deck darkens the sun/moon light reaching the ground beneath it.
              *
              * <p>0 means clouds are visible in the sky but cast nothing; 1 means a fully opaque cloud
@@ -645,6 +660,21 @@ public final class CausticaConfig {
                     finiteFloat("caustica.rt.jitterSignY", "composite.jitter-sign-y", -1.0f);
 
             private Composite() {
+            }
+
+            /** Shader-side style id; mirrors {@code clouds.slang}'s CLOUD_STYLE_* constants. */
+            public static int cloudStyleIndex() {
+                return "volumetric".equals(CLOUD_STYLE.get()) ? 1 : 0;
+            }
+
+            private static String sanitizeCloudStyle(String value) {
+                if (value == null) {
+                    return "classic";
+                }
+                return switch (value.toLowerCase(java.util.Locale.ROOT).replace('-', '_')) {
+                    case "volumetric", "volumetrics", "realistic", "3d" -> "volumetric";
+                    default -> "classic";
+                };
             }
         }
 

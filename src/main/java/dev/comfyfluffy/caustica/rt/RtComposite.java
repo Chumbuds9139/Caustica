@@ -122,6 +122,7 @@ public final class RtComposite {
     private static final int FEATURE_WEATHER_LIGHTING = 2;
     private static final int FEATURE_DENOISER = 4;
     private static final int FEATURE_CLOUDS = 8;
+    private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -145,6 +146,11 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.CLOUDS.value()) {
             flags |= FEATURE_CLOUDS;
+            // The style is a feature bit, not a packed float lane: featureFlags is exactly the word for
+            // player-facing effect toggles, and an integer bit survives every float quirk.
+            if (CausticaConfig.Rt.Composite.cloudStyleIndex() == CLOUD_STYLE_VOLUMETRIC) {
+                flags |= FEATURE_CLOUDS_VOLUMETRIC;
+            }
         }
         // Reports what the pipeline is ACTUALLY doing, not just what the option asks for:
         // RtDlssRr.enabled() already folds in the backend switch, and a debug view suppresses RR
@@ -165,9 +171,13 @@ public final class RtComposite {
     private static final double CLOUD_FIELD_PERIOD_BLOCKS = 12.0 * 512.0;
     // Vanilla's clouds drift at 0.03 blocks/tick; matched so the sky moves at a familiar speed.
     private static final double CLOUD_WIND_BLOCKS_PER_TICK = 0.03;
-    // Vertical extent of the deck. Only used to fade the alpha out as the camera passes through it, so
-    // flying up through the clouds is a soft transition instead of a hard pop between the two faces.
+    // Vertical extent of the flat deck. Only used to bound the slab; the classic style shades a plane.
     private static final float CLOUD_SLAB_THICKNESS = 4.0f;
+    // The volumetric style marches a real slab, so it needs genuine depth to have anything to integrate
+    // through — a 4-block slab would render as a flat sheet with extra cost and no extra look.
+    private static final float CLOUD_VOLUMETRIC_THICKNESS = 28.0f;
+    // Mirrors clouds.slang's CLOUD_STYLE_* constants.
+    private static final int CLOUD_STYLE_VOLUMETRIC = 1;
     // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
     // into an aliasing band; the shader fades coverage out over the last stretch of this distance.
     private static final float CLOUD_VIEW_LIMIT_BLOCKS = 3072.0f;
@@ -1316,11 +1326,15 @@ public final class RtComposite {
         // on, so the pattern stays pinned to the world while the camera moves through it.
         double anchorX = camX + drift;
         double anchorZ = camZ;
+        // Volumetric clouds are a true slab, so they need real vertical extent to march through; the
+        // flat deck is shaded as a plane and only uses the thickness to bound its slab test.
+        float thickness = CausticaConfig.Rt.Composite.cloudStyleIndex() == CLOUD_STYLE_VOLUMETRIC
+                ? CLOUD_VOLUMETRIC_THICKNESS : CLOUD_SLAB_THICKNESS;
         return new CloudPush(
                 new Float4(Math.clamp(coverage, 0f, 1f), Math.clamp(opacity, 0f, 1f),
                         Math.clamp(shadow, 0f, 1f), (float) (height - cameraY)),
                 new Float4(wrapCloudAnchor(anchorX), wrapCloudAnchor(anchorZ),
-                        CLOUD_SLAB_THICKNESS, CLOUD_VIEW_LIMIT_BLOCKS));
+                        thickness, CLOUD_VIEW_LIMIT_BLOCKS));
     }
 
     /** Reduce a world coordinate into the cloud field's exact repeat period — see {@link #cloudState}. */

@@ -99,7 +99,8 @@ public static const uint DIMENSION_END = 2u;
 public static const uint FEATURE_SSS = 1u;               // LabPBR subsurface scattering
 public static const uint FEATURE_WEATHER_LIGHTING = 2u;  // rain/storm sky darkening + light attenuation
 public static const uint FEATURE_DENOISER = 4u;          // temporal/spatial denoising filter is active
-public static const uint FEATURE_CLOUDS = 8u;            // flat cloud deck in the sky + its sun shadow
+public static const uint FEATURE_CLOUDS = 8u;            // cloud deck in the sky + its sun shadow
+public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marched, not a flat deck
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume

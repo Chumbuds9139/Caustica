@@ -438,18 +438,19 @@ void main(inout Payload payload) {
     // and parallax against a deck 128 blocks up is very visible over even a short offset. Both this and
     // the shadow query work in camera-relative space (WorldRayOrigin is in the terrain's rebased space),
     // so neither is affected when the terrain rebase origin shifts.
-    if (cloudsEnabled(worldPush)) {
-        float3 originRel = WorldRayOrigin() - worldPush.camOffset;
-        CloudHit hit = cloudTrace(worldPush, originRel, dir);
-        if (hit.hit) {
-            float density = cloudDensity(worldPush, hit.samplePos);
-            float alpha = cloudAlpha(worldPush, hit, density);
-            if (alpha > 0.0) {
-                // skyAmbient (no discs) is the fill; `col` (with discs) is what the cloud covers.
-                col = lerp(col, cloudRadiance(worldPush, hit, dir, skyAmbient, density), alpha);
-            }
-        }
-    }
+    //
+    // This ray escaped to the sky, so nothing occludes the deck: maxDistance is unbounded. Rays that end
+    // on geometry get their clouds from world.rgen instead, bounded by the hit distance — that split is
+    // what keeps terrain and cloud correctly ordered from both above and below the deck.
+    //
+    // skyAmbient (no discs) is the fill; `col` (with discs) is what the cloud covers.
+    //
+    // showCelestial doubles as the cloud quality tier, because it already marks exactly the rays whose
+    // clouds are looked at directly: the camera ray and specular/dielectric bounces (mirror reflections
+    // in water and glass) carry it, while diffuse continuation rays — which only gather a broad,
+    // denoised sky-fill term — do not. Same signal, same set of rays, no second flag to keep in sync.
+    col = cloudLayer(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9, col, skyAmbient,
+                     showCelestial);
 
     writeSkyMiss(payload, col);
 }

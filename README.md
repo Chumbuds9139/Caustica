@@ -25,7 +25,8 @@ changes while the renderer is being built.
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support, including toggleable subsurface scattering
 - Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
-- Cloud deck with adjustable opacity and cloud shadows, visible in reflections
+- Clouds in classic (vanilla-style) or ray-marched volumetric form, with adjustable
+  opacity and cloud shadows, visible in reflections
 - Dedicated Nether and End skyboxes with per-dimension ambient fog
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 
@@ -83,7 +84,7 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [ ] Volumetric (ray-marched) clouds, replacing the current flat deck
+- [ ] Multi-layer / cirrus clouds and cloud-shadow softening
 - [ ] NRD + FSR for non-NVIDIA GPUs
 - [ ] LOD
 - [ ] ReSTIR
