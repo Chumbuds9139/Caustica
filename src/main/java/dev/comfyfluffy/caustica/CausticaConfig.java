@@ -60,7 +60,8 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY, Rt.Hand.FOV_FOLLOWS_CAMERA,
+            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
+            Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
     }
@@ -115,10 +116,12 @@ public final class CausticaConfig {
         FILE.setComment("lights",
                 " Direct lighting controls. dynamic-intensity scales analytic lights created from luminous\n"
                         + " held items (torches, lanterns, lava buckets, ...) and is config-only — the Video\n"
-                        + " Settings screen exposes block-emissive-intensity alone. block-emissive-intensity scales\n"
-                        + " emissive blocks placed in the world, both their direct-hit emission and the RIS\n"
-                        + " sampled area-light contribution. ris-candidates = 0 disables RIS emitter NEE\n"
-                        + " entirely (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
+                        + " Settings screen exposes block-emissive-intensity and ReSTIR sampling.\n"
+                        + " block-emissive-intensity scales emissive blocks placed in the world, both their\n"
+                        + " direct-hit emission and sampled area-light contribution. restir-sampling reuses\n"
+                        + " validated light reservoirs across frames and nearby pixels; off keeps the original\n"
+                        + " independent RIS estimator. ris-candidates = 0 disables emitter NEE entirely\n"
+                        + " (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
                         + " footprints from the light buffer. stats/dump/dump-radius are debug logging.");
         FILE.setComment("tonemap",
                 " Scene tonemapping after exposure and before writing the vanilla SDR target. operator selects\n"
@@ -746,6 +749,14 @@ public final class CausticaConfig {
                     lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);
             public static final FloatSetting BLOCK_INTENSITY =
                     lightIntensity("caustica.rt.blockLightIntensity", "lights.block-emissive-intensity", 2.0f);
+            /**
+             * Reservoir-based spatio-temporal resampling for emitter NEE. When disabled, every shading
+             * vertex uses the original independent per-frame RIS reservoir and no history allocation is
+             * retained. The renderer notices live changes, idles before retiring/recreating the two Vulkan
+             * history buffers, and starts newly enabled history from zero.
+             */
+            public static final BooleanSetting RESTIR_SAMPLING =
+                    bool("caustica.rt.restir", "lights.restir-sampling", true);
             public static final IntSetting RIS_CANDIDATES =
                     intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0);
             public static final FloatSetting MIN_FILL_RATIO =

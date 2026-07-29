@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
+import dev.comfyfluffy.caustica.rt.gen.RestirReservoirData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
@@ -99,6 +100,8 @@ public final class RtComposite {
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
     private static final int GUIDE_COUNT = 6; // RR guide buffers bound at world-pipeline bindings 3..8
     private static final long PATH_RECORD_BYTES = 48L;
+    // Reflected from PackedRestirReservoir's std430 array stride (world_layout_probe.slang).
+    private static final long RESTIR_RECORD_BYTES = RestirReservoirData.BYTE_SIZE;
     private static int debugView() {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
@@ -123,6 +126,7 @@ public final class RtComposite {
     private static final int FEATURE_DENOISER = 4;
     private static final int FEATURE_CLOUDS = 8;
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
+    private static final int FEATURE_RESTIR = 32;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -143,6 +147,9 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
+        }
+        if (CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value()) {
+            flags |= FEATURE_RESTIR;
         }
         if (CausticaConfig.Rt.Composite.CLOUDS.value()) {
             flags |= FEATURE_CLOUDS;
@@ -271,6 +278,12 @@ public final class RtComposite {
     // Packed primary -> indirect continuations. Pass A is fixed at one sample and owns two records per
     // render pixel (base + optional transmission); Pass B resamples them at the configured SPP.
     private RtBuffer continuationQueue;
+    // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
+    // only `current`, so spatial neighbour reuse never races another raygen invocation. The pair exists
+    // only while the player setting is ON; live toggles idle the device before destruction/allocation.
+    private final RtBuffer[] restirReservoirs = new RtBuffer[2];
+    private int restirWriteIndex;
+    private boolean restirResourcesEnabled;
     private RtImage displayImage;
     // Parallel PQ-encoded ([0,1], ST.2084) HDR display image. Written alongside displayImage when HDR is
     // enabled. When the PQ swapchain is active, the combined UI overlay is composited over this image, then
@@ -781,6 +794,74 @@ public final class RtComposite {
         }
     }
 
+    /**
+     * Match the persistent ReSTIR allocation to the live player toggle. A state transition is deliberately
+     * synchronous and rare: waiting idle first makes it impossible for a recorded BDA load to outlive the
+     * buffers, then both ping-pong halves are either destroyed or freshly allocated and zero-filled. Thus
+     * OFF releases the VRAM (rather than merely hiding it), and ON can never observe stale reservoirs.
+     */
+    private void syncRestirResources(RtContext ctx) {
+        boolean desired = CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value()
+                && CausticaConfig.Rt.Lights.RIS_CANDIDATES.value() > 0
+                && renderW > 0 && renderH > 0;
+        boolean completePair = restirReservoirs[0] != null && restirReservoirs[1] != null;
+        if (desired == restirResourcesEnabled && desired == completePair) {
+            return;
+        }
+
+        ctx.waitIdle();
+        destroyRestirResources();
+        if (!desired) {
+            return;
+        }
+
+        long pixels = Math.multiplyExact((long) renderW, (long) renderH);
+        long bytes = Math.multiplyExact(pixels, RESTIR_RECORD_BYTES);
+        int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        try {
+            restirReservoirs[0] = ctx.createBuffer(bytes, usage, false,
+                    "ReSTIR reservoir history A " + renderW + "x" + renderH);
+            restirReservoirs[1] = ctx.createBuffer(bytes, usage, false,
+                    "ReSTIR reservoir history B " + renderW + "x" + renderH);
+            restirWriteIndex = 0;
+            ctx.submitSync(cmd -> {
+                VK10.vkCmdFillBuffer(cmd, restirReservoirs[0].handle, 0L, bytes, 0);
+                VK10.vkCmdFillBuffer(cmd, restirReservoirs[1].handle, 0L, bytes, 0);
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                }
+            });
+            restirResourcesEnabled = true;
+        } catch (Throwable failure) {
+            destroyRestirResources();
+            throw failure;
+        }
+    }
+
+    private void destroyRestirResources() {
+        for (int i = 0; i < restirReservoirs.length; i++) {
+            if (restirReservoirs[i] != null) {
+                restirReservoirs[i].destroy();
+                restirReservoirs[i] = null;
+            }
+        }
+        restirWriteIndex = 0;
+        restirResourcesEnabled = false;
+    }
+
+    private long restirPreviousAddress() {
+        return restirResourcesEnabled ? restirReservoirs[restirWriteIndex ^ 1].deviceAddress : 0L;
+    }
+
+    private long restirCurrentAddress() {
+        return restirResourcesEnabled ? restirReservoirs[restirWriteIndex].deviceAddress : 0L;
+    }
+
+    /** Explicit shader mode uniform; unlike the descriptive feature bit this is tied to real bindings. */
+    private int restirMode() {
+        return restirResourcesEnabled && CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value() ? 1 : 0;
+    }
+
     private void ensureOutput(RtContext ctx, int width, int height) {
         boolean rrEnabled = RtDlssRr.enabled();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
@@ -788,6 +869,7 @@ public final class RtComposite {
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
+            syncRestirResources(ctx);
             return;
         }
         ctx.waitIdle(); // resize is rare; no in-flight frame may use the old image/descriptor
@@ -808,6 +890,7 @@ public final class RtComposite {
             continuationQueue.destroy();
             continuationQueue = null;
         }
+        destroyRestirResources();
         destroyGuideImages();
 
         displayW = width;
@@ -833,6 +916,7 @@ public final class RtComposite {
         continuationQueue = ctx.createBuffer(continuationBytes,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "path continuation queue " + renderW + "x" + renderH + "x2");
+        syncRestirResources(ctx);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
         hdrDisplayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "RT HDR display image " + width + "x" + height);
@@ -1065,7 +1149,8 @@ public final class RtComposite {
                     terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
-                    (int) frameCounter, debugView).write(pushConstants);
+                    restirPreviousAddress(), restirCurrentAddress(),
+                    (int) frameCounter, debugView, terrain.lightGeneration(), restirMode()).write(pushConstants);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
@@ -1136,6 +1221,11 @@ public final class RtComposite {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        // Submission order on the one graphics queue is the history dependency: next frame reads the half
+        // this frame just wrote and writes the other half. Advance only after execute accepted the command.
+        if (restirResourcesEnabled) {
+            restirWriteIndex ^= 1;
+        }
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
@@ -1593,6 +1683,7 @@ public final class RtComposite {
             continuationQueue.destroy();
             continuationQueue = null;
         }
+        destroyRestirResources();
         destroyGuideImages();
         exposure.destroy();
         if (displayPipeline != null) {

@@ -56,6 +56,12 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 // what a flag means, and gives one place to look when a new option is added.
 public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
 public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
+public bool restirEnabled() {
+    // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
+    // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.
+    return pc.restirMode != 0u
+            && pc.restirPreviousAddr != 0 && pc.restirCurrentAddr != 0;
+}
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }
 public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED); }
 

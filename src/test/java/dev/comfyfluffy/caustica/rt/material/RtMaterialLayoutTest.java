@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData.Float4;
+import dev.comfyfluffy.caustica.rt.gen.RestirReservoirData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import org.junit.jupiter.api.Test;
 
@@ -33,17 +34,28 @@ final class RtMaterialLayoutTest {
     }
 
     @Test
-    void reflectedWorldPushConstantsIncludeLightBuffersAndDebugView() {
-        // 10 uint64_t addresses (world/table/material, 5 light buffers, path queue) + 2 uint.
-        assertEquals(88, WorldPushConstantsData.BYTE_SIZE);
+    void reflectedWorldPushConstantsIncludeLightAndRestirBuffers() {
+        // 12 uint64_t addresses (world/table/material, 5 light buffers, path queue, 2 ReSTIR buffers)
+        // followed by frame/debug/light-generation/restir-mode uints.
+        assertEquals(112, WorldPushConstantsData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(WorldPushConstantsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11, 12).write(data);
-        assertEquals(4L, data.getLong(24));  // materialTableAddr
-        assertEquals(5L, data.getLong(32));  // lightBufAddr
-        assertEquals(9L, data.getLong(64));  // lightGridSpanAddr (last of the light-buffer addresses)
-        assertEquals(10L, data.getLong(72)); // pathQueueAddr
-        assertEquals(11, data.getInt(80));   // frameIndex
-        assertEquals(12, data.getInt(84));   // debugView
+        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L, 12L,
+                13, 14, 15, 16).write(data);
+        assertEquals(4L, data.getLong(24));   // materialTableAddr
+        assertEquals(5L, data.getLong(32));   // lightBufAddr
+        assertEquals(9L, data.getLong(64));   // lightGridSpanAddr (last light-buffer address)
+        assertEquals(10L, data.getLong(72));  // pathQueueAddr
+        assertEquals(11L, data.getLong(80));  // restirPreviousAddr
+        assertEquals(12L, data.getLong(88));  // restirCurrentAddr
+        assertEquals(13, data.getInt(96));    // frameIndex
+        assertEquals(14, data.getInt(100));   // debugView
+        assertEquals(15, data.getInt(104));   // lightGeneration
+        assertEquals(16, data.getInt(108));   // restirMode: authoritative live shading branch
+    }
+
+    @Test
+    void reflectedRestirRecordStaysCompact() {
+        assertEquals(48, RestirReservoirData.BYTE_SIZE);
     }
 }

@@ -61,15 +61,14 @@ public final class RtVideoOptions {
     }
 
     /**
-     * Light-emission options. Only the emissive-block multiplier is surfaced: it controls the brightness of
-     * torches, lanterns, glowstone, lava and every other emitter placed in the world. Held-item dynamic
-     * lighting keeps working exactly as Caustica ships it — its multiplier
-     * ({@code CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY}) is simply not given a slider here and stays at the
-     * config/system-property default.
+     * Light-emission and sampling options. Held-item dynamic lighting keeps working exactly as Caustica
+     * ships it — its multiplier ({@code CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY}) is simply not given a
+     * slider here and stays at the config/system-property default.
      */
     public static OptionInstance<?>[] lightOptions() {
         return new OptionInstance<?>[] {
             blockEmissiveIntensity(),
+            restirSampling(),
         };
     }
 
@@ -154,6 +153,10 @@ public final class RtVideoOptions {
     private static OptionInstance<Integer> blockEmissiveIntensity() {
         return multiplier("caustica.options.rt.blockEmissiveIntensity",
                 CausticaConfig.Rt.Lights.BLOCK_INTENSITY, 0, 160);
+    }
+
+    private static OptionInstance<Boolean> restirSampling() {
+        return bool("caustica.options.rt.restirSampling", CausticaConfig.Rt.Lights.RESTIR_SAMPLING);
     }
 
     private static final List<String> TONEMAP_OPERATORS =

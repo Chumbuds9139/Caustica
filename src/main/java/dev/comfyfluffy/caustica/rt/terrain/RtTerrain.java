@@ -300,9 +300,18 @@ public final class RtTerrain {
         return lightGrid.published().dimZ();
     }
 
-    /** Number of compact 64-byte records in the published light buffer. */
+    /** Number of compact light records in the published light buffer. */
     public int lightCount() {
         return lightGrid.published().lightCount();
+    }
+
+    /**
+     * Monotonic light-hierarchy generation. ReSTIR stores its low bits beside each reservoir and rejects
+     * history produced against a different emitter snapshot, preventing removed/moved lights from
+     * ghosting while a new hierarchy is published.
+     */
+    public int lightGeneration() {
+        return (int) lightGrid.published().generation();
     }
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
