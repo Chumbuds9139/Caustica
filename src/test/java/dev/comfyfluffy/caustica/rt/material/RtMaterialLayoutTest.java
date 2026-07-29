@@ -37,7 +37,9 @@ final class RtMaterialLayoutTest {
     void reflectedWorldPushConstantsIncludeLightAndRestirBuffers() {
         // 12 uint64_t addresses (world/table/material, 5 light buffers, path queue, 2 ReSTIR buffers)
         // followed by frame/debug/light-generation uints.
-        assertEquals(108, WorldPushConstantsData.BYTE_SIZE);
+        // The three trailing uints occupy bytes 96..107; std430 rounds the struct to its 8-byte
+        // alignment, so the reflected push-constant range includes four tail-padding bytes.
+        assertEquals(112, WorldPushConstantsData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(WorldPushConstantsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
         new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L, 12L,
