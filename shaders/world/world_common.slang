@@ -34,6 +34,7 @@ public struct WorldPushConstants {
     public uint frameIndex;
     public uint debugView;
     public uint lightGeneration;         // low bits reject history after the emitter hierarchy changes
+    public uint restirMode;              // explicit 0=RIS fallback, 1=ReSTIR read+shade (live UI toggle)
 };
 
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),

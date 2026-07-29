@@ -32,7 +32,8 @@ import lighting;
 import clouds;
 
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
-                 bool allowRestirHistory, uint2 dimensions) {
+                 bool restirEligiblePath, bool restirOwner, float restirSampleScale,
+                 uint2 dimensions) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
     float3 rd = seg.rd;
@@ -73,11 +74,12 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
     bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
-    // Exactly one stable emitter-lighting vertex per pixel writes the ReSTIR history record. Ordinary
-    // camera hits get ReSTIR DI; when Pass A queued a reflection/refraction continuation, the first
-    // eligible receiver carries transported (indirect) light. Other SPP samples and deeper random-walk
-    // vertices deliberately retain independent RIS.
-    bool restirAvailable = allowRestirHistory && restirEnabled() && risOn;
+    // The explicit pc.restirMode uniform chooses the final-color estimator. On the first stable receiver
+    // of leaf 0, sample 0 shades the ReSTIR reservoir and is scaled by SPP; sibling SPP paths skip ONLY
+    // that receiver. Consequently frame averaging contains one full ReSTIR estimate rather than one
+    // ReSTIR estimate diluted by (SPP-1) legacy RIS estimates. Deeper/random paths remain ordinary RIS.
+    bool restirPathOn = restirEligiblePath && restirEnabled() && risOn;
+    bool restirReceiverPending = restirPathOn;
     // Independent light-proposal RNG. Screen-space coherent selection is intentionally deferred until
     // there is a real presampled RIS tile buffer; direct sharing made tile-shaped lighting noise visible.
     // Measured: making a 16x16 tile share this seed recovers at most 1.3ms, so a future pool should share
@@ -287,15 +289,25 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // sampler as terrain/entities, but two-sided: a billboard has no back face, so light
             // striking either side of the quad should still land (matches the sun/moon NEE above).
             if (risOn) {
-                Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                         true, 0.0, seed, proposalSeed);
-                if (restirAvailable) {
-                    r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
-                            n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0, true, 0.0, seed);
-                    restirAvailable = false;
+                bool shadeWithRestir = restirReceiverPending && restirOwner;
+                bool skipSiblingRis = restirReceiverPending && !restirOwner;
+                restirReceiverPending = false;
+                if (!skipSiblingRis) {
+                    uint freshCandidates = shadeWithRestir
+                            ? min(worldPush.risCandidates, RESTIR_FRESH_CANDIDATES)
+                            : worldPush.risCandidates;
+                    Reservoir r = risInitial(hitPos, n, v, rd, albedo,
+                            float3(0.0, 0.0, 0.0), 1.0, true, 0.0, freshCandidates,
+                            seed, proposalSeed);
+                    if (shadeWithRestir) {
+                        r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
+                                n, v, rd, albedo, float3(0.0, 0.0, 0.0),
+                                1.0, true, 0.0, seed);
+                    }
+                    float estimatorScale = shadeWithRestir ? restirSampleScale : 1.0;
+                    L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo,
+                            float3(0.0, 0.0, 0.0), 1.0, true, 0.0) * estimatorScale;
                 }
-                L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo,
-                                                 float3(0.0, 0.0, 0.0), 1.0, true, 0.0);
             }
 
             if (bounce >= maxBounces) {
@@ -407,20 +419,28 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
         float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
 
-        // RIS direct lighting from block emitters. The first stable receiver of the first SPP sample is
-        // upgraded to temporal + spatial ReSTIR; every other path keeps the original independent RIS
-        // estimator. Front lobe + SSS backlighting share ONE shadow ray because a survivor can only lie
-        // in one hemisphere. Passing sss=0 after the quality depth restores the plain front-only target.
+        // Emitter direct lighting. In ReSTIR mode the owner sample shades the reused reservoir here and
+        // sibling SPP samples omit this one receiver, so frame averaging contains the ReSTIR result rather
+        // than silently blending it back toward RIS. OFF and deeper vertices execute the original RIS path.
+        // Front lobe + SSS backlighting still share one shadow ray.
         if (risOn) {
-            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
-                                     seed, proposalSeed);
-            if (restirAvailable) {
-                r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
-                        n, v, rd, diffAlb, F0, rough, false, activeSss, seed);
-                restirAvailable = false;
+            bool shadeWithRestir = restirReceiverPending && restirOwner;
+            bool skipSiblingRis = restirReceiverPending && !restirOwner;
+            restirReceiverPending = false;
+            if (!skipSiblingRis) {
+                uint freshCandidates = shadeWithRestir
+                        ? min(worldPush.risCandidates, RESTIR_FRESH_CANDIDATES)
+                        : worldPush.risCandidates;
+                Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false,
+                        activeSss, freshCandidates, seed, proposalSeed);
+                if (shadeWithRestir) {
+                    r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
+                            n, v, rd, diffAlb, F0, rough, false, activeSss, seed);
+                }
+                float estimatorScale = shadeWithRestir ? restirSampleScale : 1.0;
+                L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
+                        false, activeSss) * estimatorScale;
             }
-            L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
-                                             activeSss);
         }
 
         // Thin-surface SSS transmission. Light entering from the back face scatters through toward the
@@ -524,7 +544,7 @@ void main() {
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
             frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp,
-                    leaf == 0u && s == 0u, dimensions);
+                    leaf == 0u, leaf == 0u && s == 0u, float(spp), dimensions);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {
             break;

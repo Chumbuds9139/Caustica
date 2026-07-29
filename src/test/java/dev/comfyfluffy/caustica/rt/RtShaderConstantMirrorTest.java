@@ -30,6 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtShaderConstantMirrorTest {
     private static final Path REPO_ROOT = repoRoot();
     private static final Path SLANG = REPO_ROOT.resolve("shaders/world/world_common.slang");
+    private static final Path WORLD_CORE = REPO_ROOT.resolve("shaders/world/world_core.slang");
+    private static final Path WORLD_RGEN = REPO_ROOT.resolve("shaders/world/world.rgen.slang");
     private static final Path JAVA =
             REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java");
 
@@ -75,6 +77,29 @@ final class RtShaderConstantMirrorTest {
             assertEquals(0L, seen & bit, entry.getKey() + " reuses a bit already taken");
             seen |= bit;
         }
+    }
+
+    @Test
+    void restirToggleControlsBoundHistoryAndTheFinalShadingEstimator() throws IOException {
+        String common = Files.readString(SLANG);
+        String core = Files.readString(WORLD_CORE);
+        String raygen = Files.readString(WORLD_RGEN);
+        String java = Files.readString(JAVA);
+
+        assertTrue(common.contains("public uint restirMode;"),
+                "the live ReSTIR/RIS selector must be an explicit push uniform");
+        assertTrue(core.contains("pc.restirMode != 0u")
+                        && core.contains("pc.restirPreviousAddr != 0")
+                        && core.contains("pc.restirCurrentAddr != 0"),
+                "restirEnabled must require both the live mode and bound ping-pong buffers");
+        assertTrue(java.contains("terrain.lightGeneration(), restirMode()).write(pushConstants)"),
+                "RtComposite must write restirMode into the world pipeline push constants every frame");
+        assertTrue(raygen.contains("bool shadeWithRestir = restirReceiverPending && restirOwner;")
+                        && raygen.contains("r = restirSpatiotemporal(r")
+                        && raygen.contains("shadeReservoir(r"),
+                "the selected ReSTIR reservoir must flow into the radiance added to final color");
+        assertTrue(raygen.contains("skipSiblingRis") && raygen.contains("restirSampleScale"),
+                "SPP averaging must not dilute ReSTIR with legacy RIS at the same receiver");
     }
 
     @Test

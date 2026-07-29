@@ -57,7 +57,9 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
 public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
 public bool restirEnabled() {
-    return worldFeature(worldPush, FEATURE_RESTIR)
+    // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
+    // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.
+    return pc.restirMode != 0u
             && pc.restirPreviousAddr != 0 && pc.restirCurrentAddr != 0;
 }
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }

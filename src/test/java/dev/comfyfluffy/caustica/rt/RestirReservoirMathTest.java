@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** CPU reference checks for the bounded reservoir math implemented in lighting.slang. */
 final class RestirReservoirMathTest {
-    private static final double MAX_M = 20.0;
+    private static final double MAX_M = 16.0;
     private static final double MAX_W = 16.0;
     private static final double MIN_PHAT = 1.0e-4;
     private static final double MAX_SAMPLE_LUMINANCE = 16.0;
@@ -22,12 +22,12 @@ final class RestirReservoirMathTest {
     void mergedReservoirCarriesEffectiveSamplesButNeverExceedsHardMCap() {
         Reservoir destination = new Reservoir(8.0, 12.0, 2.0);
 
-        // The source asks to contribute M=16, but only 12 fit below the hard M=20 cap. Its current
-        // receiver weight is pHat * W * acceptedM: 3 * 0.5 * 12 = 18.
+        // The source asks to contribute M=16, but only 8 fit below the hard M=16 cap. Its current
+        // receiver weight is pHat * W * acceptedM: 3 * 0.5 * 8 = 12.
         merge(destination, 16.0, 0.5, 3.0, 0.0);
 
         assertEquals(MAX_M, destination.m, 0.0);
-        assertEquals(30.0, destination.weightSum, 1.0e-12);
+        assertEquals(24.0, destination.weightSum, 1.0e-12);
         assertEquals(3.0, destination.selectedTarget, 1.0e-12);
         double finalW = finalizeWeight(destination.weightSum,
                 destination.m, destination.selectedTarget);
@@ -43,11 +43,11 @@ final class RestirReservoirMathTest {
         }
         assertEquals(MAX_M, capped.m, 0.0);
 
-        assertEquals(0.0, finalizeWeight(1000.0, 20.0, MIN_PHAT * 0.5), 0.0,
+        assertEquals(0.0, finalizeWeight(1000.0, MAX_M, MIN_PHAT * 0.5), 0.0,
                 "near-zero p-hat must be discarded");
-        assertEquals(1.0, finalizeWeight(1.0e9, 20.0, MAX_SAMPLE_LUMINANCE), 0.0,
+        assertEquals(1.0, finalizeWeight(1.0e9, MAX_M, MAX_SAMPLE_LUMINANCE), 0.0,
                 "single-sample luminance clamp must be tighter than MAX_W here");
-        assertTrue(finalizeWeight(1.0e9, 20.0, 0.5) <= MAX_W);
+        assertTrue(finalizeWeight(1.0e9, MAX_M, 0.5) <= MAX_W);
     }
 
     @Test

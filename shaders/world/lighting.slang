@@ -26,17 +26,18 @@ public struct Reservoir {
 };
 
 public static const uint RESTIR_SPATIAL_SAMPLES = 4u;
-// Hard stability bounds. M=20 gives the current RIS sample set plus bounded temporal/spatial support;
-// it deliberately does not grow with risCandidates or history age. W and the final single-sample
-// luminance are separate guards: either can become extreme when a selected p-hat approaches zero.
-public static const float RESTIR_MAX_M = 20.0;
-public static const float RESTIR_CURRENT_M_CAP = 8.0;
+// Hard stability bounds. M=16 is split into four fresh candidates, four temporal effective samples,
+// and two from each of four spatial neighbours. ReSTIR therefore does less fresh-light work than the
+// default RIS M=8 and has an observable performance path, while history never grows with age.
+public static const uint RESTIR_FRESH_CANDIDATES = 4u;
+public static const float RESTIR_MAX_M = 16.0;
+public static const float RESTIR_CURRENT_M_CAP = 4.0;
 public static const float RESTIR_TEMPORAL_M_CAP = 4.0;
 public static const float RESTIR_SPATIAL_M_CAP = 2.0;
 public static const float RESTIR_MAX_W = 16.0;
 public static const float RESTIR_MIN_PHAT = 1.0e-4;
 public static const float RESTIR_MAX_SAMPLE_LUMINANCE = 16.0;
-public static const float RESTIR_MAX_WEIGHT_SUM = 5120.0; // MAX_M * MAX_W * MAX_SAMPLE_LUMINANCE
+public static const float RESTIR_MAX_WEIGHT_SUM = 4096.0; // MAX_M * MAX_W * MAX_SAMPLE_LUMINANCE
 public static const float RESTIR_JACOBIAN_MIN = 0.2;
 public static const float RESTIR_JACOBIAN_MAX = 5.0;
 public static const uint RESTIR_MAX_AGE = 30u;
@@ -263,7 +264,8 @@ public void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint p
 // Initial RIS over M power-weighted candidates -> one resampled sample, no shadow ray yet. The chosen
 // sample's W = wSum / (M * p-hat); M counts every candidate, including zero-weight ones.
 public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
-                     float rough, bool twoSided, float sss, inout uint seed, inout uint proposalSeed) {
+                     float rough, bool twoSided, float sss, uint requestedCandidateCount,
+                     inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
     r.sourcePos = hitPos;
     r.sourceNormal = n;
@@ -277,7 +279,7 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
                 * worldPush.lightGridOrigin.w;
     }
     bool hasGridCell = findLightGridCell(gridLookup, gridCell, gridCellCoord);
-    uint candidateCount = worldPush.risCandidates;
+    uint candidateCount = min(max(requestedCandidateCount, 1u), worldPush.risCandidates);
     r.M = float(candidateCount);
     // Deterministically stratify the proposal mixture. At the default M=8 this schedules exactly six
     // local and two global candidates, with every lane taking the same branch for a given candidate.

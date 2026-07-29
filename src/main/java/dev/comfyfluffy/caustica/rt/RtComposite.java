@@ -857,6 +857,11 @@ public final class RtComposite {
         return restirResourcesEnabled ? restirReservoirs[restirWriteIndex].deviceAddress : 0L;
     }
 
+    /** Explicit shader mode uniform; unlike the descriptive feature bit this is tied to real bindings. */
+    private int restirMode() {
+        return restirResourcesEnabled && CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value() ? 1 : 0;
+    }
+
     private void ensureOutput(RtContext ctx, int width, int height) {
         boolean rrEnabled = RtDlssRr.enabled();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
@@ -1145,7 +1150,7 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     restirPreviousAddress(), restirCurrentAddress(),
-                    (int) frameCounter, debugView, terrain.lightGeneration()).write(pushConstants);
+                    (int) frameCounter, debugView, terrain.lightGeneration(), restirMode()).write(pushConstants);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
