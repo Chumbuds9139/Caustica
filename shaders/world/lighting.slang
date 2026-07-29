@@ -487,8 +487,9 @@ public Reservoir restirSpatiotemporal(Reservoir initial, uint2 pixel, uint2 dime
 
     // Read neighbours only from last frame's immutable buffer. This is a genuine spatial pass but does
     // not depend on undefined cross-invocation ordering in the current raygen dispatch.
-    uint spatialHash = pcg(pixel.x * 1973u + pixel.y * 9277u
-            + worldPush.frameIndex * 26699u);
+    uint spatialHash = pixel.x * 1973u + pixel.y * 9277u
+            + worldPush.frameIndex * 26699u;
+    spatialHash = pcg(spatialHash);
     for (uint i = 0u; i < RESTIR_SPATIAL_SAMPLES; ++i) {
         int2 neighbour = previousPixel + restirSpatialOffset(i, spatialHash);
         if (any(neighbour < int2(0, 0)) || any(neighbour >= int2(dimensions))) continue;
