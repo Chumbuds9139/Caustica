@@ -6,41 +6,71 @@ import java.util.random.RandomGenerator;
 import java.util.random.RandomGeneratorFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** CPU reference checks for the weighted-reservoir identity implemented in lighting.slang. */
+/** CPU reference checks for the bounded reservoir math implemented in lighting.slang. */
 final class RestirReservoirMathTest {
+    private static final double MAX_M = 20.0;
+    private static final double MAX_W = 16.0;
+    private static final double MIN_PHAT = 1.0e-4;
+    private static final double MAX_SAMPLE_LUMINANCE = 16.0;
+    private static final double JACOBIAN_MIN = 0.2;
+    private static final double JACOBIAN_MAX = 5.0;
+
     @Test
-    void mergedReservoirCarriesTheSourceEffectiveSampleCount() {
+    void mergedReservoirCarriesEffectiveSamplesButNeverExceedsHardMCap() {
         Reservoir destination = new Reservoir(8.0, 12.0, 2.0);
 
-        // A finalized source represents M samples, not one sample. Its current-receiver weight is
-        // pHat(current) * W(source) * M(source): 3 * 0.5 * 16 = 24.
-        merge(destination, 16.0, 0.5, 3.0, 0.0, 160.0);
+        // The source asks to contribute M=16, but only 12 fit below the hard M=20 cap. Its current
+        // receiver weight is pHat * W * acceptedM: 3 * 0.5 * 12 = 18.
+        merge(destination, 16.0, 0.5, 3.0, 0.0);
 
-        assertEquals(24.0, destination.m, 1.0e-12);
-        assertEquals(36.0, destination.weightSum, 1.0e-12);
+        assertEquals(MAX_M, destination.m, 0.0);
+        assertEquals(30.0, destination.weightSum, 1.0e-12);
         assertEquals(3.0, destination.selectedTarget, 1.0e-12);
-        double finalW = destination.weightSum / (destination.m * destination.selectedTarget);
+        double finalW = finalizeWeight(destination.weightSum,
+                destination.m, destination.selectedTarget);
         assertEquals(destination.weightSum / destination.m,
                 finalW * destination.selectedTarget, 1.0e-12);
     }
 
     @Test
-    void historyMIsClampedAndSelectionMatchesResamplingWeights() {
+    void historyMAndFinalWeightStayBounded() {
         Reservoir capped = new Reservoir(8.0, 1.0, 1.0);
         for (int i = 0; i < 20; i++) {
-            merge(capped, 100.0, 1.0, 1.0, 0.5, 160.0);
+            merge(capped, 100.0, 1000.0, 1000.0, 0.5);
         }
-        assertEquals(160.0, capped.m, 0.0);
+        assertEquals(MAX_M, capped.m, 0.0);
 
+        assertEquals(0.0, finalizeWeight(1000.0, 20.0, MIN_PHAT * 0.5), 0.0,
+                "near-zero p-hat must be discarded");
+        assertEquals(1.0, finalizeWeight(1.0e9, 20.0, MAX_SAMPLE_LUMINANCE), 0.0,
+                "single-sample luminance clamp must be tighter than MAX_W here");
+        assertTrue(finalizeWeight(1.0e9, 20.0, 0.5) <= MAX_W);
+    }
+
+    @Test
+    void jacobianValidationRejectsDisocclusionAndNonFiniteTransfers() {
+        assertTrue(validJacobian(1.0, 1.0));
+        assertTrue(validJacobian(1.0, JACOBIAN_MIN));
+        assertTrue(validJacobian(1.0, JACOBIAN_MAX));
+        assertFalse(validJacobian(1.0, 0.19));
+        assertFalse(validJacobian(1.0, 5.01));
+        assertFalse(validJacobian(0.0, 1.0));
+        assertFalse(validJacobian(1.0, Double.NaN));
+        assertFalse(validJacobian(1.0, Double.POSITIVE_INFINITY));
+    }
+
+    @Test
+    void streamingSelectionStillMatchesBoundedResamplingWeights() {
         RandomGenerator random = RandomGeneratorFactory.of("L64X128MixRandom").create(0x5eedL);
         int sourceWins = 0;
         int trials = 200_000;
         for (int i = 0; i < trials; i++) {
-            // Existing stream weight 2, incoming source weight 6 -> survivor probability 6 / 8.
+            // Existing stream weight 2, incoming bounded source weight 6 -> probability 6 / 8.
             Reservoir r = new Reservoir(1.0, 2.0, 2.0);
-            merge(r, 1.0, 2.0, 3.0, random.nextDouble(), 20.0);
+            merge(r, 1.0, 2.0, 3.0, random.nextDouble());
             if (r.selectedTarget == 3.0) {
                 sourceWins++;
             }
@@ -49,20 +79,38 @@ final class RestirReservoirMathTest {
     }
 
     private static void merge(Reservoir destination, double sourceM, double sourceW,
-                              double targetAtCurrentReceiver, double uniformRandom, double maxM) {
-        double acceptedM = Math.min(sourceM, Math.max(0.0, maxM - destination.m));
-        if (acceptedM <= 0.0 || sourceW <= 0.0) {
+                              double targetAtCurrentReceiver, double uniformRandom) {
+        double acceptedM = Math.min(sourceM, Math.max(0.0, MAX_M - destination.m));
+        double safeW = Math.min(sourceW, MAX_W);
+        if (!(acceptedM > 0.0 && safeW > 0.0)
+                || !(targetAtCurrentReceiver >= MIN_PHAT)) {
             return;
         }
-        double weight = targetAtCurrentReceiver * sourceW * acceptedM;
-        destination.m += acceptedM;
-        if (weight <= 0.0) {
-            return;
-        }
+        double safeTarget = Math.min(targetAtCurrentReceiver, MAX_SAMPLE_LUMINANCE);
+        double weight = safeTarget * safeW * acceptedM;
+        destination.m = Math.min(destination.m + acceptedM, MAX_M);
         destination.weightSum += weight;
         if (uniformRandom * destination.weightSum < weight) {
-            destination.selectedTarget = targetAtCurrentReceiver;
+            destination.selectedTarget = safeTarget;
         }
+    }
+
+    private static double finalizeWeight(double weightSum, double m, double selectedTarget) {
+        if (!(selectedTarget >= MIN_PHAT && m > 0.0)) {
+            return 0.0;
+        }
+        double rawW = weightSum / (m * selectedTarget);
+        return rawW > 0.0
+                ? Math.min(rawW, Math.min(MAX_W, MAX_SAMPLE_LUMINANCE / selectedTarget))
+                : 0.0;
+    }
+
+    private static boolean validJacobian(double sourceGeometry, double currentGeometry) {
+        if (!(sourceGeometry > 0.0 && currentGeometry > 0.0)) {
+            return false;
+        }
+        double jacobian = currentGeometry / sourceGeometry;
+        return jacobian >= JACOBIAN_MIN && jacobian <= JACOBIAN_MAX;
     }
 
     private static final class Reservoir {

@@ -19,10 +19,26 @@ public struct Reservoir {
     public float phat;
     public uint packedLe; // unscaled R11G11B10 source radiance; survives a live intensity change
     public uint age;
+    // Runtime-only source receiver used to validate the connection Jacobian before history transfer.
+    public float3 sourcePos;
+    public float3 sourceNormal;
+    public uint restir; // 1 only after the hard ReSTIR safety clamps have been applied
 };
 
 public static const uint RESTIR_SPATIAL_SAMPLES = 4u;
-public static const float RESTIR_MAX_HISTORY_FACTOR = 20.0;
+// Hard stability bounds. M=20 gives the current RIS sample set plus bounded temporal/spatial support;
+// it deliberately does not grow with risCandidates or history age. W and the final single-sample
+// luminance are separate guards: either can become extreme when a selected p-hat approaches zero.
+public static const float RESTIR_MAX_M = 20.0;
+public static const float RESTIR_CURRENT_M_CAP = 8.0;
+public static const float RESTIR_TEMPORAL_M_CAP = 4.0;
+public static const float RESTIR_SPATIAL_M_CAP = 2.0;
+public static const float RESTIR_MAX_W = 16.0;
+public static const float RESTIR_MIN_PHAT = 1.0e-4;
+public static const float RESTIR_MAX_SAMPLE_LUMINANCE = 16.0;
+public static const float RESTIR_MAX_WEIGHT_SUM = 5120.0; // MAX_M * MAX_W * MAX_SAMPLE_LUMINANCE
+public static const float RESTIR_JACOBIAN_MIN = 0.2;
+public static const float RESTIR_JACOBIAN_MAX = 5.0;
 public static const uint RESTIR_MAX_AGE = 30u;
 
 public Reservoir resEmpty() {
@@ -37,6 +53,9 @@ public Reservoir resEmpty() {
     r.phat = 0.0;
     r.packedLe = 0u;
     r.age = 0u;
+    r.sourcePos = float3(0.0, 0.0, 0.0);
+    r.sourceNormal = float3(0.0, 0.0, 0.0);
+    r.restir = 0u;
     return r;
 }
 
@@ -246,6 +265,8 @@ public void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint p
 public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
                      float rough, bool twoSided, float sss, inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
+    r.sourcePos = hitPos;
+    r.sourceNormal = n;
     LightGridCell gridCell;
     int3 gridCellCoord;
     float3 gridLookup = hitPos;
@@ -357,8 +378,8 @@ public bool restirLoadCandidate(PackedRestirReservoir record, float3 expectedPre
     bool storedTwoSided = (record.meta & 0x80000000u) != 0u;
     if (storedM == 0u || age > RESTIR_MAX_AGE || storedTwoSided != twoSided
             || generation != (pc.lightGeneration & 0x7fu)
-            || record.W <= 0.0 || record.area <= 0.0) {
-        return false;
+            || !(record.W > 0.0) || !(record.area > 0.0)) {
+        return false; // the !(x>0) form rejects NaN as well as zero/negative values
     }
 
     // Records are relative to the camera that produced them. camDelta is current-minus-previous, so
@@ -366,9 +387,10 @@ public bool restirLoadCandidate(PackedRestirReservoir record, float3 expectedPre
     float3 previousSurface = record.surfaceCameraRelative
             + worldPush.camOffset - worldPush.camDelta;
     float3 previousNormal = restirUnpackNormal(record.surfaceNormal);
-    if (length(previousSurface - expectedPreviousSurface) > maxPositionDelta
-            || dot(previousNormal, currentNormal) < minNormalDot) {
-        return false;
+    float positionDelta = length(previousSurface - expectedPreviousSurface);
+    float normalAgreement = dot(previousNormal, currentNormal);
+    if (!(positionDelta <= maxPositionDelta && normalAgreement >= minNormalDot)) {
+        return false; // also rejects non-finite reconstructed geometry
     }
 
     candidate.pos = record.sampleCameraRelative + worldPush.camOffset - worldPush.camDelta;
@@ -376,35 +398,74 @@ public bool restirLoadCandidate(PackedRestirReservoir record, float3 expectedPre
     candidate.packedLe = record.packedLe;
     candidate.le = lightRadiancePacked(record.packedLe) * max(worldPush.lightScales.x, 0.0);
     candidate.area = record.area;
-    candidate.M = float(storedM);
-    candidate.W = record.W;
+    candidate.M = min(float(storedM), RESTIR_MAX_M);
+    candidate.W = min(record.W, RESTIR_MAX_W);
     candidate.age = age;
+    candidate.sourcePos = previousSurface;
+    candidate.sourceNormal = previousNormal;
     return true;
 }
 
+// Area-measure connection geometry. The ratio G(current)/G(source) is the transfer Jacobian for the
+// same emitter point seen from two receivers. We do not multiply by it (the target is re-evaluated in
+// the same light-area sample domain); it is a strict disocclusion/grazing-angle validity test.
+public bool restirConnectionGeometry(float3 samplePos, float3 sampleNormal,
+                              float3 receiverPos, float3 receiverNormal, out float geometry) {
+    geometry = 0.0;
+    float3 toLight = samplePos - receiverPos;
+    float dist2 = dot(toLight, toLight);
+    if (!(dist2 >= 1.0e-6 && dist2 <= 1.0e8)) return false;
+    float3 wi = toLight * rsqrt(dist2);
+    float lightCosine = max(0.0, dot(sampleNormal, -wi));
+    // abs supports both the particle's two-sided target and the SSS back lobe. Hemisphere/material
+    // eligibility is still decided by evalSampleContrib at the current receiver.
+    float receiverCosine = abs(dot(receiverNormal, wi));
+    geometry = lightCosine * receiverCosine / dist2;
+    return geometry >= 1.0e-8 && geometry <= 1.0e6;
+}
+
+public bool restirValidJacobian(Reservoir source, float3 hitPos, float3 n) {
+    float sourceGeometry;
+    float currentGeometry;
+    if (!restirConnectionGeometry(source.pos, source.lnrm,
+            source.sourcePos, source.sourceNormal, sourceGeometry)
+            || !restirConnectionGeometry(source.pos, source.lnrm,
+                    hitPos, n, currentGeometry)) {
+        return false;
+    }
+    float jacobian = currentGeometry / sourceGeometry;
+    // Both comparisons are false for NaN; infinity also falls outside the upper bound.
+    return jacobian >= RESTIR_JACOBIAN_MIN && jacobian <= RESTIR_JACOBIAN_MAX;
+}
+
 // Combine one already-finalized source reservoir at the CURRENT receiver. The source's representative
-// stands for source.M candidates, therefore its resampling weight is pHat_current * source.W * source.M.
-// M is always accumulated, even when the target is zero. This is the weighted-reservoir identity that
-// avoids treating a history reservoir as merely one fresh candidate.
+// stands for source.M candidates, therefore its resampling weight is pHat_current * W * M. All three
+// factors are bounded before entering the stream; invalid Jacobians and near-zero targets are discarded
+// rather than allowed to manufacture a huge reciprocal weight in finalization.
 public void restirMerge(inout Reservoir dst, Reservoir source, float maxM,
                  float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
                  float rough, bool twoSided, float sss, inout uint seed) {
-    float acceptedM = min(source.M, max(0.0, maxM - dst.M));
-    if (acceptedM <= 0.0 || source.W <= 0.0) return;
+    float acceptedM = min(source.M, max(0.0, min(maxM, RESTIR_MAX_M) - dst.M));
+    float sourceW = min(source.W, RESTIR_MAX_W);
+    if (!(acceptedM > 0.0 && sourceW > 0.0) || !restirValidJacobian(source, hitPos, n)) return;
 
     float target;
     evalSampleContrib(source.pos, source.lnrm, source.le, source.area,
             hitPos, n, v, rd, diffAlb, F0, rough, twoSided, sss, target);
-    float w = target * source.W * acceptedM;
-    dst.M += acceptedM;
-    if (w <= 0.0) return;
+    if (!(target >= RESTIR_MIN_PHAT)) return;
+    float safeTarget = min(target, RESTIR_MAX_SAMPLE_LUMINANCE);
+    float w = min(safeTarget * sourceW * acceptedM,
+            max(0.0, RESTIR_MAX_WEIGHT_SUM - dst.wSum));
+    if (!(w > 0.0)) return;
+
+    dst.M = min(dst.M + acceptedM, RESTIR_MAX_M);
     dst.wSum += w;
     if (rndf(seed) * dst.wSum < w) {
         dst.pos = source.pos;
         dst.lnrm = source.lnrm;
         dst.le = source.le;
         dst.area = source.area;
-        dst.phat = target;
+        dst.phat = safeTarget;
         dst.packedLe = source.packedLe;
         dst.age = min(source.age + 1u, RESTIR_MAX_AGE);
     }
@@ -442,7 +503,9 @@ public int2 restirSpatialOffset(uint sampleIndex, uint hash) {
 
 public void restirStore(Reservoir r, uint pixelIndex, float3 surfacePos, float3 surfaceNormal,
                  bool twoSided) {
-    if (pc.restirCurrentAddr == 0 || r.W <= 0.0 || r.M <= 0.0 || r.phat <= 0.0) return;
+    if (pc.restirCurrentAddr == 0
+            || !(r.W > 0.0 && r.W <= RESTIR_MAX_W
+                && r.M > 0.0 && r.M <= RESTIR_MAX_M && r.phat >= RESTIR_MIN_PHAT)) return;
     PackedRestirReservoir record;
     record.sampleCameraRelative = r.pos - worldPush.camOffset;
     record.area = r.area;
@@ -451,7 +514,7 @@ public void restirStore(Reservoir r, uint pixelIndex, float3 surfacePos, float3 
     record.sampleNormal = restirPackNormal(r.lnrm);
     record.packedLe = r.packedLe;
     record.surfaceNormal = restirPackNormal(surfaceNormal);
-    uint storedM = min(uint(round(r.M)), 0xffffu);
+    uint storedM = min(uint(round(r.M)), uint(RESTIR_MAX_M));
     record.meta = storedM
             | (min(r.age, 0xffu) << 16u)
             | ((pc.lightGeneration & 0x7fu) << 24u)
@@ -464,46 +527,68 @@ public Reservoir restirSpatiotemporal(Reservoir initial, uint2 pixel, uint2 dime
                        float3 diffAlb, float3 F0, float rough, bool twoSided, float sss,
                        inout uint seed) {
     Reservoir result = initial;
-    float maxM = max(initial.M, initial.M * RESTIR_MAX_HISTORY_FACTOR);
+    // Normalize the fresh RIS set into a fixed budget before any history enters. Scaling M and wSum by
+    // the same ratio preserves its W, then the explicit W/luminance clamps remove pathological tails.
+    float originalM = max(initial.M, 1.0);
+    result.M = min(originalM, min(RESTIR_CURRENT_M_CAP, RESTIR_MAX_M));
+    result.sourcePos = hitPos;
+    result.sourceNormal = n;
+    result.restir = 1u;
+    if (initial.W > 0.0 && initial.phat >= RESTIR_MIN_PHAT) {
+        float safeTarget = min(initial.phat, RESTIR_MAX_SAMPLE_LUMINANCE);
+        float safeW = min(initial.W, min(RESTIR_MAX_W,
+                RESTIR_MAX_SAMPLE_LUMINANCE / initial.phat));
+        result.phat = safeTarget;
+        result.W = safeW;
+        result.wSum = min(safeW * result.M * safeTarget, RESTIR_MAX_WEIGHT_SUM);
+    } else {
+        result.W = 0.0;
+        result.wSum = 0.0;
+        result.phat = 0.0;
+    }
+
     int2 previousPixel;
-    if (!restirPreviousPixel(hitPos, motionPrev, dimensions, previousPixel)) {
-        restirStore(result, pixel.y * dimensions.x + pixel.x, hitPos, n, twoSided);
-        return result;
-    }
+    bool hasPreviousPixel = restirPreviousPixel(hitPos, motionPrev, dimensions, previousPixel);
+    if (hasPreviousPixel) {
+        ConstPtr<PackedRestirReservoir> history =
+                ConstPtr<PackedRestirReservoir>(pc.restirPreviousAddr);
+        float cameraDistance = length(hitPos - worldPush.camOffset);
+        float3 expectedPreviousSurface = hitPos - motionPrev;
+        Reservoir candidate;
+        uint previousIndex = uint(previousPixel.y) * dimensions.x + uint(previousPixel.x);
+        if (restirLoadCandidate(history[previousIndex], expectedPreviousSurface, n, twoSided,
+                max(0.20, cameraDistance * 0.01), 0.95, candidate)) {
+            candidate.M = min(candidate.M, RESTIR_TEMPORAL_M_CAP);
+            restirMerge(result, candidate, RESTIR_MAX_M, hitPos, n, v, rd,
+                    diffAlb, F0, rough, twoSided, sss, seed);
+        }
 
-    ConstPtr<PackedRestirReservoir> history =
-            ConstPtr<PackedRestirReservoir>(pc.restirPreviousAddr);
-    float cameraDistance = length(hitPos - worldPush.camOffset);
-    float3 expectedPreviousSurface = hitPos - motionPrev;
-    Reservoir candidate;
-    uint previousIndex = uint(previousPixel.y) * dimensions.x + uint(previousPixel.x);
-    if (restirLoadCandidate(history[previousIndex], expectedPreviousSurface, n, twoSided,
-            max(0.20, cameraDistance * 0.01), 0.90, candidate)) {
-        // Leave capacity for neighbours even after temporal history reaches its age/M ceiling.
-        candidate.M = min(candidate.M, initial.M * 8.0);
-        restirMerge(result, candidate, maxM, hitPos, n, v, rd, diffAlb, F0, rough,
-                twoSided, sss, seed);
-    }
-
-    // Read neighbours only from last frame's immutable buffer. This is a genuine spatial pass but does
-    // not depend on undefined cross-invocation ordering in the current raygen dispatch.
-    uint spatialHash = pixel.x * 1973u + pixel.y * 9277u
-            + worldPush.frameIndex * 26699u;
-    spatialHash = pcg(spatialHash);
-    for (uint i = 0u; i < RESTIR_SPATIAL_SAMPLES; ++i) {
-        int2 neighbour = previousPixel + restirSpatialOffset(i, spatialHash);
-        if (any(neighbour < int2(0, 0)) || any(neighbour >= int2(dimensions))) continue;
-        uint neighbourIndex = uint(neighbour.y) * dimensions.x + uint(neighbour.x);
-        if (restirLoadCandidate(history[neighbourIndex], expectedPreviousSurface, n, twoSided,
-                max(1.5, cameraDistance * 0.05), 0.75, candidate)) {
-            candidate.M = min(candidate.M, initial.M * 3.0);
-            restirMerge(result, candidate, maxM, hitPos, n, v, rd, diffAlb, F0, rough,
-                    twoSided, sss, seed);
+        // Read neighbours only from last frame's immutable buffer. Tighter normal acceptance plus the
+        // connection-Jacobian test prevents floor/wall edges and disocclusions from exchanging energy.
+        uint spatialHash = pixel.x * 1973u + pixel.y * 9277u
+                + worldPush.frameIndex * 26699u;
+        spatialHash = pcg(spatialHash);
+        for (uint i = 0u; i < RESTIR_SPATIAL_SAMPLES; ++i) {
+            int2 neighbour = previousPixel + restirSpatialOffset(i, spatialHash);
+            if (any(neighbour < int2(0, 0)) || any(neighbour >= int2(dimensions))) continue;
+            uint neighbourIndex = uint(neighbour.y) * dimensions.x + uint(neighbour.x);
+            if (restirLoadCandidate(history[neighbourIndex], expectedPreviousSurface, n, twoSided,
+                    max(1.5, cameraDistance * 0.05), 0.90, candidate)) {
+                candidate.M = min(candidate.M, RESTIR_SPATIAL_M_CAP);
+                restirMerge(result, candidate, RESTIR_MAX_M, hitPos, n, v, rd,
+                        diffAlb, F0, rough, twoSided, sss, seed);
+            }
         }
     }
 
-    result.W = result.phat > 0.0 && result.M > 0.0
+    result.M = min(result.M, RESTIR_MAX_M);
+    float rawW = result.phat >= RESTIR_MIN_PHAT && result.M > 0.0
             ? result.wSum / (result.M * result.phat) : 0.0;
+    float selectedLuminanceW = result.phat >= RESTIR_MIN_PHAT
+            ? RESTIR_MAX_SAMPLE_LUMINANCE / result.phat : 0.0;
+    result.W = rawW > 0.0 ? min(rawW, min(RESTIR_MAX_W, selectedLuminanceW)) : 0.0;
+    result.sourcePos = hitPos;
+    result.sourceNormal = n;
     restirStore(result, pixel.y * dimensions.x + pixel.x, hitPos, n, twoSided);
     return result;
 }
@@ -534,7 +619,19 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
     VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
     float3 vis = shadow.transmittance;
-    return contrib * vis * s.W;
+    float appliedW = s.restir != 0u ? min(s.W, RESTIR_MAX_W) : s.W;
+    float3 shaded = contrib * vis * appliedW;
+    if (s.restir != 0u) {
+        // Last-line firefly suppression after visibility and target re-evaluation. This catches the case
+        // where a capped p-hat was selected but the full RGB contribution at the final receiver is much
+        // larger. Hue is preserved by scaling all channels together.
+        float shadedLuminance = luminance(shaded);
+        if (!(shadedLuminance >= 0.0)) return float3(0.0, 0.0, 0.0);
+        if (shadedLuminance > RESTIR_MAX_SAMPLE_LUMINANCE) {
+            shaded *= RESTIR_MAX_SAMPLE_LUMINANCE / shadedLuminance;
+        }
+    }
+    return shaded;
 }
 
 // TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):
