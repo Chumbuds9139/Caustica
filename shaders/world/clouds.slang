@@ -293,23 +293,32 @@ public float cloudAlpha(WorldPush push, CloudHit h, float density) {
  * Points above the deck get t <= 0 and are unshadowed for free, which is the correct answer rather than
  * a special case.
  *
- * The light ray is unoccluded by definition (the caller already traced scene visibility separately), so
- * it passes a large maxDistance: a cloud between the point and the sun must shadow it no matter how far
- * away the cloud is.
+ * This deliberately does NOT call cloudTrace/cloudAlpha. Those helpers describe a VISIBLE cloud layer:
+ * they apply camera-facing cross-fades and the finite view-distance fade stored in cloudAnchor.w. Using
+ * that view query for sun visibility made the cloud-shadow multiplier depend on the observer (not just
+ * on the receiver and the sun): when the camera crossed above a block shadow, the same terrain hit could
+ * receive a different cloud fade and the already-blocked direct light looked like it had been shadowed a
+ * second time. Sun visibility must be a light-path query only, so it intersects the deck analytically and
+ * samples coverage without any view/camera fade.
  */
 public float cloudSunShadow(WorldPush push, float3 pointRel, float3 lightDir) {
     if (!cloudsEnabled(push)) {
         return 1.0;
     }
     float strength = cloudShadowStrength(push);
-    if (strength <= 0.0) {
+    if (strength <= 0.0 || lightDir.y <= 1.0e-4) {
         return 1.0;
     }
-    CloudHit h = cloudTrace(push, pointRel, lightDir, 1.0e9);
-    if (!h.hit) {
+
+    float deckRel = push.clouds.w - pointRel.y;
+    float t = deckRel / lightDir.y;
+    if (t <= 0.0) {
         return 1.0;
     }
-    return 1.0 - strength * cloudAlpha(push, h, cloudCoverage(push, h.samplePos));
+
+    float2 samplePos = push.cloudAnchor.xy + pointRel.xz + lightDir.xz * t;
+    float alpha = clamp(cloudCoverage(push, samplePos) * clamp(push.clouds.y, 0.0, 1.0), 0.0, 1.0);
+    return 1.0 - strength * alpha;
 }
 
 // ---- Classic (vanilla-style) shading -------------------------------------------------------------
