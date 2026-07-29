@@ -274,12 +274,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
-                // Particles are lit by the same sun as everything else, so they must dim under the same
-                // cloud. Skipping this would leave rain/smoke/spell particles glowing at full strength
-                // inside the shadow of a cloud that darkened the ground beneath them.
-                vis *= cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                    L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
+                    // Particles are lit by the same sun as everything else, so they must dim under the
+                    // same cloud. Do this only after scene visibility survives: an opaque house/wall has
+                    // already removed the direct sun, and running the cloud attenuator on that fully
+                    // blocked path is both wasted work and the overlap that made block shadows appear
+                    // double-dark when ray-traced clouds were enabled.
+                    vis *= cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
+                    if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
+                        L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
+                    }
                 }
             }
 
@@ -380,40 +384,40 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
         float ndl = celestialLit ? max(0.0, dot(n, lightDir)) : 0.0;
-        // Cloud occlusion of the celestial light at this shading point. Computed ONCE here and shared by
-        // the front-face NEE below and the SSS transmission pass further down: both are the same sun
-        // arriving at the same point, so a cloud that shades one must shade the other by exactly the
-        // same amount — backlit leaves under a cloud should dim with the ground around them, not stay
-        // lit. Evaluating it twice would also double the cost for an identical answer.
-        //
-        // This is an analytic plane query, not a traced ray: it adds no shadow ray, no variance, and
-        // nothing for the denoiser to resolve, which is why cloud shadows are affordable at every
-        // vertex of every path rather than only on primary hits. The gate mirrors the union of the two
-        // consumers' own conditions exactly, so this is never evaluated for a vertex that would discard
-        // it — in particular it costs nothing in the Nether and the End, where celestialLit is always
-        // false.
-        float cloudShadow = (ndl > 0.0 || (sss > 0.0 && celestialLit))
-                ? cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir) : 1.0;
+        // Cloud occlusion of the celestial light at this shading point. It is shared lazily by the
+        // front-face NEE below and the SSS transmission pass further down: both are the same sun arriving
+        // at the same point, so a cloud that shades one must shade the other by exactly the same amount.
+        // The important ordering is scene visibility FIRST, cloud visibility SECOND. If a house already
+        // blocks the shadow ray, the direct-light path has zero throughput and the cloud query must not
+        // stack another attenuation term on top of that fully blocked path. This keeps block/structure
+        // shadows stable when the camera moves over them while ray-traced clouds are enabled.
+        float cloudShadow = 1.0;
+        bool cloudShadowReady = false;
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance * cloudShadow;
-            // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
-            // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
-            // so it applies to the whole NEE term (diffuse + specular).
-            if (medium.current.water && waterWaves && shadow.waterHitT > 0.0) {
-                vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
-            }
+            float3 vis = shadow.transmittance;
             if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
-                float3 h = normalize(lightDir + v);
-                float ndh = max(0.0, dot(n, h));
-                float ndv = max(1.0e-4, dot(n, v));
-                float vdh = max(0.0, dot(v, h));
-                float D = ggxD(ndh, rough);
-                float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
-                float3 F = fresnelSchlick(vdh, F0);
-                brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
-                L += throughput * brdf * worldPush.lightRadiance.xyz * ndl * vis;
+                cloudShadow = cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
+                cloudShadowReady = true;
+                vis *= cloudShadow;
+                // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
+                // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
+                // so it applies to the whole NEE term (diffuse + specular).
+                if (medium.current.water && waterWaves && shadow.waterHitT > 0.0) {
+                    vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
+                }
+                if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
+                    float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
+                    float3 h = normalize(lightDir + v);
+                    float ndh = max(0.0, dot(n, h));
+                    float ndv = max(1.0e-4, dot(n, v));
+                    float vdh = max(0.0, dot(v, h));
+                    float D = ggxD(ndh, rough);
+                    float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
+                    float3 F = fresnelSchlick(vdh, F0);
+                    brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
+                    L += throughput * brdf * worldPush.lightRadiance.xyz * ndl * vis;
+                }
             }
         }
 
@@ -452,17 +456,26 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                // Same cloud attenuation as the front-face NEE above — see cloudShadow.
-                float3 visB = shadowBack.transmittance * cloudShadow;
-                // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
-                // flicker with the same light bands as the floor around it.
-                if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {
-                    visB *= waterCaustic(hitPos + lightDir * shadowBack.waterHitT,
-                                         lightDir, shadowBack.waterHitT);
-                }
+                float3 visB = shadowBack.transmittance;
                 if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
-                    float cosT = dot(lightDir, rd);
-                    L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * worldPush.lightRadiance.xyz * visB;
+                    // Same cloud attenuation as the front-face NEE above — see cloudShadow. Compute it
+                    // lazily if the front lobe was unlit or blocked, but only after this back-face scene
+                    // visibility ray has proven that some direct light remains.
+                    if (!cloudShadowReady) {
+                        cloudShadow = cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
+                        cloudShadowReady = true;
+                    }
+                    visB *= cloudShadow;
+                    // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
+                    // flicker with the same light bands as the floor around it.
+                    if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {
+                        visB *= waterCaustic(hitPos + lightDir * shadowBack.waterHitT,
+                                             lightDir, shadowBack.waterHitT);
+                    }
+                    if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
+                        float cosT = dot(lightDir, rd);
+                        L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * worldPush.lightRadiance.xyz * visB;
+                    }
                 }
             }
         }
