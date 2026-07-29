@@ -230,6 +230,15 @@ abstract class GenerateShaderRecords extends DefaultTask {
         Map materialHeaderType = materialProbeArray.type.elementType as Map
         int materialHeaderByteSize = materialProbeArray.type.uniformStride as int
 
+        def restirParameter = reflection.parameters.find { it.name == "restirReservoirLayoutProbe" }
+        def restirProbeArray = restirParameter?.type?.resultType?.fields?.find { it.name == "values" }
+        if (restirProbeArray?.type?.kind != "array"
+                || restirProbeArray.type.elementType?.name != "PackedRestirReservoir") {
+            throw new GradleException("unexpected PackedRestirReservoir reflection probe shape")
+        }
+        Map restirReservoirType = restirProbeArray.type.elementType as Map
+        int restirReservoirByteSize = restirProbeArray.type.uniformStride as int
+
         def pushParameter = reflection.parameters.find { it.name == "pushConstantsLayoutProbe" }
         if (pushParameter?.type?.elementType?.name != "WorldPushConstants") {
             throw new GradleException("Slang reflection omitted pushConstantsLayoutProbe")
@@ -249,5 +258,7 @@ abstract class GenerateShaderRecords extends DefaultTask {
                 generateJava(pushConstantsType, pushConstantsByteSize, "WorldPushConstantsData"), "UTF-8")
         new File(packageDir, "MaterialHeaderData.java").setText(
                 generateJava(materialHeaderType, materialHeaderByteSize, "MaterialHeaderData"), "UTF-8")
+        new File(packageDir, "RestirReservoirData.java").setText(
+                generateJava(restirReservoirType, restirReservoirByteSize, "RestirReservoirData"), "UTF-8")
     }
 }

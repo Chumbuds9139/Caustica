@@ -27,14 +27,34 @@ public struct WorldPushConstants {
     public uint64_t lightGridCellAddr;   // dense light grid cell headers (0 = global proposals only)
     public uint64_t lightGridSpanAddr;   // packed weighted section spans referenced by cell headers
     public uint64_t pathQueueAddr;       // packed primary -> indirect continuation records
+    // ReSTIR ping-pong history. Both are zero while the player toggle is off, so no history memory is
+    // reachable (or even allocated) on the legacy RIS path.
+    public uint64_t restirPreviousAddr;
+    public uint64_t restirCurrentAddr;
     public uint frameIndex;
     public uint debugView;
+    public uint lightGeneration;         // low bits reject history after the emitter hierarchy changes
 };
 
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
 // w = bindless entityAlbedoTex slot of the destroy-stage texture.
 public struct BreakEntry {
     public int4 posSlot;
+};
+
+// Compact persistent ReSTIR ABI. Positions are camera-relative so a terrain-origin rebase cannot
+// invalidate otherwise-stationary history. `meta` packs M:16, age:8, the low seven bits of the
+// light-hierarchy generation, and the two-sided receiver bit; M==0 is the invalid sentinel. Its std430
+// array stride is reflected into RestirReservoirData.BYTE_SIZE, so Java never hand-maintains this size.
+public struct PackedRestirReservoir {
+    public float3 sampleCameraRelative;
+    public float area;
+    public float3 surfaceCameraRelative;
+    public float W;
+    public uint sampleNormal;
+    public uint packedLe;
+    public uint surfaceNormal;
+    public uint meta;
 };
 
 // Per-frame world data, read through a 64-bit device address. WorldPushData.java is generated from this
@@ -101,6 +121,7 @@ public static const uint FEATURE_WEATHER_LIGHTING = 2u;  // rain/storm sky darke
 public static const uint FEATURE_DENOISER = 4u;          // temporal/spatial denoising filter is active
 public static const uint FEATURE_CLOUDS = 8u;            // cloud deck in the sky + its sun shadow
 public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marched, not a flat deck
+public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial emitter-reservoir reuse
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume

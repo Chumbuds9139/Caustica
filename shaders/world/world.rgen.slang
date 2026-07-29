@@ -31,7 +31,8 @@ import trace_ser;
 import lighting;
 import clouds;
 
-public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
+public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
+                 bool allowRestirHistory, uint2 dimensions) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
     float3 rd = seg.rd;
@@ -72,6 +73,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
     bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
+    // Exactly one stable emitter-lighting vertex per pixel writes the ReSTIR history record. Ordinary
+    // camera hits get ReSTIR DI; when Pass A queued a reflection/refraction continuation, the first
+    // eligible receiver carries transported (indirect) light. Other SPP samples and deeper random-walk
+    // vertices deliberately retain independent RIS.
+    bool restirAvailable = allowRestirHistory && restirEnabled() && risOn;
     // Independent light-proposal RNG. Screen-space coherent selection is intentionally deferred until
     // there is a real presampled RIS tile buffer; direct sharing made tile-shaped lighting noise visible.
     // Measured: making a 16x16 tile share this seed recovers at most 1.3ms, so a future pool should share
@@ -283,8 +289,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (risOn) {
                 Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
                                          true, 0.0, seed, proposalSeed);
-                L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                                 true, 0.0);
+                if (restirAvailable) {
+                    r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
+                            n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0, true, 0.0, seed);
+                    restirAvailable = false;
+                }
+                L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo,
+                                                 float3(0.0, 0.0, 0.0), 1.0, true, 0.0);
             }
 
             if (bounce >= maxBounces) {
@@ -396,14 +407,18 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 
         float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
 
-        // RIS direct lighting from block emitters (single-frame only, no temporal reservoir reuse).
-        // Front lobe + SSS backlighting are resampled together and share ONE shadow ray — a light can
-        // only be in front of n or behind it, never both, so combining them into one target function is
-        // exact, not an approximation. The SSS term is gated off past MAX_SSS_INDIRECT_DEPTH by passing
-        // sss=0 there (falls back to plain front-only RIS).
+        // RIS direct lighting from block emitters. The first stable receiver of the first SPP sample is
+        // upgraded to temporal + spatial ReSTIR; every other path keeps the original independent RIS
+        // estimator. Front lobe + SSS backlighting share ONE shadow ray because a survivor can only lie
+        // in one hemisphere. Passing sss=0 after the quality depth restores the plain front-only target.
         if (risOn) {
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
                                      seed, proposalSeed);
+            if (restirAvailable) {
+                r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
+                        n, v, rd, diffAlb, F0, rough, false, activeSss, seed);
+                restirAvailable = false;
+            }
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
                                              activeSss);
         }
@@ -488,14 +503,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 [shader("raygeneration")]
 void main() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+    uint2 dispatchIndex = DispatchRaysIndex().xy;
+    uint2 dimensions = DispatchRaysDimensions().xy;
+    uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
+    if (restirEnabled()) {
+        // Every pixel owns exactly one record. Invalidate first so sky, a terminal dielectric, a debug
+        // frame, or a frame with no emitters cannot leave stale current-buffer history behind.
+        restirInvalidate(pixelIndex);
+    }
     if (pc.debugView != 0u) {
         return; // pass A owns guide visualization output
     }
-    uint2 dispatchIndex = DispatchRaysIndex().xy;
-    uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);
     uint spp = max(worldPush.spp, 1u);
-    uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
     ConstPtr<PackedPathSegment> queue = ConstPtr<PackedPathSegment>(pc.pathQueueAddr);
     float3 frameRadiance = float3(0.0, 0.0, 0.0);
     uint recordIndex = pixelIndex;
@@ -503,7 +523,8 @@ void main() {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
-            frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp);
+            frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp,
+                    leaf == 0u && s == 0u, dimensions);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {
             break;
