@@ -25,6 +25,7 @@ changes while the renderer is being built.
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
+- ReSTIR
 
 ## Requirements
 
