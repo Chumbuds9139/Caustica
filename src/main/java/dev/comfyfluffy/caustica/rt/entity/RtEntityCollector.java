@@ -222,6 +222,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         int uvStart = capture.uvList.size();
         int primStart = capture.prim.size();
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
+        // Boat fix: boat models (BoatModel, ChestBoatModel, RaftModel) have interior faces that the cuboid
+        // emitter does not capture with correct UVs / normals (interior bottom becomes black). Force fallback
+        // path (renderToBuffer) which uses the actual ModelPart vertex data with proper UVs and normals.
+        String modelName = model.getClass().getName().toLowerCase();
+        boolean isBoatModel = modelName.contains("boat") || modelName.contains("raft");
+        if (isBoatModel) {
+            directTemplate = null;
+        }
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         try {
