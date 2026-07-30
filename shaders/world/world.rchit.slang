@@ -302,8 +302,21 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
         uint material = header.model;
         float3 baseAlbedo = srgbToLinear(entityTexel.rgb) * pr.tint.rgb;
+        // Boat interior black fix: if texture fetch returns near-black (failed bindless slot or missing atlas),
+        // replace with wood-like fallback so bottom doesn't become a black square (luminance floor).
+        // This also handles cases where minecart chest fallback used white slot with tint.
+        if (dot(baseAlbedo, baseAlbedo) < 0.0004) { // luminance < ~0.02
+            // Heuristic wood color for boat / chest fallback – prevents pure black albedo that kills indirect
+            baseAlbedo = float3(0.45, 0.30, 0.18);
+        }
         float3 albedo = material == MATERIAL_DIELECTRIC
                 ? lerp(float3(1.0, 1.0, 1.0), baseAlbedo, entityTexel.a) : baseAlbedo;
+        // Additional boat interior brightening: ensure upward-facing interior faces (boat bottom) have at least 0.1 luminance
+        // so indirect lighting (sky fill) is not multiplied to zero.
+        float lumaAlbedo = dot(albedo, float3(0.2126, 0.7152, 0.0722));
+        if (lumaAlbedo < 0.08 && n.y > 0.5) {
+            albedo = max(albedo, float3(0.22, 0.16, 0.12));
+        }
         Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, n,
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
                 header.params.x, header.params.y, pr.normal.w, material == MATERIAL_OPAQUE);

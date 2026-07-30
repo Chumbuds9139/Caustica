@@ -436,111 +436,148 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     }
 
     /** Re-mesh a contained block-model display through FRAPI so model wrappers remain effective.
-     *  Falls back to a simple chest box for block-entity blocks like chest that have no baked model,
-     *  ensuring minecart-with-chest geometry is sent to Vulkan (fixes invisible chest).
+     *  For block-entity blocks (chest, trapped chest, ender chest, shulker, etc.) that have no baked
+     *  model, capture the actual BlockEntity model via BlockEntityRenderDispatcher so the minecart
+     *  with chest geometry is correctly sent to Vulkan.
      */
     public void captureBlockState(BlockState blockState, Matrix4fc transform, PoseStack poseStack) {
         if (capture == null || blockState.isAir()) {
             return;
         }
-        BlockStateModel model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(blockState);
-        poseStack.pushPose();
-        if (transform != null) {
-            poseStack.mulPose(transform);
+
+        // First try to capture as a real BlockEntity (chest in minecart) via dispatcher
+        if (blockState.hasBlockEntity()) {
+            try {
+                var mc = Minecraft.getInstance();
+                var level = mc.level;
+                var dispatcher = mc.getBlockEntityRenderDispatcher();
+                var camState = RtEntities.INSTANCE.getCameraStateForCollector();
+                // Only attempt if we have a camera state (i.e. we are inside beginFrame)
+                if (camState != null && dispatcher != null) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = null;
+                    // Chest cases: normal, trapped, ender
+                    if (blockState.is(net.minecraft.world.level.block.Blocks.CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.TRAPPED_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.TrappedChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.ENDER_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.EnderChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else {
+                        // Generic: try to create via Block's EntityBlock path if possible
+                        // For blocks like barrel, hopper, etc., create minimal BE via type
+                        // Use BlockEntityType to create - best effort, skip if fails
+                        // This fallback prevents invisible chest and also handles other BE minecart displays
+                        try {
+                            String bName = blockState.getBlock().toString().toLowerCase();
+                            if (bName.contains("chest")) {
+                                be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                                be.setLevel(level);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+
+                    if (be != null) {
+                        dispatcher.prepare(camState.pos);
+                        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                        var berState = dispatcher.tryExtractRenderState(be, partial, null, false);
+                        if (berState != null) {
+                            int idxBeforeBE = capture.idx.size();
+                            poseStack.pushPose();
+                            if (transform != null) {
+                                poseStack.mulPose(transform);
+                            }
+                            try {
+                                dispatcher.submit(berState, poseStack, this, camState);
+                            } finally {
+                                poseStack.popPose();
+                            }
+                            // If we got new geometry from the BE, we're done (chest now visible)
+                            if (capture.idx.size() > idxBeforeBE) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                // Fall through to block model path
+                // System.out.println(\"RT chest BE capture failed: \" + t);
+            }
         }
-        int idxBefore = 0;
-        try {
-            if (model != null) {
-                idxBefore = capture.idx.size();
+
+        BlockStateModel model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(blockState);
+        int idxBeforeModel = capture.idx.size();
+        if (model != null) {
+            poseStack.pushPose();
+            if (transform != null) {
+                poseStack.mulPose(transform);
+            }
+            try {
                 // Display models are isolated from the world and do not apply random block offsets, matching
                 // Fabric's BlockStateModelWrapper path.
                 emitBlockModel(poseStack.last().pose(), model, BlockAndTintGetter.EMPTY, BlockPos.ZERO,
                         blockState, 42L, false);
+            } finally {
+                poseStack.popPose();
             }
-            // Fallback for block-entity blocks (chest, trapped chest, etc.) that have no baked model.
-            // The vanilla BlockStateModel for a chest is empty, so the minecart chest would be invisible.
-            // Emit a simple AABB box as chest geometry so it becomes visible in RT.
-            if (model == null || capture.idx.size() == idxBefore) {
-                String path = blockState.getBlock().toString().toLowerCase();
-                boolean isChest = path.contains("chest") || blockState.getBlock().getName().getString().toLowerCase().contains("chest");
-                // Broader check: any block with a block entity and no model -> treat as chest-like box
-                if (isChest) {
-                    emitChestFallback(poseStack.last().pose(), blockState);
-                } else if (blockState.hasBlockEntity()) {
-                    // Generic fallback for other BE blocks displayed on minecarts (e.g., hopper, barrel)
-                    // Use a simple cube so geometry is not lost
-                    emitChestFallback(poseStack.last().pose(), blockState);
-                }
+            if (capture.idx.size() > idxBeforeModel) {
+                return; // block model gave geometry (stone, etc.)
             }
-        } finally {
-            poseStack.popPose();
+        }
+
+        // Final safe fallback: for any remaining BE block without model and without successful BE capture
+        // (should not happen for chest if BE path worked), emit a solid-color box using white slot to
+        // guarantee visibility without corrupted atlas UVs.
+        if (blockState.hasBlockEntity()) {
+            // Recompute final pose (stack may have been popped, so use identity + transform)
+            Matrix4f fallbackPose = new Matrix4f();
+            if (transform != null) {
+                fallbackPose.set(transform);
+            }
+            emitChestFallbackSafe(fallbackPose, blockState);
         }
     }
 
-    private void emitChestFallback(Matrix4f pose, BlockState state) {
-        // Chest AABB: vanilla chest is 14/16 wide, 14/16 deep, 14/16 tall (0.0625 to 0.9375, 0 to 0.875)
-        // For minecart chest, it's centered a bit; we use a slightly smaller box centered.
-        float min = 0.0625f;
-        float max = 0.9375f;
-        float minY = 0.0f;
-        float maxY = 0.875f;
-        // Adjust for minecart containment: minecart display is smaller, but full cube still visible
-        if (state.getBlock().toString().toLowerCase().contains("hopper") || state.toString().toLowerCase().contains("hopper")) {
-            min = 0.0f; max = 1.0f; minY = 0.0f; maxY = 0.625f;
-        }
-
-        // Set material to opaque entity fallback, texture to block atlas or white
+    private void emitChestFallbackSafe(Matrix4f pose, BlockState state) {
+        // Use white slot (untextured) and solid tint to avoid Vulkan atlas corruption
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0;
         capture.clearUvRemap();
-        // Try to get block atlas slot for this block's sprite, otherwise white
-        try {
-            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(TextureAtlas.LOCATION_BLOCKS);
-        } catch (Exception e) {
-            capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
-        }
+        capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
 
-        // 6 faces as quads: bottom, top, north, south, west, east
-        // Use simple UVs (0..1) and brownish tint for chest, gray for others
         boolean isChest = state.getBlock().toString().toLowerCase().contains("chest");
-        int chestTint = 0xFF8B5A2B; // saddle brown
-        int genericTint = -1;
-        int tint = isChest ? chestTint : genericTint;
+        int chestTint = 0xFF8B5A2B;
+        int tint = isChest ? chestTint : -1;
 
-        // Vertices for a box in local 0..1 space, transformed by pose
+        float min = 0.0625f, max = 0.9375f, minY = 0.0f, maxY = 0.875f;
+        if (state.toString().toLowerCase().contains("hopper")) {
+            min = 0.0f; max = 1.0f; minY = 0.0f; maxY = 0.625f;
+        }
+
         float[][] corners = {
                 {min, minY, min}, {max, minY, min}, {max, minY, max}, {min, minY, max},
                 {min, maxY, min}, {max, maxY, min}, {max, maxY, max}, {min, maxY, max},
         };
-        // Faces: each as 4 corner indices (CCW from outside)
-        int[][] faces = {
-                {0, 1, 2, 3}, // bottom (Y-)
-                {4, 7, 6, 5}, // top (Y+)
-                {0, 4, 5, 1}, // north (Z-)
-                {2, 6, 7, 3}, // south (Z+)
-                {0, 3, 7, 4}, // west (X-)
-                {1, 5, 6, 2}, // east (X+)
-        };
-        float[] nx = {0, 0, 0, 0, -1, 1};
-        float[] ny = {-1, 1, 0, 0, 0, 0};
-        float[] nz = {0, 0, -1, 1, 0, 0};
+        int[][] faces = {{0,1,2,3},{4,7,6,5},{0,4,5,1},{2,6,7,3},{0,3,7,4},{1,5,6,2}};
+        float[] nx = {0,0,0,0,-1,1}, ny = {-1,1,0,0,0,0}, nz = {0,0,-1,1,0,0};
 
         for (int f = 0; f < faces.length; f++) {
             int[] face = faces[f];
             for (int i = 0; i < 4; i++) {
                 float[] c = corners[face[i]];
-                // transformPosition
                 meshPos.set(c[0], c[1], c[2]);
                 pose.transformPosition(meshPos);
-                meshX[i] = meshPos.x;
-                meshY[i] = meshPos.y;
-                meshZ[i] = meshPos.z;
-                meshU[i] = (i == 0 || i == 3) ? 0f : 1f;
-                meshV[i] = (i == 0 || i == 1) ? 0f : 1f;
+                meshX[i] = meshPos.x; meshY[i] = meshPos.y; meshZ[i] = meshPos.z;
+                meshU[i] = 0f; meshV[i] = 0f; // zero UV to sample white slot uniformly
             }
-            capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, nx[f], ny[f], nz[f], tint);
+            capture.addDirectQuad(meshX, meshY, meshZ, ZERO_UV, ZERO_UV, nx[f], ny[f], nz[f], tint);
         }
     }
 

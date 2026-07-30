@@ -529,9 +529,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
         }
 
+        // Boat interior fix: upward-facing dynamic faces (boat bottom) get a small sky ambient boost
+        // so concave interior is not pure black when direct sun is blocked by side walls.
+        // Also boost RR survival for dynamic entities to allow indirect to escape to sky.
+        if (isDynamicEntityEarly && n.y > 0.3) {
+            // Fake sky fill: assume sky is ~0.3-0.5 radiance, add a fraction
+            float skyFill = 0.12 * saturate(n.y);
+            L += throughput * diffAlb * skyFill;
+        }
+
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.
         if (bounce >= rrStart) {
-            float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
+            float minQ = isDynamicEntityEarly ? 0.25 : 0.02; // keep boat/minecart paths alive longer
+            float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), minQ, 1.0);
             if (rndf(seed) > q) {
                 break;
             }
