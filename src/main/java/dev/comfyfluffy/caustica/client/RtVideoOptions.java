@@ -46,6 +46,7 @@ public final class RtVideoOptions {
             // the other two reads immediately before them.
             clouds(),
             cloudStyle(),
+            skyStyle(),
             cloudHeight(),
             cloudThickness(),
             cloudShadowStrength(),
@@ -239,6 +240,7 @@ public final class RtVideoOptions {
     }
 
     private static final List<String> CLOUD_STYLES = List.of("classic", "volumetric");
+    private static final List<String> SKY_STYLES = List.of("modified", "vanilla");
 
     // Cloud-height slider bounds, in world Y. Must stay inside CausticaConfig's own clamp on
     // CLOUD_HEIGHT, which is what actually guards the value.
@@ -264,6 +266,17 @@ public final class RtVideoOptions {
             (caption, value) -> Component.translatable("caustica.options.rt.cloudStyle." + value),
             new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
             CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
+            setting::set);
+    }
+
+    private static OptionInstance<String> skyStyle() {
+        StringSetting setting = CausticaConfig.Rt.Composite.SKY_STYLE;
+        return new OptionInstance<>(
+            "caustica.options.rt.skyStyle",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.skyStyle.tooltip")),
+            (caption, value) -> Component.translatable("caustica.options.rt.skyStyle." + value),
+            new OptionInstance.Enum<>(SKY_STYLES, Codec.STRING),
+            SKY_STYLES.contains(setting.get()) ? setting.get() : "modified",
             setting::set);
     }
 

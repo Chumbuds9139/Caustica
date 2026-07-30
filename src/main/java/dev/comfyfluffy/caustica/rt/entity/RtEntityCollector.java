@@ -221,14 +221,35 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         int idxStart = capture.idx.size();
         int uvStart = capture.uvList.size();
         int primStart = capture.prim.size();
+
+        // Water mask detection: boat's water cutout (water_patch) uses RenderType waterMask - skip it entirely
+        // to avoid black rectangle covering the real wood floor (depth/stencil mask for vanilla).
+        if (isWaterMask(renderType)) {
+            return;
+        }
+
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
         // Boat fix: boat models (BoatModel, ChestBoatModel, RaftModel) have interior faces that the cuboid
         // emitter does not capture with correct UVs / normals (interior bottom becomes black). Force fallback
         // path (renderToBuffer) which uses the actual ModelPart vertex data with proper UVs and normals.
+        // Also hide water_patch sub-mesh that is the water mask cutout (black rectangle).
         String modelName = model.getClass().getName().toLowerCase();
         boolean isBoatModel = modelName.contains("boat") || modelName.contains("raft");
+        java.util.ArrayList<ModelPart> hiddenWaterParts = null;
+        java.util.ArrayList<Boolean> hiddenWaterPrevSkip = null;
         if (isBoatModel) {
             directTemplate = null;
+            // Collect water_patch parts (name contains "water") and hide them for this capture
+            java.util.ArrayList<ModelPart> waterParts = new java.util.ArrayList<>();
+            collectWaterPatchParts(model.root(), waterParts);
+            if (!waterParts.isEmpty()) {
+                hiddenWaterParts = waterParts;
+                hiddenWaterPrevSkip = new java.util.ArrayList<>(waterParts.size());
+                for (ModelPart wp : waterParts) {
+                    hiddenWaterPrevSkip.add(wp.skipDraw);
+                    wp.skipDraw = true;
+                }
+            }
         }
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
@@ -243,6 +264,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                     ? "entity.capture.submit.modelDraw.direct"
                     : "entity.capture.submit.modelDraw.fallback", drawStart);
             RtFrameStats.FRAME.endStage("entity.capture.submit.modelDraw", drawStart);
+            // Restore water mask parts that were hidden to avoid black rectangle
+            if (hiddenWaterParts != null) {
+                for (int i = 0; i < hiddenWaterParts.size(); i++) {
+                    hiddenWaterParts.get(i).skipDraw = hiddenWaterPrevSkip.get(i);
+                }
+            }
         }
         int addedVertices = (capture.verts.size() - vertStart) / 3;
         int addedQuads = (capture.idx.size() - idxStart) / 6;
@@ -433,6 +460,36 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
         String location = pipeline.getLocation().toString();
         return location.contains("glint");
+    }
+
+    private static boolean isWaterMask(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        try {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            String loc = pipeline.getLocation().toString().toLowerCase();
+            return loc.contains("water_mask") || loc.contains("watermask") || loc.contains("watermask") || loc.contains("boat_water") || RenderTypes.waterMask().equals(renderType);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static void collectWaterPatchParts(ModelPart root, List<ModelPart> out) {
+        if (root == null) return;
+        ModelPartAccessor access = (ModelPartAccessor) (Object) root;
+        var children = access.caustica$children();
+        if (children == null) return;
+        for (var entry : children.entrySet()) {
+            String name = entry.getKey().toLowerCase();
+            ModelPart child = entry.getValue();
+            if (name.contains("water") || name.contains("mask") || name.contains("patch")) {
+                out.add(child);
+            }
+            // Recurse
+            collectWaterPatchParts(child, out);
+        }
     }
 
     /** Resolve a quad's tint colour from its tint index + the submission's tint layers (white if untinted). */

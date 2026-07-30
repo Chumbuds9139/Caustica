@@ -57,7 +57,7 @@ public final class CausticaConfig {
         @SuppressWarnings("unused")
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
-            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
+            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.SKY_STYLE,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
@@ -672,6 +672,9 @@ public final class CausticaConfig {
                     radians("caustica.rt.moonAngularRadius", "composite.moon-angular-radius-deg", 1.5f);
             public static final FloatSetting SUN_NOON_SOUTH_TILT =
                     radians("caustica.rt.sunNoonSouthDeg", "composite.sun-noon-south-tilt-deg", 30.0f);
+            public static final StringSetting SKY_STYLE =
+                    string("caustica.rt.skyStyle", "composite.sky-style", "modified",
+                            Composite::sanitizeSkyStyle);
             public static final FloatSetting JITTER_SIGN_X =
                     finiteFloat("caustica.rt.jitterSignX", "composite.jitter-sign-x", 1.0f);
             public static final FloatSetting JITTER_SIGN_Y =
@@ -685,6 +688,10 @@ public final class CausticaConfig {
                 return "volumetric".equals(CLOUD_STYLE.get()) ? 1 : 0;
             }
 
+            public static int skyStyleIndex() {
+                return "vanilla".equals(SKY_STYLE.get()) ? 0 : 1;
+            }
+
             private static String sanitizeCloudStyle(String value) {
                 if (value == null) {
                     return "classic";
@@ -692,6 +699,16 @@ public final class CausticaConfig {
                 return switch (value.toLowerCase(java.util.Locale.ROOT).replace('-', '_')) {
                     case "volumetric", "volumetrics", "realistic", "3d" -> "volumetric";
                     default -> "classic";
+                };
+            }
+
+            private static String sanitizeSkyStyle(String value) {
+                if (value == null) {
+                    return "modified";
+                }
+                return switch (value.toLowerCase(java.util.Locale.ROOT).replace('-', '_')) {
+                    case "vanilla", "original", "classic_sky" -> "vanilla";
+                    default -> "modified";
                 };
             }
         }
