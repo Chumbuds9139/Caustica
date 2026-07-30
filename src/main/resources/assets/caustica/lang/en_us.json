@@ -105,6 +105,7 @@
 	"caustica.options.rt.tonemapOperator.aces": "ACES",
 	"caustica.options.rt.tonemapOperator.filmic": "Filmic",
 	"caustica.options.rt.tonemapOperator.linear": "Linear / Pass-through",
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov",
 	"caustica.options.rt.tonemapExposure": "Tonemap Exposure",
 	"caustica.options.rt.tonemapExposure.tooltip": "Extra exposure bias, in EV stops, applied in the tonemapping pass after the auto/manual exposure value.",
 	"caustica.options.rt.tonemapGamma": "Tonemap Gamma",

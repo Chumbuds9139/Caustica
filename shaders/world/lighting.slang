@@ -36,6 +36,9 @@ public static const float RESTIR_TEMPORAL_M_CAP = 4.0;
 public static const float RESTIR_SPATIAL_M_CAP = 2.0;
 public static const float RESTIR_MAX_W = 16.0;
 public static const float RESTIR_MIN_PHAT = 1.0e-4;
+// Minimum importance floor to avoid aggressive discard of emissive samples like Shroomlight
+// (prevents black spots / flicker from reservoirs dropping low-luma but valid emitters).
+public static const float RESTIR_PHAT_EMISSIVE_FLOOR = 5.0e-3;
 public static const float RESTIR_MAX_SAMPLE_LUMINANCE = 16.0;
 public static const float RESTIR_MAX_WEIGHT_SUM = 4096.0; // MAX_M * MAX_W * MAX_SAMPLE_LUMINANCE
 public static const float RESTIR_JACOBIAN_MIN = 0.2;
@@ -112,7 +115,18 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
         float cosT = dot(wi, rd);
         contrib = diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * le * (G * area);
     }
-    phat = luminance(contrib);
+    float rawPhat = luminance(contrib);
+    // If facing away and no SSS, this is truly unlit -> keep zero to allow culling.
+    // Floor only applies when there is some front-facing contribution (even tiny) to avoid
+    // aggressive discard of dim but valid emissives (Shroomlight fix).
+    if (rawPhat <= 0.0) {
+        phat = 0.0;
+        return float3(0.0,0.0,0.0);
+    }
+    // Minimum importance floor: prevents aggressive discard of emissive samples like
+    // Shroomlight / Redstone Lamp that may have low NDL but still carry visible energy.
+    float emissiveFloor = luminance(le) * 0.01 * saturate(area / max(dist2, 1.0));
+    phat = max(rawPhat, max(RESTIR_MIN_PHAT, max(emissiveFloor * 0.1, RESTIR_PHAT_EMISSIVE_FLOOR)));
     return contrib;
 }
 
@@ -444,6 +458,10 @@ public bool restirValidJacobian(Reservoir source, float3 hitPos, float3 n) {
 // stands for source.M candidates, therefore its resampling weight is pHat_current * W * M. All three
 // factors are bounded before entering the stream; invalid Jacobians and near-zero targets are discarded
 // rather than allowed to manufacture a huge reciprocal weight in finalization.
+//
+// Fix for Shroomlight flicker / burned faces: instead of hard rejecting targets below MIN_PHAT
+// (which caused aggressive discard and black spots), clamp to a small floor. This guarantees a minimum
+// importance weight so emissive blocks keep contributing and don't flicker.
 public void restirMerge(inout Reservoir dst, Reservoir source, float maxM,
                  float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
                  float rough, bool twoSided, float sss, inout uint seed) {
@@ -454,7 +472,13 @@ public void restirMerge(inout Reservoir dst, Reservoir source, float maxM,
     float target;
     evalSampleContrib(source.pos, source.lnrm, source.le, source.area,
             hitPos, n, v, rd, diffAlb, F0, rough, twoSided, sss, target);
-    if (!(target >= RESTIR_MIN_PHAT)) return;
+    // Emissive floor instead of hard discard to avoid black/burned flicker (Shroomlight fix)
+    float floorPhat = max(RESTIR_MIN_PHAT, RESTIR_PHAT_EMISSIVE_FLOOR);
+    if (!(target >= floorPhat)) {
+        // If target is tiny but emitter is strong, keep it with floor to prevent aggressive discard
+        if (target <= 0.0 && luminance(source.le) < 0.01) return; // truly behind face and dim
+        target = floorPhat;
+    }
     float safeTarget = min(target, RESTIR_MAX_SAMPLE_LUMINANCE);
     float w = min(safeTarget * sourceW * acceptedM,
             max(0.0, RESTIR_MAX_WEIGHT_SUM - dst.wSum));
@@ -487,20 +511,31 @@ public bool restirPreviousPixel(float3 hitPos, float3 motionPrev, uint2 dimensio
     return all(previousPixel >= int2(0, 0)) && all(previousPixel < int2(dimensions));
 }
 
+// Star-artifact fix: spatial ReSTIR offsets were 4 cardinal directions * discrete radius 1..8,
+// producing petal/star patterns on ground from emissives (Copper Bulb, Redstone Lamp, Magma).
+// New version samples a random disk with per-frame jitter, giving smooth circular spread.
+public float2 restirDiskOffset(uint sampleIndex, uint hash) {
+    // Combine sample index, hash and frameIndex for temporal jitter
+    uint h = hash ^ (sampleIndex * 1973u + 9277u) ^ (worldPush.frameIndex * 26699u + 12345u);
+    h = pcg(h);
+    float a01 = float(h & 0xFFFFu) / 65535.0; // angle 0..1
+    h = pcg(h);
+    float r01 = float((h >> 8u) & 0xFFFFu) / 65535.0; // radius 0..1
+    // sqrt for uniform disk area
+    float radius = sqrt(r01) * 8.0; // max 8 px, circular
+    // Per-frame angular jitter to break any residual alignment
+    float angleJitter = float(worldPush.frameIndex & 255u) / 255.0 * 6.2831853;
+    float angle = a01 * 6.2831853 + angleJitter;
+    return float2(cos(angle), sin(angle)) * radius;
+}
+
 public int2 restirSpatialOffset(uint sampleIndex, uint hash) {
-    int2 offset;
-    switch (sampleIndex & 3u) {
-        case 0u: offset = int2(1, 0); break;
-        case 1u: offset = int2(0, 1); break;
-        case 2u: offset = int2(-1, 0); break;
-        default: offset = int2(0, -1); break;
-    }
-    uint rotation = hash & 3u;
-    if (rotation == 1u) offset = int2(-offset.y, offset.x);
-    else if (rotation == 2u) offset = -offset;
-    else if (rotation == 3u) offset = int2(offset.y, -offset.x);
-    int radius = 1 + int((hash >> (2u + sampleIndex * 3u)) & 7u);
-    return offset * radius;
+    float2 f = restirDiskOffset(sampleIndex, hash);
+    // Add sub-pixel jittering per frame to smooth the sampling pattern
+    uint hj = pcg(hash ^ worldPush.frameIndex * 7411u);
+    float jitterX = (rndf(hj) - 0.5) * 0.8;
+    float jitterY = (rndf(hj) - 0.5) * 0.8;
+    return int2(int(round(f.x + jitterX)), int(round(f.y + jitterY)));
 }
 
 public void restirStore(Reservoir r, uint pixelIndex, float3 surfacePos, float3 surfaceNormal,

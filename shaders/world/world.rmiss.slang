@@ -37,8 +37,8 @@ float pow2(float x) { return x * x; }
 static const float3 SUN_DISC_RADIANCE  = float3(24.0, 23.0, 21.5);
 static const float3 MOON_DISC_RADIANCE = float3(1.7, 1.85, 2.2) / 4.0; // lit-side moon (HDR, bright at night exposure)
 // Vibrance applied to the atmosphere in-scatter only (not discs/stars/night ambient): luminance-
-// preserving, so GI energy is unchanged.
-static const float SKY_SATURATION = 1.2;
+// preserving, so GI energy is unchanged. Soft-cinema: lowered from 1.2 to avoid "azul caneta" saturation.
+static const float SKY_SATURATION = 0.88;
 // VISIBLE disc half-angles, matched to vanilla: the sun/moon quads are drawn at half-width 30/20 at
 // distance 100 → half-angle = atan(0.30) / atan(0.20). Decoupled from the NEE light radius (≈0.6°).
 static const float SUN_DISC_HALF_ANGLE  = 0.29146; // atan(30/100), vanilla sun size
@@ -47,18 +47,28 @@ static const float MOON_DISC_HALF_ANGLE = 0.19740; // atan(20/100), vanilla moon
 static const float3 NIGHT_ZENITH  = float3(0.004, 0.008, 0.022) / 5.0;
 static const float3 NIGHT_HORIZON = float3(0.015, 0.022, 0.045) / 5.0;
 
+// Soft-cinema sky palette requested: zenith pastel cyan ~ (0.42,0.62,0.82), horizon whitish desaturated.
+static const float3 SKY_ZENITH_SOFT  = float3(0.42, 0.62, 0.82);
+static const float3 SKY_HORIZON_SOFT = float3(0.78, 0.86, 0.94);
+
 // ---- Physically-based atmosphere (Nishita / O'Neil single scattering + ozone absorption). A view ray
 // is marched through the atmospheric shell; at each step the transmittance toward the sun is integrated
 // (a second, shorter march), giving Rayleigh (blue-sky / red-sunset) + Mie (sun halo) in-scattered
 // radiance. World up = +Y; the camera sits a couple km above a spherical planet. Output is HDR in the
 // same units as tracePath.
+//
+// Soft Cinema tuning:
+// - RAY_BETA blue reduced (22.4e-6 -> 15.5e-6) to desaturate "pen blue".
+// - MIE_BETA increased for more horizon haze / Mie halo around sun.
+// - Scale heights raised to lift zenith brightness and smooth horizon->zenith gradient.
+// - MIE_G 0.758 -> 0.80 for broader forward scattering.
 static const float  PLANET_R   = 6371000.0;
 static const float  ATMOS_R    = 6471000.0;        // 100 km shell
-static const float3 RAY_BETA   = float3(5.5e-6, 13.0e-6, 22.4e-6); // Rayleigh scattering at sea level
-static const float  MIE_BETA   = 21.0e-6;          // Mie scattering at sea level
-static const float  RAY_SCALE_H = 8000.0;          // Rayleigh density scale height
-static const float  MIE_SCALE_H = 1200.0;          // Mie density scale height
-static const float  MIE_G      = 0.758;            // Mie anisotropy (forward-scattering)
+static const float3 RAY_BETA   = float3(5.8e-6, 12.5e-6, 15.5e-6); // desaturated Rayleigh
+static const float  MIE_BETA   = 38.0e-6;          // more Mie haze / whitish horizon
+static const float  RAY_SCALE_H = 10000.0;         // taller Rayleigh -> brighter zenith
+static const float  MIE_SCALE_H = 1650.0;          // taller Mie -> softer horizon
+static const float  MIE_G      = 0.80;             // stronger forward scattering (sun halo)
 // Ozone: absorption only (no scattering), tent-shaped density peaking at 25 km. Its green-heavy
 // absorption keeps the zenith deep blue at noon and turns twilight purple-orange.
 static const float3 OZONE_BETA = float3(0.650e-6, 1.881e-6, 0.085e-6);
@@ -349,6 +359,25 @@ void main(inout Payload payload) {
         downFade = exp(dir.y * 3.0);
     }
     float3 col = atmosphere(mdir, sd);
+
+    // ---- Soft Cinema post-tint: blend physical atmosphere toward requested pastel palette.
+    // Keeps physical sunset variation but guarantees zenith is (0.42,0.62,0.82) pastel and horizon
+    // is whitish desaturated with Mie scattering around sun.
+    {
+        float upFactor = saturate(dir.y); // 0 at horizon, 1 at zenith
+        // Smooth gradient from horizon to zenith (pow softens transition)
+        float3 softGradient = lerp(SKY_HORIZON_SOFT, SKY_ZENITH_SOFT, pow(upFactor, 0.58));
+        // Blend amount: stronger at day, moderate at zenith/horizon, preserves sunset when sun low
+        float dayBlend = day * clamp(SdotU * 0.5 + 0.7, 0.0, 1.0);
+        float softBlend = dayBlend * (0.28 + 0.22 * upFactor + 0.20 * (1.0 - upFactor));
+        // Slightly dim softGradient to stay in HDR range similar to physical sky
+        col = lerp(col, softGradient * 0.90, softBlend);
+
+        // Extra Mie halo around sun for whitish foggy look (soft cinema sun haze)
+        float sunHalo = pow(saturate(VdotS), 24.0) * 0.7 + pow(saturate(VdotS), 72.0) * 1.2;
+        col += float3(0.92, 0.94, 0.98) * sunHalo * sunUp * day * 0.35;
+    }
+
     // Luminance-preserving vibrance on the in-scatter only (see SKY_SATURATION).
     float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
     col = max(lerp(float3(lum, lum, lum), col, SKY_SATURATION), float3(0.0, 0.0, 0.0));
