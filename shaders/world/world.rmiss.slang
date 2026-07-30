@@ -24,8 +24,6 @@ import clouds;
 
 [[vk::push_constant]] WorldPushConstants pc;
 
-// Vanilla celestials atlas (sun + moon-phase sprites), bound by RtComposite. Sampled with an explicit
-// LOD (no derivatives in a miss shader). The sun/moon discs are drawn from its real texels.
 [[vk::binding(9, 0)]] Sampler2D celestialsAtlas;
 
 static const float PI = 3.14159265359;
@@ -44,10 +42,11 @@ static const float MOON_DISC_HALF_ANGLE = 0.19740;
 static const float3 NIGHT_ZENITH  = float3(0.004, 0.008, 0.022) / 5.0;
 static const float3 NIGHT_HORIZON = float3(0.015, 0.022, 0.045) / 5.0;
 
-// ---- Sky palettes ----
-// Modified: vivid pastel clean blue, subtle glow only near sun (not whitish/fosco)
-static const float3 SKY_ZENITH_SOFT_MOD  = float3(0.42, 0.62, 0.82);
-static const float3 SKY_HORIZON_SOFT_MOD = float3(0.68, 0.80, 0.92);
+// ---- Final single sky: vibrant and blue (Minecraft RTX style), clean pastel without gray ----
+// Zenith: vivid saturated blue 0.18-0.22,0.42-0.48,0.85-0.92 -> pick 0.20,0.45,0.88
+// Horizon: cyan / light blue near horizon, smoothly to intense blue at top, reduced gray/whitish
+static const float3 SKY_ZENITH_VIVID  = float3(0.20, 0.45, 0.88);
+static const float3 SKY_HORIZON_VIVID = float3(0.48, 0.72, 0.92);
 
 // Common planet constants
 static const float  PLANET_R   = 6371000.0;
@@ -59,24 +58,13 @@ static const float  SUN_INTENSITY = 22.0;
 static const int    ATMOS_PRIMARY_STEPS = 16;
 static const int    ATMOS_LIGHT_STEPS   = 8;
 
-// Vanilla atmosphere constants (original Caustica)
-static const float3 RAY_BETA_VANILLA   = float3(5.5e-6, 13.0e-6, 22.4e-6);
-static const float  MIE_BETA_VANILLA   = 21.0e-6;
-static const float  RAY_SCALE_H_VANILLA = 8000.0;
-static const float  MIE_SCALE_H_VANILLA = 1200.0;
-static const float  MIE_G_VANILLA      = 0.758;
-static const float  SKY_SATURATION_VANILLA = 1.2;
-
-// Modified atmosphere constants - balanced, vivid pastel, clean, not whitish
-static const float3 RAY_BETA_MOD   = float3(5.2e-6, 12.0e-6, 19.0e-6);
-static const float  MIE_BETA_MOD   = 24.0e-6; // subtle haze, not 38e-6 aggressive
-static const float  RAY_SCALE_H_MOD = 8500.0;
-static const float  MIE_SCALE_H_MOD = 1350.0;
-static const float  MIE_G_MOD      = 0.76; // subtle forward, close to vanilla 0.758
-static const float  SKY_SATURATION_MOD = 1.05; // vivid, slightly above 1
-
-// Runtime selection - set in main() from feature flag
-static bool gModifiedSky = true;
+// Final atmosphere - vivid blue, reduced Mie to cut whitish haze, subtle glow only near sun
+static const float3 RAY_BETA   = float3(4.8e-6, 10.5e-6, 22.0e-6); // more blue, clean
+static const float  MIE_BETA   = 18.0e-6; // reduced from 38/24 to cut gray
+static const float  RAY_SCALE_H = 8000.0;
+static const float  MIE_SCALE_H = 1100.0; // lower than 1350/1650 to reduce horizon haze
+static const float  MIE_G      = 0.76; // subtle forward, close to vanilla 0.758
+static const float  SKY_SATURATION = 1.15; // vivid, not dull
 
 float ozoneDensity(float h) { return max(0.0, 1.0 - abs(h - OZONE_CENTER_H) / OZONE_WIDTH_H); }
 
@@ -89,7 +77,7 @@ float2 raySphere(float3 o, float3 d, float r) {
     return float2(-b - disc, -b + disc);
 }
 
-float3 atmosphereInternal(float3 dir, float3 sunDir, float3 rayBeta, float mieBeta, float rayScaleH, float mieScaleH, float mieG) {
+float3 atmosphere(float3 dir, float3 sunDir) {
     float3 orig = float3(0.0, PLANET_R + 2000.0, 0.0);
     float2 t = raySphere(orig, dir, ATMOS_R);
     if (t.x > t.y) return float3(0.0, 0.0, 0.0);
@@ -101,7 +89,7 @@ float3 atmosphereInternal(float3 dir, float3 sunDir, float3 rayBeta, float mieBe
 
     float mu = dot(dir, sunDir);
     float phaseR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
-    float g = mieG;
+    float g = MIE_G;
     float phaseM = 3.0 / (8.0 * PI) * ((1.0 - g * g) * (1.0 + mu * mu))
                  / ((2.0 + g * g) * pow(max(1.0 + g * g - 2.0 * g * mu, 0.0), 1.5));
 
@@ -111,8 +99,8 @@ float3 atmosphereInternal(float3 dir, float3 sunDir, float3 rayBeta, float mieBe
     for (int i = 0; i < ATMOS_PRIMARY_STEPS; i++) {
         float3 p = orig + dir * (tCur + segLen * 0.5);
         float h = length(p) - PLANET_R;
-        float hr = exp(-h / rayScaleH) * segLen;
-        float hm = exp(-h / mieScaleH) * segLen;
+        float hr = exp(-h / RAY_SCALE_H) * segLen;
+        float hm = exp(-h / MIE_SCALE_H) * segLen;
         odR += hr; odM += hm; odO += ozoneDensity(h) * segLen;
 
         float2 tl = raySphere(p, sunDir, ATMOS_R);
@@ -123,13 +111,13 @@ float3 atmosphereInternal(float3 dir, float3 sunDir, float3 rayBeta, float mieBe
             float3 pl = p + sunDir * (tlCur + segLenL * 0.5);
             float hl = length(pl) - PLANET_R;
             if (hl < 0.0) { blocked = true; break; }
-            odRL += exp(-hl / rayScaleH) * segLenL;
-            odML += exp(-hl / mieScaleH) * segLenL;
+            odRL += exp(-hl / RAY_SCALE_H) * segLenL;
+            odML += exp(-hl / MIE_SCALE_H) * segLenL;
             odOL += ozoneDensity(hl) * segLenL;
             tlCur += segLenL;
         }
         if (!blocked) {
-            float3 tau = rayBeta * (odR + odRL) + mieBeta * 1.1 * (odM + odML)
+            float3 tau = RAY_BETA * (odR + odRL) + MIE_BETA * 1.1 * (odM + odML)
                        + OZONE_BETA * (odO + odOL);
             float3 atten = exp(-tau);
             sumR += hr * atten;
@@ -137,18 +125,10 @@ float3 atmosphereInternal(float3 dir, float3 sunDir, float3 rayBeta, float mieBe
         }
         tCur += segLen;
     }
-    return SUN_INTENSITY * (sumR * rayBeta * phaseR + sumM * mieBeta * phaseM);
+    return SUN_INTENSITY * (sumR * RAY_BETA * phaseR + sumM * MIE_BETA * phaseM);
 }
 
-float3 atmosphere(float3 dir, float3 sunDir) {
-    if (gModifiedSky) {
-        return atmosphereInternal(dir, sunDir, RAY_BETA_MOD, MIE_BETA_MOD, RAY_SCALE_H_MOD, MIE_SCALE_H_MOD, MIE_G_MOD);
-    } else {
-        return atmosphereInternal(dir, sunDir, RAY_BETA_VANILLA, MIE_BETA_VANILLA, RAY_SCALE_H_VANILLA, MIE_SCALE_H_VANILLA, MIE_G_VANILLA);
-    }
-}
-
-float3 transmittanceToSpaceInternal(float3 dir, float3 rayBeta, float mieBeta, float rayScaleH, float mieScaleH) {
+float3 transmittanceToSpace(float3 dir) {
     float3 orig = float3(0.0, PLANET_R + 2000.0, 0.0);
     float2 t = raySphere(orig, dir, ATMOS_R);
     if (t.y <= 0.0) return float3(1.0, 1.0, 1.0);
@@ -157,19 +137,11 @@ float3 transmittanceToSpaceInternal(float3 dir, float3 rayBeta, float mieBeta, f
     for (int i = 0; i < ATMOS_LIGHT_STEPS; i++) {
         float3 p = orig + dir * (segLen * (float(i) + 0.5));
         float h = length(p) - PLANET_R;
-        odR += exp(-h / rayScaleH) * segLen;
-        odM += exp(-h / mieScaleH) * segLen;
+        odR += exp(-h / RAY_SCALE_H) * segLen;
+        odM += exp(-h / MIE_SCALE_H) * segLen;
         odO += ozoneDensity(h) * segLen;
     }
-    return exp(-(rayBeta * odR + mieBeta * 1.1 * odM + OZONE_BETA * odO));
-}
-
-float3 transmittanceToSpace(float3 dir) {
-    if (gModifiedSky) {
-        return transmittanceToSpaceInternal(dir, RAY_BETA_MOD, MIE_BETA_MOD, RAY_SCALE_H_MOD, MIE_SCALE_H_MOD);
-    } else {
-        return transmittanceToSpaceInternal(dir, RAY_BETA_VANILLA, MIE_BETA_VANILLA, RAY_SCALE_H_VANILLA, MIE_SCALE_H_VANILLA);
-    }
+    return exp(-(RAY_BETA * odR + MIE_BETA * 1.1 * odM + OZONE_BETA * odO));
 }
 
 void celestialFrame(float3 dir, float3 celestialAxis, out float3 right, out float3 up) {
@@ -288,9 +260,6 @@ void main(inout Payload payload) {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
     float3 dir = normalize(WorldRayDirection());
 
-    // Sky style toggle: modified vs vanilla
-    gModifiedSky = worldFeature(worldPush, FEATURE_MODIFIED_SKY);
-
     if (worldPush.dimension != DIMENSION_OVERWORLD) {
         writeSkyMiss(payload, worldPush.dimension == DIMENSION_NETHER
                 ? netherSky(dir, worldPush.ambientFog.xyz)
@@ -306,6 +275,7 @@ void main(inout Payload payload) {
     float starBrightness = worldPush.lightRadiance.w;
     bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
 
+    // Soft horizon: flatten below-horizon rays to keep gradient seamless
     float3 mdir = dir;
     float downFade = 1.0;
     if (dir.y < 0.0) {
@@ -316,25 +286,23 @@ void main(inout Payload payload) {
     }
     float3 col = atmosphere(mdir, sd);
 
-    // ---- Modified sky post-tint: subtle pastel, vivid clean, not whitish/fosco ----
-    // Only when modified sky is enabled; vanilla keeps pure physical atmosphere
-    if (gModifiedSky) {
+    // Vivid blue gradient - clean, not whitish/fosco: cyan/light blue near horizon -> intense blue at zenith
+    // Subtle blend only, keeps physical sunset variation but ensures vivid blue
+    {
         float upFactor = saturate(dir.y); // 0 horizon, 1 zenith
-        // Very subtle gradient from horizon to zenith - keeps sky vivid, not washed out
-        float3 softGradient = lerp(SKY_HORIZON_SOFT_MOD, SKY_ZENITH_SOFT_MOD, pow(upFactor, 0.65));
-        float dayBlend = day * clamp(SdotU * 0.5 + 0.7, 0.0, 1.0);
-        // Reduced blend: 0.10-0.18 max, previously 0.28-0.50 which was too aggressive/fosco
-        float softBlend = dayBlend * (0.10 + 0.08 * upFactor);
-        col = lerp(col, softGradient * 0.88, softBlend);
+        float3 softGradient = lerp(SKY_HORIZON_VIVID, SKY_ZENITH_VIVID, pow(upFactor, 0.70));
+        float dayBlend = day * clamp(SdotU * 0.5 + 0.75, 0.0, 1.0);
+        // Very subtle: 0.08-0.15 max, previously 0.28-0.50 aggressive which caused whitish look
+        float softBlend = dayBlend * (0.08 + 0.06 * upFactor);
+        col = lerp(col, softGradient * 0.92, softBlend);
 
-        // Subtle Mie halo only near sun, not whole horizon
-        float sunHalo = pow(saturate(VdotS), 32.0) * 0.5 + pow(saturate(VdotS), 96.0) * 0.8;
-        col += float3(0.90, 0.92, 0.98) * sunHalo * sunUp * day * 0.12;
+        // Subtle Mie glow only near sun, not whole horizon
+        float sunHalo = pow(saturate(VdotS), 32.0) * 0.4 + pow(saturate(VdotS), 96.0) * 0.6;
+        col += float3(0.88, 0.90, 0.98) * sunHalo * sunUp * day * 0.10;
     }
 
-    float skySat = gModifiedSky ? SKY_SATURATION_MOD : SKY_SATURATION_VANILLA;
     float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
-    col = max(lerp(float3(lum, lum, lum), col, skySat), float3(0.0, 0.0, 0.0));
+    col = max(lerp(float3(lum, lum, lum), col, SKY_SATURATION), float3(0.0, 0.0, 0.0));
     float up = clamp(dir.y, 0.0, 1.0);
     float3 nightAmbient = lerp(NIGHT_HORIZON, NIGHT_ZENITH, up);
     col += nightAmbient * (1.0 - day);

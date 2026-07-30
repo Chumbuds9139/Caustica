@@ -127,7 +127,6 @@ public final class RtComposite {
     private static final int FEATURE_CLOUDS = 8;
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
     private static final int FEATURE_RESTIR = 32;
-    private static final int FEATURE_MODIFIED_SKY = 64;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -159,9 +158,6 @@ public final class RtComposite {
             if (CausticaConfig.Rt.Composite.cloudStyleIndex() == CLOUD_STYLE_VOLUMETRIC) {
                 flags |= FEATURE_CLOUDS_VOLUMETRIC;
             }
-        }
-        if (CausticaConfig.Rt.Composite.skyStyleIndex() == 1) {
-            flags |= FEATURE_MODIFIED_SKY;
         }
         // Reports what the pipeline is ACTUALLY doing, not just what the option asks for:
         // RtDlssRr.enabled() already folds in the backend switch, and a debug view suppresses RR
@@ -1631,28 +1627,12 @@ public final class RtComposite {
      * no explicit planet-shadow test needed.
      */
     private static void atmosphereTransmittance(float dx, float dy, float dz, float[] out) {
-        // Sky styles: vanilla (original) vs modified (vivid pastel, clean)
-        boolean modified = CausticaConfig.Rt.Composite.skyStyleIndex() == 1;
+        // Final single sky: vibrant and blue (Minecraft RTX style) - clean pastel not whitish
         final double planetR = 6371000.0, atmosR = 6471000.0;
-        final double[] rayBeta;
-        final double mieBeta;
-        final double rayScaleH, mieScaleH;
-        if (modified) {
-            // Modified sky: vivid pastel blue, clean, subtle Mie near sun
-            rayBeta = new double[]{5.2e-6, 12.0e-6, 19.0e-6};
-            mieBeta = 24.0e-6 * 1.1;
-            rayScaleH = 8500.0;
-            mieScaleH = 1350.0;
-        } else {
-            // Vanilla sky: original darker, more saturated blue
-            rayBeta = new double[]{5.5e-6, 13.0e-6, 22.4e-6};
-            mieBeta = 21.0e-6 * 1.1;
-            rayScaleH = 8000.0;
-            mieScaleH = 1200.0;
-        }
+        final double[] rayBeta = {4.8e-6, 10.5e-6, 22.0e-6}; // vivid blue, less red
+        final double mieBeta = 18.0e-6 * 1.1; // reduced Mie to cut gray/whitish
         final double[] ozoneBeta = {0.650e-6, 1.881e-6, 0.085e-6};
         final double oy = planetR + 2000.0;
-        // Larger root of ray vs atmosphere sphere, origin (0, oy, 0).
         double b = oy * dy;
         double tEnd = -b + Math.sqrt(Math.max(b * b - (oy * oy - atmosR * atmosR), 0.0));
         double seg = tEnd / 8.0;
@@ -1661,8 +1641,8 @@ public final class RtComposite {
             double t = seg * (i + 0.5);
             double px = dx * t, py = oy + dy * t, pz = dz * t;
             double h = Math.sqrt(px * px + py * py + pz * pz) - planetR;
-            odR += Math.exp(-h / rayScaleH) * seg;
-            odM += Math.exp(-h / mieScaleH) * seg;
+            odR += Math.exp(-h / 8000.0) * seg;
+            odM += Math.exp(-h / 1100.0) * seg;
             odO += Math.max(0.0, 1.0 - Math.abs(h - 25000.0) / 15000.0) * seg;
         }
         for (int i = 0; i < 3; i++) {
