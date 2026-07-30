@@ -1627,10 +1627,10 @@ public final class RtComposite {
      * no explicit planet-shadow test needed.
      */
     private static void atmosphereTransmittance(float dx, float dy, float dz, float[] out) {
-        // Final single sky: vibrant and blue (Minecraft RTX style) - clean pastel not whitish
+        // Final single sky: vibrant and blue (Minecraft RTX style) - aggressive vivid
         final double planetR = 6371000.0, atmosR = 6471000.0;
-        final double[] rayBeta = {4.8e-6, 10.5e-6, 22.0e-6}; // vivid blue, less red
-        final double mieBeta = 18.0e-6 * 1.1; // reduced Mie to cut gray/whitish
+        final double[] rayBeta = {3.2e-6, 8.5e-6, 24.5e-6}; // pure saturated vibrant blue
+        final double mieBeta = 6.0e-6 * 1.1; // RADICALLY lowered to kill gray haze (was 38/24/18)
         final double[] ozoneBeta = {0.650e-6, 1.881e-6, 0.085e-6};
         final double oy = planetR + 2000.0;
         double b = oy * dy;
@@ -1641,8 +1641,8 @@ public final class RtComposite {
             double t = seg * (i + 0.5);
             double px = dx * t, py = oy + dy * t, pz = dz * t;
             double h = Math.sqrt(px * px + py * py + pz * pz) - planetR;
-            odR += Math.exp(-h / 8000.0) * seg;
-            odM += Math.exp(-h / 1100.0) * seg;
+            odR += Math.exp(-h / 9000.0) * seg;
+            odM += Math.exp(-h / 900.0) * seg;
             odO += Math.max(0.0, 1.0 - Math.abs(h - 25000.0) / 15000.0) * seg;
         }
         for (int i = 0; i < 3; i++) {

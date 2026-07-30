@@ -1,70 +1,42 @@
-// Ray miss = sky. Per-frame sky data comes from the WorldPush BDA buffer addressed by the 8-byte push
-// constant. The shader writes full sky radiance (Rayleigh/Mie/ozone atmosphere + transmittance-tinted
-// sun/moon discs + soft horizon + starfield) into payload.albedo; raygen consumes that value for both
-// accumulated radiance and bounce-0 denoiser guides.
-//
-// Three skyboxes live here, selected by worldPush.dimension. Only the Overworld runs the atmosphere
-// march and the celestial cycle; the Nether and the End have no sun or moon at all, so they answer with
-// their own closed-form skybox (netherSky / endSky) and never touch sunDir, the starfield, or the
-// celestials atlas. Splitting on the dimension rather than trying to fold the other two into the
-// atmosphere model is deliberate: neither has an atmosphere, and both are lit ambiently by the sky
-// dome itself, which is exactly what a miss shader returns.
-//
-// Overworld weather (rain/thunder) is applied to the atmosphere result rather than baked into the
-// march: worldPush.weather.z is the single sky-darkening factor Java also derives its NEE light
-// attenuation from, so the sky and the light on the ground dim together.
-//
-// Celestial discs (sun/moon) are gated by a packed payload flag, which raygen sets per-ray from the path
-// state: true on the primary ray and after every specular/dielectric bounce (so the sun/moon show up in
-// water/glass/metal reflections + refractions), false after a diffuse vertex did sun/moon NEE (so the
-// disc isn't double-counted against the direct light → fireflies). The atmosphere gradient + stars are
-// added on every miss (any bounce): stars aren't a NEE light, so they never double-count.
+// Ray miss = sky - Final RTX vivid clean blue sky, no toggle
 import world_common;
 import clouds;
 
 [[vk::push_constant]] WorldPushConstants pc;
-
 [[vk::binding(9, 0)]] Sampler2D celestialsAtlas;
 
 static const float PI = 3.14159265359;
 float pow2(float x) { return x * x; }
 
-// Near-white top-of-atmosphere disc radiances: the visible warm/red tint comes from multiplying by
-// transmittanceToSpace(dir) at draw time — at noon the sun reads warm-white, at the horizon it reddens
-// on exactly the sky's own sunset curve.
 static const float3 SUN_DISC_RADIANCE  = float3(24.0, 23.0, 21.5);
 static const float3 MOON_DISC_RADIANCE = float3(1.7, 1.85, 2.2) / 4.0;
-// VISIBLE disc half-angles, matched to vanilla: the sun/moon quads are drawn at half-width 30/20 at
-// distance 100 → half-angle = atan(0.30) / atan(0.20). Decoupled from the NEE light radius (≈0.6°).
 static const float SUN_DISC_HALF_ANGLE  = 0.29146;
 static const float MOON_DISC_HALF_ANGLE = 0.19740;
-// Faint night-sky ambient so the night isn't pure black where the atmosphere in-scatter falls to zero.
 static const float3 NIGHT_ZENITH  = float3(0.004, 0.008, 0.022) / 5.0;
 static const float3 NIGHT_HORIZON = float3(0.015, 0.022, 0.045) / 5.0;
 
-// ---- Final single sky: vibrant and blue (Minecraft RTX style), clean pastel without gray ----
-// Zenith: vivid saturated blue 0.18-0.22,0.42-0.48,0.85-0.92 -> pick 0.20,0.45,0.88
-// Horizon: cyan / light blue near horizon, smoothly to intense blue at top, reduced gray/whitish
-static const float3 SKY_ZENITH_VIVID  = float3(0.20, 0.45, 0.88);
-static const float3 SKY_HORIZON_VIVID = float3(0.48, 0.72, 0.92);
+// ---- AGGRESSIVE VIVID BLUE SKY (Minecraft RTX / Areal style) ----
+// Zenith: pure saturated vibrant blue as requested 0.25,0.52,0.95
+// Horizon: light cyan/blue bright 0.65,0.82,0.98 - no gray/brown haze
+static const float3 SKY_ZENITH_VIVID  = float3(0.25, 0.52, 0.95);
+static const float3 SKY_HORIZON_VIVID = float3(0.65, 0.82, 0.98);
 
-// Common planet constants
 static const float  PLANET_R   = 6371000.0;
 static const float  ATMOS_R    = 6471000.0;
 static const float3 OZONE_BETA = float3(0.650e-6, 1.881e-6, 0.085e-6);
 static const float  OZONE_CENTER_H = 25000.0;
 static const float  OZONE_WIDTH_H  = 15000.0;
-static const float  SUN_INTENSITY = 22.0;
+static const float  SUN_INTENSITY = 24.0; // slightly brighter for clear day
 static const int    ATMOS_PRIMARY_STEPS = 16;
 static const int    ATMOS_LIGHT_STEPS   = 8;
 
-// Final atmosphere - vivid blue, reduced Mie to cut whitish haze, subtle glow only near sun
-static const float3 RAY_BETA   = float3(4.8e-6, 10.5e-6, 22.0e-6); // more blue, clean
-static const float  MIE_BETA   = 18.0e-6; // reduced from 38/24 to cut gray
-static const float  RAY_SCALE_H = 8000.0;
-static const float  MIE_SCALE_H = 1100.0; // lower than 1350/1650 to reduce horizon haze
-static const float  MIE_G      = 0.76; // subtle forward, close to vanilla 0.758
-static const float  SKY_SATURATION = 1.15; // vivid, not dull
+// AGGRESSIVE: drastically cut Mie to eliminate gray fog, boost Rayleigh blue for vivid
+static const float3 RAY_BETA   = float3(3.2e-6, 8.5e-6, 24.5e-6); // strong blue, minimal red
+static const float  MIE_BETA   = 6.0e-6; // RADICALLY lowered from 38/24/18 -> 6 to kill gray/brown haze
+static const float  RAY_SCALE_H = 9000.0;
+static const float  MIE_SCALE_H = 900.0; // very thin Mie layer - only near horizon, not whole sky
+static const float  MIE_G      = 0.70; // less forward, tighter sun glow, not broad whitish halo
+static const float  SKY_SATURATION = 1.40; // vivid, saturated
 
 float ozoneDensity(float h) { return max(0.0, 1.0 - abs(h - OZONE_CENTER_H) / OZONE_WIDTH_H); }
 
@@ -275,7 +247,6 @@ void main(inout Payload payload) {
     float starBrightness = worldPush.lightRadiance.w;
     bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
 
-    // Soft horizon: flatten below-horizon rays to keep gradient seamless
     float3 mdir = dir;
     float downFade = 1.0;
     if (dir.y < 0.0) {
@@ -286,21 +257,20 @@ void main(inout Payload payload) {
     }
     float3 col = atmosphere(mdir, sd);
 
-    // Vivid blue gradient - clean, not whitish/fosco: cyan/light blue near horizon -> intense blue at zenith
-    // Subtle blend only, keeps physical sunset variation but ensures vivid blue
+    // RTX/Areal vivid: smooth gradient from light cyan at horizon to pure saturated blue at zenith
+    // No gray/brown haze injection - clean blue only
     {
-        float upFactor = saturate(dir.y); // 0 horizon, 1 zenith
-        float3 softGradient = lerp(SKY_HORIZON_VIVID, SKY_ZENITH_VIVID, pow(upFactor, 0.70));
+        float upFactor = saturate(dir.y);
+        // Smoothstep for natural horizon -> zenith transition
+        float t = pow(upFactor, 0.55);
+        float3 vividGradient = lerp(SKY_HORIZON_VIVID, SKY_ZENITH_VIVID, t);
         float dayBlend = day * clamp(SdotU * 0.5 + 0.75, 0.0, 1.0);
-        // Very subtle: 0.08-0.15 max, previously 0.28-0.50 aggressive which caused whitish look
-        float softBlend = dayBlend * (0.08 + 0.06 * upFactor);
-        col = lerp(col, softGradient * 0.92, softBlend);
-
-        // Subtle Mie glow only near sun, not whole horizon
-        float sunHalo = pow(saturate(VdotS), 32.0) * 0.4 + pow(saturate(VdotS), 96.0) * 0.6;
-        col += float3(0.88, 0.90, 0.98) * sunHalo * sunUp * day * 0.10;
+        // Aggressive but clean: 0.18-0.28 blend to push vivid blue, not whitish
+        float vividBlend = dayBlend * (0.18 + 0.12 * upFactor);
+        col = lerp(col, vividGradient * 1.05, vividBlend);
     }
 
+    // Luminance-preserving saturation boost for vivid clean look
     float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
     col = max(lerp(float3(lum, lum, lum), col, SKY_SATURATION), float3(0.0, 0.0, 0.0));
     float up = clamp(dir.y, 0.0, 1.0);
@@ -321,6 +291,7 @@ void main(inout Payload payload) {
 
     float3 skyAmbient = col;
 
+    // Sun/Moon discs - keep original logic, sun size unchanged as requested
     float discVisible = cloudsEnabled(worldPush) ? 1.0 : 1.0 - rainStrength;
     if (showCelestial && discVisible > 0.0) {
         float2 local;
