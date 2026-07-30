@@ -262,6 +262,14 @@ public final class RtEntities {
         return cameraState.orientation;
     }
 
+    public CameraRenderState getCameraStateForCollector() {
+        return cameraState;
+    }
+
+    public PoseStack getBlockEntityPoseStack() {
+        return blockEntityPoseStack;
+    }
+
     /** Last frame's posed mesh for one entity: local vertex positions + its interpolated world anchor. */
     private static final class EntityPrev {
         float[] verts = new float[0];

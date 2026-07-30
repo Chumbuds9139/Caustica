@@ -160,7 +160,7 @@ public final class RtVideoOptions {
     }
 
     private static final List<String> TONEMAP_OPERATORS =
-            List.of("agx", "pbr_neutral", "aces", "filmic", "linear");
+            List.of("agx", "pbr_neutral", "aces", "filmic", "linear", "psychov");
 
     private static OptionInstance<String> tonemapOperator() {
         StringSetting setting = CausticaConfig.Rt.Tonemapping.OPERATOR;

@@ -326,6 +326,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         }
 
         float3 albedo = payload.albedo;
+        // Boat interior fix: detect dynamic entity (boat, minecart) early for two-sided lighting
+        bool isDynamicEntityEarly = payloadDynamicEntity();
         // LabPBR SSS strength (0 when the material has none, or when the player turned SSS off:
         // payloadActiveSss returns a hard zero in that case, so every SSS term below — the RIS back
         // lobe and the explicit transmission pass — collapses without needing its own check).
@@ -361,7 +363,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // RIS is skipped must also gather emission directly or that light is lost outright.
         bool gateEmitter = risOn && payloadEmitterInList();
         if (emission > 0.0 && (!gateEmitter || showCelestial)) {
-            float emissionScale = payloadDynamicEntity() ? worldPush.lightScales.y : worldPush.lightScales.x;
+            float emissionScale = isDynamicEntityEarly ? worldPush.lightScales.y : worldPush.lightScales.x;
             L += throughput * albedo * emission * max(emissionScale, 0.0);
         }
 
@@ -383,7 +385,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         if (lightHalfAngle > 0.0) {
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
-        float ndl = celestialLit ? max(0.0, dot(n, lightDir)) : 0.0;
+        // For dynamic entities (boat interior), use two-sided NDL so interior faces get sun/sky light
+        float ndlRaw = dot(n, lightDir);
+        float ndl = celestialLit ? (isDynamicEntityEarly ? abs(ndlRaw) : max(0.0, ndlRaw)) : 0.0;
         // Cloud occlusion of the celestial light at this shading point. It is shared lazily by the
         // front-face NEE below and the SSS transmission pass further down: both are the same sun arriving
         // at the same point, so a cloud that shades one must shade the other by exactly the same amount.
@@ -423,6 +427,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
         float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
 
+        // Boat interior fix: dynamic entities (boats, minecarts) have concave interior faces
+        // where a single-sided NDL would be negative, causing black interior. Reuse early flag.
+        bool twoSidedEmitter = isDynamicEntityEarly; // fix boat interior + minecart
+
         // Emitter direct lighting. In ReSTIR mode the owner sample shades the reused reservoir here and
         // sibling SPP samples omit this one receiver, so frame averaging contains the ReSTIR result rather
         // than silently blending it back toward RIS. OFF and deeper vertices execute the original RIS path.
@@ -435,15 +443,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 uint freshCandidates = shadeWithRestir
                         ? min(worldPush.risCandidates, RESTIR_FRESH_CANDIDATES)
                         : worldPush.risCandidates;
-                Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false,
+                Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, twoSidedEmitter,
                         activeSss, freshCandidates, seed, proposalSeed);
                 if (shadeWithRestir) {
                     r = restirSpatiotemporal(r, pix, dimensions, hitPos, payload.motionPrev,
-                            n, v, rd, diffAlb, F0, rough, false, activeSss, seed);
+                            n, v, rd, diffAlb, F0, rough, twoSidedEmitter, activeSss, seed);
                 }
                 float estimatorScale = shadeWithRestir ? restirSampleScale : 1.0;
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
-                        false, activeSss) * estimatorScale;
+                        twoSidedEmitter, activeSss) * estimatorScale;
             }
         }
 
@@ -522,6 +530,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.
+        // Standard path tracing - no forced boost, let natural indirect do the work.
         if (bounce >= rrStart) {
             float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
             if (rndf(seed) > q) {

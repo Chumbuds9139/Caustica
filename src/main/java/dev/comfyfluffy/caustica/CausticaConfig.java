@@ -939,6 +939,7 @@ public final class CausticaConfig {
                     case "aces" -> 2;
                     case "filmic" -> 3;
                     case "linear" -> 4;
+                    case "psychov", "psycho_v", "psychovisual", "psycho" -> 5;
                     default -> 0; // agx
                 };
             }
@@ -953,6 +954,7 @@ public final class CausticaConfig {
                     case "aces" -> "aces";
                     case "filmic" -> "filmic";
                     case "linear", "passthrough", "pass_through", "none" -> "linear";
+                    case "psychov", "psycho_v", "psychovisual", "psycho" -> "psychov";
                     default -> "agx";
                 };
             }

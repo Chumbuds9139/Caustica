@@ -221,7 +221,36 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         int idxStart = capture.idx.size();
         int uvStart = capture.uvList.size();
         int primStart = capture.prim.size();
+
+        // Water mask detection: boat's water cutout (water_patch) uses RenderType waterMask - skip it entirely
+        // to avoid black rectangle covering the real wood floor (depth/stencil mask for vanilla).
+        if (isWaterMask(renderType)) {
+            return;
+        }
+
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
+        // Boat fix: boat models (BoatModel, ChestBoatModel, RaftModel) have interior faces that the cuboid
+        // emitter does not capture with correct UVs / normals (interior bottom becomes black). Force fallback
+        // path (renderToBuffer) which uses the actual ModelPart vertex data with proper UVs and normals.
+        // Also hide water_patch sub-mesh that is the water mask cutout (black rectangle).
+        String modelName = model.getClass().getName().toLowerCase();
+        boolean isBoatModel = modelName.contains("boat") || modelName.contains("raft");
+        java.util.ArrayList<ModelPart> hiddenWaterParts = null;
+        java.util.ArrayList<Boolean> hiddenWaterPrevSkip = null;
+        if (isBoatModel) {
+            directTemplate = null;
+            // Collect water_patch parts (name contains "water") and hide them for this capture
+            java.util.ArrayList<ModelPart> waterParts = new java.util.ArrayList<>();
+            collectWaterPatchParts(model.root(), waterParts);
+            if (!waterParts.isEmpty()) {
+                hiddenWaterParts = waterParts;
+                hiddenWaterPrevSkip = new java.util.ArrayList<>(waterParts.size());
+                for (ModelPart wp : waterParts) {
+                    hiddenWaterPrevSkip.add(wp.skipDraw);
+                    wp.skipDraw = true;
+                }
+            }
+        }
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         try {
@@ -235,6 +264,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                     ? "entity.capture.submit.modelDraw.direct"
                     : "entity.capture.submit.modelDraw.fallback", drawStart);
             RtFrameStats.FRAME.endStage("entity.capture.submit.modelDraw", drawStart);
+            // Restore water mask parts that were hidden to avoid black rectangle
+            if (hiddenWaterParts != null) {
+                for (int i = 0; i < hiddenWaterParts.size(); i++) {
+                    hiddenWaterParts.get(i).skipDraw = hiddenWaterPrevSkip.get(i);
+                }
+            }
         }
         int addedVertices = (capture.verts.size() - vertStart) / 3;
         int addedQuads = (capture.idx.size() - idxStart) / 6;
@@ -427,6 +462,36 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return location.contains("glint");
     }
 
+    private static boolean isWaterMask(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        try {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            String loc = pipeline.getLocation().toString().toLowerCase();
+            return loc.contains("water_mask") || loc.contains("watermask") || loc.contains("watermask") || loc.contains("boat_water") || RenderTypes.waterMask().equals(renderType);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static void collectWaterPatchParts(ModelPart root, List<ModelPart> out) {
+        if (root == null) return;
+        ModelPartAccessor access = (ModelPartAccessor) (Object) root;
+        var children = access.caustica$children();
+        if (children == null) return;
+        for (var entry : children.entrySet()) {
+            String name = entry.getKey().toLowerCase();
+            ModelPart child = entry.getValue();
+            if (name.contains("water") || name.contains("mask") || name.contains("patch")) {
+                out.add(child);
+            }
+            // Recurse
+            collectWaterPatchParts(child, out);
+        }
+    }
+
     /** Resolve a quad's tint colour from its tint index + the submission's tint layers (white if untinted). */
     private static int tintColor(int tintIndex, int[] tintLayers) {
         if (tintIndex < 0 || tintLayers == null || tintIndex >= tintLayers.length) {
@@ -435,26 +500,149 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return tintLayers[tintIndex] | 0xFF000000; // force opaque; capture uses only the rgb
     }
 
-    /** Re-mesh a contained block-model display through FRAPI so model wrappers remain effective. */
+    /** Re-mesh a contained block-model display through FRAPI so model wrappers remain effective.
+     *  For block-entity blocks (chest, trapped chest, ender chest, shulker, etc.) that have no baked
+     *  model, capture the actual BlockEntity model via BlockEntityRenderDispatcher so the minecart
+     *  with chest geometry is correctly sent to Vulkan.
+     */
     public void captureBlockState(BlockState blockState, Matrix4fc transform, PoseStack poseStack) {
         if (capture == null || blockState.isAir()) {
             return;
         }
+
+        // First try to capture as a real BlockEntity (chest in minecart) via dispatcher
+        if (blockState.hasBlockEntity()) {
+            try {
+                var mc = Minecraft.getInstance();
+                var level = mc.level;
+                var dispatcher = mc.getBlockEntityRenderDispatcher();
+                var camState = RtEntities.INSTANCE.getCameraStateForCollector();
+                // Only attempt if we have a camera state (i.e. we are inside beginFrame)
+                if (camState != null && dispatcher != null) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = null;
+                    // Chest cases: normal, trapped, ender
+                    if (blockState.is(net.minecraft.world.level.block.Blocks.CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.TRAPPED_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.TrappedChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.ENDER_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.EnderChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else {
+                        // Generic: try to create via Block's EntityBlock path if possible
+                        // For blocks like barrel, hopper, etc., create minimal BE via type
+                        // Use BlockEntityType to create - best effort, skip if fails
+                        // This fallback prevents invisible chest and also handles other BE minecart displays
+                        try {
+                            String bName = blockState.getBlock().toString().toLowerCase();
+                            if (bName.contains("chest")) {
+                                be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                                be.setLevel(level);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+
+                    if (be != null) {
+                        dispatcher.prepare(camState.pos);
+                        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                        var berState = dispatcher.tryExtractRenderState(be, partial, null, false);
+                        if (berState != null) {
+                            int idxBeforeBE = capture.idx.size();
+                            poseStack.pushPose();
+                            if (transform != null) {
+                                poseStack.mulPose(transform);
+                            }
+                            try {
+                                dispatcher.submit(berState, poseStack, this, camState);
+                            } finally {
+                                poseStack.popPose();
+                            }
+                            // If we got new geometry from the BE, we're done (chest now visible)
+                            if (capture.idx.size() > idxBeforeBE) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                // Fall through to block model path
+                // System.out.println(\"RT chest BE capture failed: \" + t);
+            }
+        }
+
         BlockStateModel model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(blockState);
-        if (model == null) {
-            return;
+        int idxBeforeModel = capture.idx.size();
+        if (model != null) {
+            poseStack.pushPose();
+            if (transform != null) {
+                poseStack.mulPose(transform);
+            }
+            try {
+                // Display models are isolated from the world and do not apply random block offsets, matching
+                // Fabric's BlockStateModelWrapper path.
+                emitBlockModel(poseStack.last().pose(), model, BlockAndTintGetter.EMPTY, BlockPos.ZERO,
+                        blockState, 42L, false);
+            } finally {
+                poseStack.popPose();
+            }
+            if (capture.idx.size() > idxBeforeModel) {
+                return; // block model gave geometry (stone, etc.)
+            }
         }
-        poseStack.pushPose();
-        if (transform != null) {
-            poseStack.mulPose(transform);
+
+        // Final safe fallback: for any remaining BE block without model and without successful BE capture
+        // (should not happen for chest if BE path worked), emit a solid-color box using white slot to
+        // guarantee visibility without corrupted atlas UVs.
+        if (blockState.hasBlockEntity()) {
+            // Recompute final pose (stack may have been popped, so use identity + transform)
+            Matrix4f fallbackPose = new Matrix4f();
+            if (transform != null) {
+                fallbackPose.set(transform);
+            }
+            emitChestFallbackSafe(fallbackPose, blockState);
         }
-        try {
-            // Display models are isolated from the world and do not apply random block offsets, matching
-            // Fabric's BlockStateModelWrapper path.
-            emitBlockModel(poseStack.last().pose(), model, BlockAndTintGetter.EMPTY, BlockPos.ZERO,
-                    blockState, 42L, false);
-        } finally {
-            poseStack.popPose();
+    }
+
+    private void emitChestFallbackSafe(Matrix4f pose, BlockState state) {
+        // Use white slot (untextured) and solid tint to avoid Vulkan atlas corruption
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentOpacity = 1.0f;
+        capture.currentOrder = 0;
+        capture.clearUvRemap();
+        capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+
+        boolean isChest = state.getBlock().toString().toLowerCase().contains("chest");
+        int chestTint = 0xFF8B5A2B;
+        int tint = isChest ? chestTint : -1;
+
+        float min = 0.0625f, max = 0.9375f, minY = 0.0f, maxY = 0.875f;
+        if (state.toString().toLowerCase().contains("hopper")) {
+            min = 0.0f; max = 1.0f; minY = 0.0f; maxY = 0.625f;
+        }
+
+        float[][] corners = {
+                {min, minY, min}, {max, minY, min}, {max, minY, max}, {min, minY, max},
+                {min, maxY, min}, {max, maxY, min}, {max, maxY, max}, {min, maxY, max},
+        };
+        int[][] faces = {{0,1,2,3},{4,7,6,5},{0,4,5,1},{2,6,7,3},{0,3,7,4},{1,5,6,2}};
+        float[] nx = {0,0,0,0,-1,1}, ny = {-1,1,0,0,0,0}, nz = {0,0,-1,1,0,0};
+
+        for (int f = 0; f < faces.length; f++) {
+            int[] face = faces[f];
+            for (int i = 0; i < 4; i++) {
+                float[] c = corners[face[i]];
+                meshPos.set(c[0], c[1], c[2]);
+                pose.transformPosition(meshPos);
+                meshX[i] = meshPos.x; meshY[i] = meshPos.y; meshZ[i] = meshPos.z;
+                meshU[i] = 0f; meshV[i] = 0f; // zero UV to sample white slot uniformly
+            }
+            capture.addDirectQuad(meshX, meshY, meshZ, ZERO_UV, ZERO_UV, nx[f], ny[f], nz[f], tint);
         }
     }
 
