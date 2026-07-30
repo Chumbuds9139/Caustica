@@ -532,7 +532,9 @@ public float2 restirDiskOffset(uint sampleIndex, uint hash) {
 public int2 restirSpatialOffset(uint sampleIndex, uint hash) {
     float2 f = restirDiskOffset(sampleIndex, hash);
     // Add sub-pixel jittering per frame to smooth the sampling pattern
-    uint hj = pcg(hash ^ worldPush.frameIndex * 7411u);
+    // Fix CI E30047: pcg() takes inout, so expression must be l-value. Store in temp var.
+    uint hjSeed = hash ^ worldPush.frameIndex * 7411u;
+    uint hj = pcg(hjSeed);
     float jitterX = (rndf(hj) - 0.5) * 0.8;
     float jitterY = (rndf(hj) - 0.5) * 0.8;
     return int2(int(round(f.x + jitterX)), int(round(f.y + jitterY)));
