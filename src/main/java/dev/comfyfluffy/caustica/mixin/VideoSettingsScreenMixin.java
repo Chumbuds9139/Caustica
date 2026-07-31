@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.mixin;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.client.RtVideoOptions;
+import dev.comfyfluffy.caustica.compat.VoxyCompat;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.OptionInstance;
@@ -38,6 +39,8 @@ public abstract class VideoSettingsScreenMixin {
     private static final Component CAUSTICA$RT_HEADER = Component.translatable("caustica.options.rt.header");
     private static final Component CAUSTICA$RT_LIGHTS_HEADER = Component.translatable("caustica.options.rt.lightsHeader");
     private static final Component CAUSTICA$RT_TONEMAP_HEADER = Component.translatable("caustica.options.rt.tonemapHeader");
+    private static final Component CAUSTICA$VOXY_HEADER =
+            Component.translatable("caustica.options.voxy.header");
 
     @Redirect(
         method = "addOptions",
@@ -71,6 +74,12 @@ public abstract class VideoSettingsScreenMixin {
         }
         list.addHeader(CAUSTICA$RT_HEADER);
         list.addSmall(RtVideoOptions.runtimeOptions());
+        list.addBig(RtVideoOptions.distantHorizonsRefreshButton());
+        if (VoxyCompat.enabled()) {
+            list.addHeader(CAUSTICA$VOXY_HEADER);
+            list.addSmall(RtVideoOptions.voxyOptions());
+            list.addBig(RtVideoOptions.voxyRefreshButton());
+        }
         list.addHeader(CAUSTICA$RT_LIGHTS_HEADER);
         list.addSmall(RtVideoOptions.lightOptions());
         list.addHeader(CAUSTICA$RT_TONEMAP_HEADER);
