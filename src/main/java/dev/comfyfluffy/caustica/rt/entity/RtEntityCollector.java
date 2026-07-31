@@ -6,6 +6,7 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -32,6 +33,7 @@ import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
@@ -101,6 +103,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     // TerrainPrim.flags values (mirror world_common.slang / RtTerrainMesher).
     private static final int TERRAIN_PRIM_PORTAL_NETHER = 2;
     private static final int TERRAIN_PRIM_PORTAL_END = 4;
+    // Identity pose fallback for submitFlame when the caller hands over an empty PoseStack
+    // (read-only; transformPosition never mutates it).
+    private static final Matrix4f IDENTITY_POSE = new Matrix4f();
     // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
     // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
     // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
@@ -135,6 +140,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private final Vector3f meshPos = new Vector3f();
     // The fire sprite for burning entities, cached per resource epoch (cleared by clearCaches).
     private TextureAtlasSprite fireSprite;
+    private boolean loggedFlameSpriteFailure;
     // Whether vanilla's dispatcher submitted the flame overlay for the entity currently being
     // captured (set by submitFlame, reset per entity in begin). RtEntities uses this to emit the
     // flame itself when the dispatcher's gate didn't fire for the RT capture.
@@ -169,16 +175,27 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         cuboidEmitter.clear();
         blockQuadEmitter = null;
         fireSprite = null;
+        loggedFlameSpriteFailure = false;
     }
 
-    /** The block atlas's animated fire sprite (never null once the atlas is loaded; null on failure). */
+    /**
+     * The block atlas's animated fire sprite (never null once the atlas is loaded; null on failure).
+     * Uses {@link AtlasIds#BLOCKS} — the same key RtTerrain's working sprite-finder uses — because
+     * {@code getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS)} (the legacy identifier) can throw on
+     * 26.x, which silently killed the whole flame overlay: submitFlame bailed out with no geometry
+     * and the fallback saw the "already submitted" flag.
+     */
     private TextureAtlasSprite fireSprite() {
         if (fireSprite == null) {
             try {
                 fireSprite = Minecraft.getInstance().getAtlasManager()
-                        .getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS).getSprite(FIRE_SPRITE);
+                        .getAtlasOrThrow(AtlasIds.BLOCKS).getSprite(FIRE_SPRITE);
             } catch (Throwable t) {
                 fireSprite = null; // atlas not ready yet — retry next submission
+                if (!loggedFlameSpriteFailure) {
+                    loggedFlameSpriteFailure = true;
+                    CausticaMod.LOGGER.warn("RT flame sprite resolution failed (fire overlay disabled)", t);
+                }
             }
         }
         return fireSprite;
@@ -907,14 +924,19 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (fire == null) {
             return;
         }
-        capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(fire.atlasLocation());
+        // The block atlas is pre-seeded as bindless slot 0 (RtEntityTextures.atlasSlotCache), and the
+        // fire sprite lives in it — no atlas-key lookup needed for the flame's sampler.
+        capture.currentTexSlot = 0;
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
         // The fire sprite's transparent gaps must not block the ray: alpha-test like any cutout layer.
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0;
         capture.setUvRemap(fire.getU0(), fire.getV0(), fire.getU1(), fire.getV1());
-        Matrix4f pose = poseStack.last().pose();
+        // The dispatcher normally passes the entity's pushed pose; some callers pass an empty stack
+        // (our own fallback guarantees identity). An empty stack has no "last" pose — fall back to
+        // identity so the flame lands in the same entity-local space as the body capture.
+        Matrix4f pose = poseStack.isEmpty() ? IDENTITY_POSE : poseStack.last().pose();
         // Flame cube proportions: the box must be WIDER than the mob's body (a zombie is 0.6 wide,
         // half 0.3) so its front/side faces sit in front of the body and the fire shows over it —
         // a flush cube hides entirely inside the body silhouette. The fire texture's transparent
