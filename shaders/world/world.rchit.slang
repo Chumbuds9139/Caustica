@@ -404,7 +404,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             payload.normal = half3(dn);
             payload.hitT = RayTCurrent();
             payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-            payload.f0 = half3(f0Scalar, f0Scalar, f0Scalar);
+            payload.f0 = half3(float3(f0Scalar, f0Scalar, f0Scalar));
             payloadSetPacked(payload, MATERIAL_DIELECTRIC,
                     clamp(dhHeader.params.x, 0.025, 0.16), 0.0, dhEmission, 0.0,
                     ior, max(dhHeader.params.w, 0.97),
