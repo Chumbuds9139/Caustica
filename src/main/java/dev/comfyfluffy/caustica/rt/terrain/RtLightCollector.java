@@ -250,8 +250,12 @@ final class RtLightCollector {
                     packHalf2(uvHvU, uvHvV),
                     leR, leG, leB, packHalf2(uvCu, uvCv));
 
-            p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
-            p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
+            // OR (never overwrite) so unrelated TerrainPrim.flags bits — the portal tags written by
+            // RtTerrainMesher — survive the light-buffer membership stamp on both triangles.
+            int flagsA = Float.floatToRawIntBits(p[pb + PRIM_FLAGS_LANE]) | PRIM_FLAG_IN_LIGHT_BUFFER;
+            int flagsB = Float.floatToRawIntBits(p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE]) | PRIM_FLAG_IN_LIGHT_BUFFER;
+            p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(flagsA);
+            p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(flagsB);
         }
     }
 

@@ -32,6 +32,7 @@ import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
@@ -82,6 +83,15 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private static final float LEASH_WIDTH = 0.05f;
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
+    // Full-sprite UVs for the flame cube faces (remapped into the fire sprite's atlas region by the
+    // capture's uvRemap, which submitFlame sets).
+    private static final float[] FLAME_UV_U = {0f, 1f, 1f, 0f};
+    private static final float[] FLAME_UV_V = {0f, 0f, 1f, 1f};
+    // Vanilla renders the entity flame with LightTexture.FULL_BRIGHT; the RT equivalent is a strong
+    // per-prim self-emission (radiance = albedo * emission * the dynamic light scale).
+    private static final float FLAME_EMISSION = 1.0f;
+    // The entity fire overlay uses the block atlas's animated fire_0 sprite.
+    private static final Identifier FIRE_SPRITE = Identifier.withDefaultNamespace("block/fire_0");
     // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
     // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
     // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
@@ -114,6 +124,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private final float[] meshX = new float[4], meshY = new float[4], meshZ = new float[4];
     private final float[] meshU = new float[4], meshV = new float[4];
     private final Vector3f meshPos = new Vector3f();
+    // The fire sprite for burning entities, cached per resource epoch (cleared by clearCaches).
+    private TextureAtlasSprite fireSprite;
     // Vanilla already computes the Glowing-effect outline colour (opaque team colour, or 0 when not
     // glowing) per submitModel call — see EntityRenderer.extractCommon's outlineColor. Every submitModel
     // call for one entity carries the same value, so the last non-zero one seen this entity is enough.
@@ -142,6 +154,20 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     public void clearCaches() {
         cuboidEmitter.clear();
         blockQuadEmitter = null;
+        fireSprite = null;
+    }
+
+    /** The block atlas's animated fire sprite (never null once the atlas is loaded; null on failure). */
+    private TextureAtlasSprite fireSprite() {
+        if (fireSprite == null) {
+            try {
+                fireSprite = Minecraft.getInstance().getAtlasManager()
+                        .getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS).getSprite(FIRE_SPRITE);
+            } catch (Throwable t) {
+                fireSprite = null; // atlas not ready yet — retry next submission
+            }
+        }
+        return fireSprite;
     }
 
     @Override
@@ -791,8 +817,62 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
     }
 
+    // The classic flame overlay on burning entities. Vanilla's FlameFeatureRenderer renders the
+    // submitted flame nodes with the animated fire sprite and full-bright lighting; the RT path has no
+    // fixed-function flame pass, so capture the same look as real cutout geometry on the entity's BLAS:
+    // a flame cube around the feet textured with the block atlas's fire_0 sprite. The sprite lives in
+    // the live (animated) block atlas, so the flame flickers like vanilla's, and the per-prim emission
+    // makes it self-lit instead of shaded by the scene.
     @Override
     public void submitFlame(PoseStack poseStack, EntityRenderState renderState, Quaternionf rotation) {
+        if (capture == null) {
+            return;
+        }
+        TextureAtlasSprite fire = fireSprite();
+        if (fire == null) {
+            return;
+        }
+        capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(fire.atlasLocation());
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+        // The fire sprite's transparent gaps must not block the ray: alpha-test like any cutout layer.
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        capture.currentOpacity = 1.0f;
+        capture.currentOrder = 0;
+        capture.setUvRemap(fire.getU0(), fire.getV0(), fire.getU1(), fire.getV1());
+        Matrix4f pose = poseStack.last().pose();
+        // Flame cube proportions: vanilla's ModelFlame box (8x8x8 in 16ths) is 0.5 blocks; a slightly
+        // taller box reads better on every mob size while staying close to the vanilla look.
+        float half = 0.3f;
+        float top = 0.7f;
+        float x0 = -half, x1 = half, z0 = -half, z1 = half, y0 = 0.0f, y1 = top;
+        float[] cx = {x0, x1, x1, x0, x1, x0, x0, x1};
+        float[] cy = {y0, y0, y1, y1, y0, y0, y1, y1};
+        float[] cz = {z0, z0, z0, z0, z1, z1, z1, z1};
+        // Four sides + top, full sprite per face (order matches vanilla's cube winding: sides then top).
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 1, 2, 3}, 0f, 0f, -1f);  // north (z-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{5, 4, 7, 6}, 0f, 0f, 1f);   // south (z+)
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 3, 6, 5}, -1f, 0f, 0f);  // west (x-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{1, 4, 7, 2}, 1f, 0f, 0f);   // east (x+)
+        emitFlameFace(pose, cx, cy, cz, new int[]{3, 2, 7, 6}, 0f, 1f, 0f);   // top (y+)
+        // The flame's sprite-rect remap is only for its own quads; leave the capture clean so a
+        // later submission (held item / armour layer) cannot sample through the fire sprite region.
+        capture.clearUvRemap();
+    }
+
+    /** One flame-cube face, pose-transformed into the capture with the fire sprite's full region. */
+    private void emitFlameFace(Matrix4f pose, float[] cx, float[] cy, float[] cz, int[] corners,
+                               float nx, float ny, float nz) {
+        for (int i = 0; i < 4; i++) {
+            int p = corners[i];
+            pose.transformPosition(cx[p], cy[p], cz[p], meshPos);
+            meshX[i] = meshPos.x;
+            meshY[i] = meshPos.y;
+            meshZ[i] = meshPos.z;
+            meshU[i] = FLAME_UV_U[i];
+            meshV[i] = FLAME_UV_V[i];
+        }
+        // White tint, full-bright emission (vanilla renders the flame with LightTexture.FULL_BRIGHT).
+        capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, nx, ny, nz, -1, FLAME_EMISSION);
     }
 
     // Leashes/leads: replicate LeashFeatureRenderer's geometry — a 24-segment curve with two crossed

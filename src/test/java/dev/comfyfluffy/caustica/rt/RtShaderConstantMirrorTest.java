@@ -66,6 +66,25 @@ final class RtShaderConstantMirrorTest {
     }
 
     @Test
+    void terrainPrimFlagBitsMatchBetweenJavaAndSlang() throws IOException {
+        Map<String, Long> slang = slangConstants("TERRAIN_PRIM_");
+        Path mesher = REPO_ROOT.resolve(
+                "src/main/java/dev/comfyfluffy/caustica/rt/terrain/RtTerrainMesher.java");
+        Map<String, Long> java = scan(Files.readString(mesher),
+                Pattern.compile("static\\s+final\\s+int\\s+(TERRAIN_PRIM_\\w+)\\s*=\\s*(\\d+)\\s*;"));
+
+        assertFalse(slang.isEmpty(), "no TERRAIN_PRIM_* constants found in " + SLANG);
+        assertEquals(slang, java,
+                "TERRAIN_PRIM_* bits differ between world_common.slang and RtTerrainMesher");
+        long seen = 0L;
+        for (Map.Entry<String, Long> entry : slang.entrySet()) {
+            long bit = entry.getValue();
+            assertEquals(0L, seen & bit, entry.getKey() + " reuses a bit already taken");
+            seen |= bit;
+        }
+    }
+
+    @Test
     void worldFlagBitsDoNotCollideWithEachOther() throws IOException {
         Map<String, Long> flags = slangConstants("WORLD_FLAG_");
 
