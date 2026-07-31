@@ -10,10 +10,4 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface OptionsSubScreenAccessor {
     @Accessor("list")
     OptionsList getList();
-
-    @Accessor("lastScreen")
-    net.minecraft.client.gui.screens.Screen getLastScreen();
-
-    @Accessor("options")
-    net.minecraft.client.Options getOptionsAccessor();
 }
