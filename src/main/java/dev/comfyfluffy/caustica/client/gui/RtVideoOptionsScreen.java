@@ -46,14 +46,7 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         if (!CausticaConfig.Rt.ENABLED.value()) {
             return;
         }
-        // Accessor works even if Mojang renames the field (list/body) – Mixin resolves it.
-        OptionsList list;
-        try {
-            list = ((dev.comfyfluffy.caustica.mixin.OptionsSubScreenAccessor) (Object) this).getList();
-        } catch (Throwable t) {
-            // Fallback to direct field access for dev env where accessor might not be applied yet
-            list = this.list;
-        }
+        OptionsList list = ((dev.comfyfluffy.caustica.mixin.OptionsSubScreenAccessor) (Object) this).getList();
         if (list == null) {
             return;
         }
