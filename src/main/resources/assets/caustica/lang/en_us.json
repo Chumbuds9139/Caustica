@@ -1,5 +1,18 @@
 {
 	"caustica.options.rt.header": "Ray Tracing",
+	"caustica.options.rt.title": "Ray Tracing Settings",
+	"caustica.options.rt.settingsButton": "Ray Tracing Settings...",
+	"caustica.options.rt.settings": "Ray Tracing Settings",
+
+	"caustica.options.rt.qualityHeader": "Quality & Performance",
+	"caustica.options.rt.generalHeader": "General",
+	"caustica.options.rt.effectsHeader": "Effects",
+	"caustica.options.rt.pomHeader": "Parallax Occlusion Mapping",
+	"caustica.options.rt.cloudsHeader": "Clouds",
+	"caustica.options.rt.hdrHeader": "HDR",
+	"caustica.options.rt.debugHeader": "Debug",
+	"caustica.options.rt.dhHeader": "Distant Horizons",
+	"caustica.options.rt.exposureHeader": "Exposure",
 
 	"caustica.options.rt.exposureMode": "Exposure",
 	"caustica.options.rt.exposureMode.tooltip": "How the ray-traced image is mapped to display brightness. Auto adapts to scene luminance; Manual uses the exposure value directly.",

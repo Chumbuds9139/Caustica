@@ -1,56 +1,39 @@
 {
 	"caustica.options.rt.header": "レイトレーシング",
-
 	"caustica.options.rt.exposureMode": "露出",
 	"caustica.options.rt.exposureMode.tooltip": "レイトレーシング画像をディスプレイの明るさにどう変換するかを設定します。自動はシーンの輝度に合わせて調整し、手動は露出値をそのまま使用します。",
 	"caustica.options.rt.exposureMode.auto": "自動",
 	"caustica.options.rt.exposureMode.manual": "手動",
-
 	"caustica.options.rt.manualEv": "露出 EV",
 	"caustica.options.rt.manualEv.tooltip": "露出補正を段数で指定します。手動では固定露出として使い、自動では自動露出を明るくまたは暗く補正します。",
-
 	"caustica.options.rt.spp": "ピクセルあたりのサンプル数",
 	"caustica.options.rt.spp.tooltip": "各フレームでピクセルごとに取得するパストレーシングサンプル数。高いほどきれいですが負荷が増えます。",
-
 	"caustica.options.rt.maxBounces": "パスのバウンス数",
 	"caustica.options.rt.maxBounces.tooltip": "最初のヒット後に行う二次パストレーシングバウンスの最大数。高いほど間接光を多く捉えますが、負荷も増えます。",
-
 	"caustica.options.rt.sunSize": "太陽のサイズ",
 	"caustica.options.rt.sunSize.tooltip": "太陽と月の円盤の角半径。大きいほど影の半影が柔らかくなります。",
-
 	"caustica.options.rt.entities": "レイトレーシング対象エンティティ",
 	"caustica.options.rt.entities.tooltip": "エンティティとブロックエンティティをレイトレーシングシーンに含めます。",
-
 	"caustica.options.rt.particles": "レイトレーシング対象パーティクル",
 	"caustica.options.rt.particles.tooltip": "トレースされたシーン内で、パーティクルをカメラレイに沿ったビルボードとして描画します。",
-
 	"caustica.options.rt.glow": "エンティティの発光アウトライン",
 	"caustica.options.rt.glow.tooltip": "発光中のエンティティに、バニラの発光効果アウトライン（壁越し）を描画します。",
-
 	"caustica.options.rt.waterWaves": "アニメーションする水",
 	"caustica.options.rt.waterWaves.tooltip": "水面の法線をアニメーションさせ、動く波のハイライトを表示します。",
-
 	"caustica.options.rt.sss": "サブサーフェススキャタリング",
 	"caustica.options.rt.sss.tooltip": "葉や草などの薄い面を光が透過して散乱し、太陽に向かって見たときに葉が輝くようになります。サブサーフェス情報を持つマテリアルにのみ影響し、適用箇所ではシャドウレイが1本増えます。",
-
 	"caustica.options.rt.weatherLighting": "天候による照明",
 	"caustica.options.rt.weatherLighting.tooltip": "雨や雷雨の間、太陽光と月光を弱めて空を暗くし、太陽・月・星を雲の後ろに隠します。オフにすると、どの天候でも快晴時の照明を維持します。",
-
 	"caustica.options.rt.denoiser": "ノイズ除去フィルター",
 	"caustica.options.rt.denoiser.tooltip": "パストレーシング画像に DLSS Ray Reconstruction のノイズ除去フィルターを適用します。オフにすると、生のノイズを含むトレース結果をフル解像度で表示します。参照用としては便利ですが、サンプル数が少ないと非常に粗くなります。DLSS Ray Reconstruction 対応が必要です。",
-
 	"caustica.options.rt.handFov": "手の視野角",
 	"caustica.options.rt.handFov.tooltip": "一人称の手と手持ちアイテムをゲームの視野角に連動させます。オンにすると視野角を広げるほど腕が遠ざかり、狭めるほど近づきます。オフにすると通常の固定された手の視野角に戻ります。",
-
 	"caustica.options.rt.hdr": "HDR 出力",
 	"caustica.options.rt.hdr.tooltip": "ディスプレイが対応している場合、SDR ではなく HDR (ST.2084/PQ) で表示します。ゲームの再起動後に反映されます。",
-
 	"caustica.options.rt.hdrPaperWhite": "HDR ペーパーホワイト",
 	"caustica.options.rt.hdrPaperWhite.tooltip": "SDR 相当のシーン輝度を HDR ディスプレイ上で対応させる絶対輝度（nits）です。",
-
 	"caustica.options.rt.hdrPeak": "HDR ピーク輝度",
 	"caustica.options.rt.hdrPeak.tooltip": "ハイライトがロールオフする先の絶対輝度（nits）です。ディスプレイの HDR ピーク輝度に設定してください。",
-
 	"caustica.options.rt.dlssQuality": "DLSS 品質",
 	"caustica.options.rt.dlssQuality.tooltip": "DLSS Ray Reconstruction の品質モード。低品質モードは少ないピクセルをレンダリングしてより強くアップスケールするためフレームレートが高くなり、高品質モードはより多くのピクセルをレンダリングして鮮明になります。DLSS Ray Reconstruction が有効な場合のみ画像に影響します。",
 	"caustica.options.rt.dlssQuality.3": "ウルトラパフォーマンス",
@@ -58,7 +41,6 @@
 	"caustica.options.rt.dlssQuality.1": "バランス",
 	"caustica.options.rt.dlssQuality.2": "クオリティ",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
-
 	"caustica.options.rt.debugView": "デバッグ表示",
 	"caustica.options.rt.debugView.tooltip": "最終画像の代わりに、レイトレーシングの中間バッファを可視化します。",
 	"caustica.options.rt.debugView.0": "オフ",
@@ -71,7 +53,6 @@
 	"caustica.options.rt.debugView.7": "スペキュラーモーション",
 	"caustica.options.rt.debugView.8": "発光マスク",
 	"caustica.options.rt.debugView.9": "発光元",
-
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
 	"caustica.options.rt.blockEmissiveIntensity": "Emissive Block Intensity",
@@ -99,11 +80,9 @@
 	"caustica.options.rt.parallaxSmoothing.tooltip": "Switch LabPBR height, normal and surface sampling between smooth bilinear and crisp pixel-aligned sampling.",
 	"caustica.options.rt.parallaxDistance": "Parallax Distance",
 	"caustica.options.rt.parallaxDistance.tooltip": "Distance in blocks at which parallax smoothly disappears. Relief stays full through 80% of the selected range.",
-
 	"caustica.options.rt.dhRefresh": "Reload Distant Horizons Chunks",
 	"caustica.options.rt.dhRefresh.queued": "Distant Horizons Reload Queued",
 	"caustica.options.rt.dhRefresh.rtOnly": "Caustica RT Proxy Reload Queued",
-
 	"caustica.options.voxy.header": "Voxy LODs",
 	"caustica.options.voxy.enabled": "Voxy LODs",
 	"caustica.options.voxy.enabled.tooltip": "Enable Voxy distant terrain in the Caustica path tracer. This takes effect immediately.",
@@ -114,5 +93,18 @@
 	"caustica.options.voxy.chunks": "%s chunks",
 	"caustica.options.voxy.refresh": "Rebuild Voxy LODs",
 	"caustica.options.voxy.refresh.queued": "Voxy rebuild queued",
-	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable"
+	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable",
+	"caustica.options.rt.title": "Ray Tracing Settings",
+	"caustica.options.rt.settingsButton": "Ray Tracing Settings...",
+	"caustica.options.rt.settings": "Ray Tracing Settings",
+	"caustica.options.rt.qualityHeader": "Quality & Performance",
+	"caustica.options.rt.generalHeader": "General",
+	"caustica.options.rt.effectsHeader": "Effects",
+	"caustica.options.rt.pomHeader": "Parallax Occlusion Mapping",
+	"caustica.options.rt.cloudsHeader": "Clouds",
+	"caustica.options.rt.hdrHeader": "HDR",
+	"caustica.options.rt.debugHeader": "Debug",
+	"caustica.options.rt.dhHeader": "Distant Horizons",
+	"caustica.options.rt.exposureHeader": "Exposure",
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov"
 }

@@ -1,56 +1,39 @@
 {
 	"caustica.options.rt.header": "光线追踪",
-
 	"caustica.options.rt.exposureMode": "曝光",
 	"caustica.options.rt.exposureMode.tooltip": "决定如何将光线追踪图像映射到显示亮度。自动会适应场景亮度；手动会直接使用曝光值。",
 	"caustica.options.rt.exposureMode.auto": "自动",
 	"caustica.options.rt.exposureMode.manual": "手动",
-
 	"caustica.options.rt.manualEv": "曝光 EV",
 	"caustica.options.rt.manualEv.tooltip": "以档位为单位的曝光补偿。手动模式下这是固定曝光；自动模式下会让自动曝光更亮或更暗。",
-
 	"caustica.options.rt.spp": "每像素采样数",
 	"caustica.options.rt.spp.tooltip": "每帧对每个像素进行的路径追踪采样数。数值越高画面越干净，但负载也越高。",
-
 	"caustica.options.rt.maxBounces": "路径反弹",
 	"caustica.options.rt.maxBounces.tooltip": "主命中之后的二级路径追踪反弹最大次数。数值越高能捕捉更多间接光，但成本也越高。",
-
 	"caustica.options.rt.sunSize": "太阳大小",
 	"caustica.options.rt.sunSize.tooltip": "太阳和月亮圆盘的角半径。圆盘越大，投射的半影越柔和。",
-
 	"caustica.options.rt.entities": "光追实体",
 	"caustica.options.rt.entities.tooltip": "将实体和方块实体加入光追场景。",
-
 	"caustica.options.rt.particles": "光追粒子",
 	"caustica.options.rt.particles.tooltip": "在追踪场景中，将粒子绘制为面向相机射线的公告板。",
-
 	"caustica.options.rt.glow": "实体发光轮廓",
 	"caustica.options.rt.glow.tooltip": "为发光实体绘制原版发光效果轮廓（可穿墙显示）。",
-
 	"caustica.options.rt.waterWaves": "动态水面",
 	"caustica.options.rt.waterWaves.tooltip": "对水面法线进行动画处理，以显示移动波浪高光。",
-
 	"caustica.options.rt.sss": "次表面散射",
 	"caustica.options.rt.sss.tooltip": "让光线穿过树叶、草等薄表面并发生散射，因此朝太阳方向看时植被会发光。仅影响提供次表面数据的材质，并在生效处增加一条阴影光线。",
-
 	"caustica.options.rt.weatherLighting": "天气光照",
 	"caustica.options.rt.weatherLighting.tooltip": "在下雨和雷暴期间减弱阳光与月光并压暗天空，同时将太阳、月亮和星星隐藏在云层之后。关闭后，任何天气下都保持晴空光照。",
-
 	"caustica.options.rt.denoiser": "降噪滤镜",
 	"caustica.options.rt.denoiser.tooltip": "对路径追踪图像应用 DLSS Ray Reconstruction 降噪滤镜。关闭后将以完整分辨率显示原始的带噪追踪结果——可作为参考画面，但在低采样数下颗粒感明显更强。需要 DLSS Ray Reconstruction 支持。",
-
 	"caustica.options.rt.handFov": "手部视野",
 	"caustica.options.rt.handFov.tooltip": "让第一人称的手和手持物品跟随游戏视野设置。开启时，视野越大手臂越远，视野越小手臂越近。关闭时恢复原版固定的手部视野。",
-
 	"caustica.options.rt.hdr": "HDR 输出",
 	"caustica.options.rt.hdr.tooltip": "当显示器支持时，以 HDR (ST.2084/PQ) 而不是 SDR 显示。重启游戏后生效。",
-
 	"caustica.options.rt.hdrPaperWhite": "HDR 纸白亮度",
 	"caustica.options.rt.hdrPaperWhite.tooltip": "SDR 等效场景亮度在 HDR 显示器上映射到的绝对亮度（nits）。",
-
 	"caustica.options.rt.hdrPeak": "HDR 峰值亮度",
 	"caustica.options.rt.hdrPeak.tooltip": "高光回落目标的绝对亮度（nits）。请设为显示器的 HDR 峰值亮度。",
-
 	"caustica.options.rt.dlssQuality": "DLSS 质量",
 	"caustica.options.rt.dlssQuality.tooltip": "DLSS Ray Reconstruction 质量模式。较低质量模式会渲染更少像素并进行更激进的升频，以获得更高帧率；较高质量模式会渲染更多像素，以获得更清晰的图像。仅在启用 DLSS Ray Reconstruction 时影响画面。",
 	"caustica.options.rt.dlssQuality.3": "超高性能",
@@ -58,7 +41,6 @@
 	"caustica.options.rt.dlssQuality.1": "平衡",
 	"caustica.options.rt.dlssQuality.2": "质量",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
-
 	"caustica.options.rt.debugView": "调试视图",
 	"caustica.options.rt.debugView.tooltip": "显示光线追踪的中间缓冲区，而不是最终图像。",
 	"caustica.options.rt.debugView.0": "关闭",
@@ -71,7 +53,6 @@
 	"caustica.options.rt.debugView.7": "高光运动",
 	"caustica.options.rt.debugView.8": "发光遮罩",
 	"caustica.options.rt.debugView.9": "发光源",
-
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
 	"caustica.options.rt.blockEmissiveIntensity": "Emissive Block Intensity",
@@ -99,11 +80,9 @@
 	"caustica.options.rt.parallaxSmoothing.tooltip": "Switch LabPBR height, normal and surface sampling between smooth bilinear and crisp pixel-aligned sampling.",
 	"caustica.options.rt.parallaxDistance": "Parallax Distance",
 	"caustica.options.rt.parallaxDistance.tooltip": "Distance in blocks at which parallax smoothly disappears. Relief stays full through 80% of the selected range.",
-
 	"caustica.options.rt.dhRefresh": "Reload Distant Horizons Chunks",
 	"caustica.options.rt.dhRefresh.queued": "Distant Horizons Reload Queued",
 	"caustica.options.rt.dhRefresh.rtOnly": "Caustica RT Proxy Reload Queued",
-
 	"caustica.options.voxy.header": "Voxy LODs",
 	"caustica.options.voxy.enabled": "Voxy LODs",
 	"caustica.options.voxy.enabled.tooltip": "Enable Voxy distant terrain in the Caustica path tracer. This takes effect immediately.",
@@ -114,5 +93,18 @@
 	"caustica.options.voxy.chunks": "%s chunks",
 	"caustica.options.voxy.refresh": "Rebuild Voxy LODs",
 	"caustica.options.voxy.refresh.queued": "Voxy rebuild queued",
-	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable"
+	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable",
+	"caustica.options.rt.title": "Ray Tracing Settings",
+	"caustica.options.rt.settingsButton": "Ray Tracing Settings...",
+	"caustica.options.rt.settings": "Ray Tracing Settings",
+	"caustica.options.rt.qualityHeader": "Quality & Performance",
+	"caustica.options.rt.generalHeader": "General",
+	"caustica.options.rt.effectsHeader": "Effects",
+	"caustica.options.rt.pomHeader": "Parallax Occlusion Mapping",
+	"caustica.options.rt.cloudsHeader": "Clouds",
+	"caustica.options.rt.hdrHeader": "HDR",
+	"caustica.options.rt.debugHeader": "Debug",
+	"caustica.options.rt.dhHeader": "Distant Horizons",
+	"caustica.options.rt.exposureHeader": "Exposure",
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov"
 }

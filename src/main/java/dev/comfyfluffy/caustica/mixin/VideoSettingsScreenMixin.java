@@ -1,8 +1,6 @@
 package dev.comfyfluffy.caustica.mixin;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.client.RtVideoOptions;
-import dev.comfyfluffy.caustica.compat.VoxyCompat;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.OptionInstance;
@@ -18,15 +16,12 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Surfaces the runtime-tunable RT settings inside the vanilla Video Settings screen when the RT renderer is
- * enabled. Two changes, both gated on {@link CausticaConfig.Rt#ENABLED}:
- *
+ * Surfaces RT controls inside Video Settings when RT is enabled.
  * <ul>
- *   <li>The Quality section drops the vanilla options the path tracer supersedes (Ambient Occlusion and
- *       Entity Shadows are computed by RT global illumination / RT shadows).</li>
- *   <li>A trailing "Ray Tracing" section adds the {@link RtVideoOptions} controls.</li>
+ *   <li>The Quality section drops vanilla AO and Entity Shadows (superseded by RT).</li>
+ *   <li>A single "Ray Tracing Settings..." button opens a dedicated sub-screen that contains
+ *       all Caustica sliders, toggles and refresh buttons, keeping Video Settings clean.</li>
  * </ul>
- *
  * When RT is disabled the screen is left exactly as vanilla built it.
  */
 @Mixin(VideoSettingsScreen.class)
@@ -37,10 +32,7 @@ public abstract class VideoSettingsScreenMixin {
     }
 
     private static final Component CAUSTICA$RT_HEADER = Component.translatable("caustica.options.rt.header");
-    private static final Component CAUSTICA$RT_LIGHTS_HEADER = Component.translatable("caustica.options.rt.lightsHeader");
-    private static final Component CAUSTICA$RT_TONEMAP_HEADER = Component.translatable("caustica.options.rt.tonemapHeader");
-    private static final Component CAUSTICA$VOXY_HEADER =
-            Component.translatable("caustica.options.voxy.header");
+    private static final Component CAUSTICA$RT_SETTINGS_BUTTON = Component.translatable("caustica.options.rt.settingsButton");
 
     @Redirect(
         method = "addOptions",
@@ -63,8 +55,8 @@ public abstract class VideoSettingsScreenMixin {
         return kept.toArray(OptionInstance<?>[]::new);
     }
 
-    @Inject(method = "addOptions", at = @At("HEAD"))
-    private void caustica$addRtOptions(CallbackInfo ci) {
+    @Inject(method = "addOptions", at = @At("TAIL"))
+    private void caustica$addRtSettingsButton(CallbackInfo ci) {
         if (!CausticaConfig.Rt.ENABLED.value()) {
             return;
         }
@@ -72,18 +64,31 @@ public abstract class VideoSettingsScreenMixin {
         if (list == null) {
             return;
         }
+        // Trailing section with a single big button that opens the dedicated RT screen.
         list.addHeader(CAUSTICA$RT_HEADER);
-        list.addSmall(RtVideoOptions.runtimeOptions());
-        list.addBig(RtVideoOptions.distantHorizonsRefreshButton());
-        if (VoxyCompat.enabled()) {
-            list.addHeader(CAUSTICA$VOXY_HEADER);
-            list.addSmall(RtVideoOptions.voxyOptions());
-            list.addBig(RtVideoOptions.voxyRefreshButton());
-        }
-        list.addHeader(CAUSTICA$RT_LIGHTS_HEADER);
-        list.addSmall(RtVideoOptions.lightOptions());
-        list.addHeader(CAUSTICA$RT_TONEMAP_HEADER);
-        list.addSmall(RtVideoOptions.tonemapOptions());
+        list.addBig(caustica$createRtSettingsButton());
+    }
+
+    private net.minecraft.client.gui.components.Button caustica$createRtSettingsButton() {
+        return net.minecraft.client.gui.components.Button.builder(
+                        CAUSTICA$RT_SETTINGS_BUTTON,
+                        btn -> {
+                            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+                            net.minecraft.client.gui.screens.Screen current = (net.minecraft.client.gui.screens.Screen) (Object) this;
+                            net.minecraft.client.Options opts;
+                            try {
+                                opts = ((OptionsSubScreenAccessor) (Object) this).getOptionsAccessor();
+                            } catch (Throwable t) {
+                                opts = minecraft.options;
+                            }
+                            if (opts == null) {
+                                opts = minecraft.options;
+                            }
+                            minecraft.setScreen(
+                                    new dev.comfyfluffy.caustica.client.gui.RtVideoOptionsScreen(current, opts));
+                        })
+                .width(310)
+                .build();
     }
 
     @Inject(method = "removed", at = @At("TAIL"))
