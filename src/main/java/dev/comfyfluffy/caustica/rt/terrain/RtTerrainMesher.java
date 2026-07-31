@@ -502,6 +502,16 @@ final class RtTerrainMesher {
             // branches in world.rchit. Force them into the SOLID bucket and tag their prims; the
             // nether portal resolves through the emitting variant so it also becomes a RIS light.
             q.portal = portalKind(sprite);
+            // Belt-and-braces: tag by the block state too, so a resource pack that retextures the
+            // portal blocks (or a version whose end-portal model uses a different sprite) still gets
+            // the dedicated portal shading instead of a flat texture.
+            if (q.portal == PORTAL_NONE && state != null) {
+                if (state.is(Blocks.END_PORTAL)) {
+                    q.portal = PORTAL_END;
+                } else if (state.is(Blocks.NETHER_PORTAL)) {
+                    q.portal = PORTAL_NETHER;
+                }
+            }
             if (q.portal != PORTAL_NONE) {
                 q.translucent = false;
                 q.cutout = false;

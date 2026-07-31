@@ -55,6 +55,11 @@ public final class RtEntityCapture implements VertexConsumer {
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
+    // Portal classification for the current submission (world_common.slang TERRAIN_PRIM_PORTAL_*
+    // values, 0 = none). Stamped into the prim's flags lane so world.rchit can shade held or
+    // block-entity portal geometry (EndPortalRenderer's quad, endermen holding portal blocks) with
+    // the procedural portal surfaces instead of the flat atlas texture.
+    int currentPortalFlags;
     // When a model textures from an atlas sprite (block entities: chests/signs/beds via a Material),
     // its ModelPart UVs are 0..1 in a virtual texture and must be remapped into the sprite's atlas
     // region — the work vanilla's sprite-coordinate-expander VertexConsumer does, which we bypass.
@@ -90,6 +95,7 @@ public final class RtEntityCapture implements VertexConsumer {
         currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
         currentOpacity = 1.0f;
         currentOrder = 0;
+        currentPortalFlags = 0;
         uvRemap = false;
     }
 
@@ -144,6 +150,7 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentAlphaBucket = currentAlphaBucket;
         target.currentOpacity = currentOpacity;
         target.currentOrder = currentOrder;
+        target.currentPortalFlags = currentPortalFlags;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
         target.uvV0 = uvV0;
@@ -417,7 +424,7 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tb);
             prim.add((float) currentTexSlot); // tint.w = bindless texture slot
             prim.add(Float.intBitsToFloat(currentMaterialId));
-            prim.add(0f); // flags
+            prim.add(Float.intBitsToFloat(currentPortalFlags)); // flags (portal tags for world.rchit)
             prim.add(opacity); // aux0 = primitive coverage multiplier (read asfloat(aux0) in shaders)
             prim.add(0f); // aux1
             alphaBuckets.add(currentAlphaBucket);

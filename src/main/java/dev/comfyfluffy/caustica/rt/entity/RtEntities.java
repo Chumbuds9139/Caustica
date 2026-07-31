@@ -742,6 +742,12 @@ public final class RtEntities {
                 long submitStart = RtFrameStats.FRAME.startStage();
                 try {
                     dispatcher.submit(state, cameraState, 0.0, 0.0, 0.0, entityPoseStack, collector);
+                    // The dispatcher only submits the flame overlay when its render-state gate fires;
+                    // if it didn't for this capture, emit the flame ourselves so burning entities
+                    // always get their fire layer (no double geometry when the gate did fire).
+                    if (entity.isOnFire() && !collector.flameSubmittedThisEntity()) {
+                        collector.submitFlame(entityPoseStack, state, null);
+                    }
                 } finally {
                     RtFrameStats.FRAME.endStage("entity.capture.submit", submitStart);
                 }

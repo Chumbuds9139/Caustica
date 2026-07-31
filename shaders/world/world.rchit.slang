@@ -526,6 +526,40 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
         uint material = header.model;
+        // Portal surfaces captured through the entity/block-entity path (EndPortalRenderer's quad, or a
+        // held/displayed nether portal block): the same dedicated procedural shading as terrain portals,
+        // so the flat end_portal texture never shows. The collector stamps TERRAIN_PRIM_PORTAL_* into
+        // the entity prim's flags lane and forces the opaque bucket.
+        if ((pr.flags & (TERRAIN_PRIM_PORTAL_NETHER | TERRAIN_PRIM_PORTAL_END)) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float portalTime = worldPush.waterParams.w; // per-frame animation clock (seconds, wrapped)
+            float3 portalColor;
+            float portalEmission;
+            if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+                float3 abyss = endPortalAbyss(WorldRayDirection(), portalTime);
+                portalColor = abyss * END_PORTAL_BRIGHTNESS;
+                portalEmission = luminance(abyss) * END_PORTAL_EMISSION;
+            } else {
+                // Nether swirl on entity-held portal blocks: same in-sprite scroll as terrain.
+                float2 localUv = (euvCoord - header.albedoUv.xy) * header.albedoUv.zw;
+                float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
+                        portalTime * NETHER_PORTAL_SCROLL_V));
+                float2 swirlUv = header.albedoUv.xy + scrolled / header.albedoUv.zw;
+                float4 swirlTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(swirlUv, 0.0);
+                float3 swirl = srgbToLinear(swirlTexel.rgb) * pr.tint.rgb * (0.35 + 0.65 * swirlTexel.a);
+                portalColor = swirl;
+                portalEmission = luminance(swirl) * NETHER_PORTAL_EMISSION;
+            }
+            payload.albedo = half3(portalColor);
+            payload.normal = half3(n);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.04h, 0.04h, 0.04h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0, portalEmission, 0.0,
+                    1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+            payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            return;
+        }
         // POM on the opaque entity BLAS geometry only; cutout/translucent entities keep the exact UV
         // whose alpha the any-hit shader already validated (block-entity models like chests are opaque).
         if (GeometryIndex() == 0u && material == MATERIAL_OPAQUE) {
