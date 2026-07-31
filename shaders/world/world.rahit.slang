@@ -65,7 +65,7 @@ bool vanillaRtSectionReady(float3 hitPos) {
     // Probe just inside the surface along the ray. At a section boundary this selects the section
     // containing the solid represented by the LOD face rather than the empty section in front of it.
     int3 cell = int3(floor((hitPos + WorldRayDirection() * 0.01 - float3(minBlock)) / 16.0));
-    if (any(cell < int3(0)) || any(cell >= int3(size))) {
+    if (any(cell < int3(0, 0, 0)) || any(cell >= int3(size))) {
         return false;
     }
     uint bit = (uint(cell.y) * size.z + uint(cell.z)) * size.x + uint(cell.x);
