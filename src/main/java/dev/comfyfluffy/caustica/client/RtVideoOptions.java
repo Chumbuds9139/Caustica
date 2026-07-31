@@ -70,6 +70,75 @@ public final class RtVideoOptions {
         };
     }
 
+    // ===== Organized groups for the dedicated RT settings screen =====
+
+    public static OptionInstance<?>[] qualityOptions() {
+        return new OptionInstance<?>[] {
+            spp(),
+            maxBounces(),
+            dlssQuality(),
+            denoiser(),
+        };
+    }
+
+    public static OptionInstance<?>[] generalOptions() {
+        return new OptionInstance<?>[] {
+            sunSize(),
+            entities(),
+            particles(),
+            waterWaves(),
+            handFov(),
+        };
+    }
+
+    public static OptionInstance<?>[] effectsOptions() {
+        return new OptionInstance<?>[] {
+            subsurfaceScattering(),
+            weatherLighting(),
+        };
+    }
+
+    public static OptionInstance<?>[] pomOptions() {
+        return new OptionInstance<?>[] {
+            parallaxEnabled(),
+            parallaxStrength(),
+            parallaxSmoothing(),
+            parallaxDistance(),
+        };
+    }
+
+    public static OptionInstance<?>[] cloudOptions() {
+        return new OptionInstance<?>[] {
+            clouds(),
+            cloudStyle(),
+            cloudHeight(),
+            cloudThickness(),
+            cloudShadowStrength(),
+            cloudOpacity(),
+        };
+    }
+
+    public static OptionInstance<?>[] hdrOptions() {
+        return new OptionInstance<?>[] {
+            hdrEnabled(),
+            hdrPaperWhite(),
+            hdrPeak(),
+        };
+    }
+
+    public static OptionInstance<?>[] debugOptions() {
+        return new OptionInstance<?>[] {
+            debugView(),
+        };
+    }
+
+    public static OptionInstance<?>[] exposureOptions() {
+        return new OptionInstance<?>[] {
+            exposureMode(),
+            manualEv(),
+        };
+    }
+
     /**
      * Light-emission and sampling options. Held-item dynamic lighting keeps working exactly as Caustica
      * ships it — its multiplier ({@code CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY}) is simply not given a
@@ -82,8 +151,19 @@ public final class RtVideoOptions {
         };
     }
 
-    /** Tonemapping/exposure options for the display-mapping pass. */
+    /** Tonemapping options (without exposure, which now has its own section) */
     public static OptionInstance<?>[] tonemapOptions() {
+        return new OptionInstance<?>[] {
+            tonemapOperator(),
+            tonemapExposure(),
+            tonemapGamma(),
+            tonemapSaturation(),
+            tonemapContrast(),
+        };
+    }
+
+    /** Legacy combined exposure + tonemap, kept for compatibility if needed */
+    public static OptionInstance<?>[] exposureAndTonemapOptions() {
         return new OptionInstance<?>[] {
             exposureMode(),
             manualEv(),

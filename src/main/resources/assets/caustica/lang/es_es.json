@@ -1,56 +1,39 @@
 {
 	"caustica.options.rt.header": "Trazado de rayos",
-
 	"caustica.options.rt.exposureMode": "Exposición",
 	"caustica.options.rt.exposureMode.tooltip": "Cómo se asigna la imagen con trazado de rayos al brillo de la pantalla. Automática se adapta a la luminancia de la escena; Manual usa directamente el valor de exposición.",
 	"caustica.options.rt.exposureMode.auto": "Automática",
 	"caustica.options.rt.exposureMode.manual": "Manual",
-
 	"caustica.options.rt.manualEv": "Exposición EV",
 	"caustica.options.rt.manualEv.tooltip": "Compensación de exposición en pasos. En Manual, es la exposición fija. En Automática, desplaza la exposición automática para aclararla u oscurecerla.",
-
 	"caustica.options.rt.spp": "Muestras por píxel",
 	"caustica.options.rt.spp.tooltip": "Muestras de trazado de caminos tomadas por píxel en cada fotograma. Un valor más alto es más limpio, pero más exigente.",
-
 	"caustica.options.rt.maxBounces": "Rebotes de camino",
 	"caustica.options.rt.maxBounces.tooltip": "Número máximo de rebotes secundarios de trazado de caminos tras el impacto primario. Un valor más alto captura más luz indirecta, pero cuesta más.",
-
 	"caustica.options.rt.sunSize": "Tamaño del sol",
 	"caustica.options.rt.sunSize.tooltip": "Radio angular del disco del sol y la luna. Los discos más grandes proyectan penumbras más suaves.",
-
 	"caustica.options.rt.entities": "Entidades con trazado de rayos",
 	"caustica.options.rt.entities.tooltip": "Incluye entidades y entidades de bloque en la escena con trazado de rayos.",
-
 	"caustica.options.rt.particles": "Partículas con trazado de rayos",
 	"caustica.options.rt.particles.tooltip": "Dibuja partículas como billboards de rayo de cámara dentro de la escena trazada.",
-
 	"caustica.options.rt.glow": "Contorno brillante de entidades",
 	"caustica.options.rt.glow.tooltip": "Dibuja el contorno del efecto Brillo de Minecraft vanilla (a través de paredes) alrededor de las entidades brillantes.",
-
 	"caustica.options.rt.waterWaves": "Agua animada",
 	"caustica.options.rt.waterWaves.tooltip": "Anima las normales de la superficie del agua para reflejos de olas en movimiento.",
-
 	"caustica.options.rt.sss": "Dispersión subsuperficial",
 	"caustica.options.rt.sss.tooltip": "Permite que la luz se disperse a través de superficies finas como hojas y hierba, de modo que el follaje brilla al mirarlo a contraluz. Solo afecta a los materiales con datos de subsuperficie y cuesta un rayo de sombra adicional donde se aplica.",
-
 	"caustica.options.rt.weatherLighting": "Iluminación meteorológica",
 	"caustica.options.rt.weatherLighting.tooltip": "Atenúa la luz del sol y de la luna y oscurece el cielo durante la lluvia y las tormentas, ocultando el sol, la luna y las estrellas tras las nubes. Desactivado, mantiene la iluminación de cielo despejado con cualquier clima.",
-
 	"caustica.options.rt.denoiser": "Filtro de reducción de ruido",
 	"caustica.options.rt.denoiser.tooltip": "Aplica el filtro de reducción de ruido de DLSS Ray Reconstruction a la imagen con trazado de rutas. Desactivado, muestra el trazado en bruto y con ruido a resolución completa: útil como vista de referencia, pero mucho más granulado con pocas muestras. Requiere compatibilidad con DLSS Ray Reconstruction.",
-
 	"caustica.options.rt.handFov": "FOV de la mano",
 	"caustica.options.rt.handFov.tooltip": "Hace que la mano y el objeto en primera persona sigan el FOV del juego. Activado, un FOV mayor aleja el brazo y uno menor lo acerca. Desactivado, restaura el FOV fijo de la mano original.",
-
 	"caustica.options.rt.hdr": "Salida HDR",
 	"caustica.options.rt.hdr.tooltip": "Presenta en HDR (ST.2084/PQ) en lugar de SDR cuando la pantalla lo admite. Surte efecto después de reiniciar el juego.",
-
 	"caustica.options.rt.hdrPaperWhite": "Blanco de papel HDR",
 	"caustica.options.rt.hdrPaperWhite.tooltip": "Brillo absoluto (en nits) al que se asigna el brillo de escena equivalente a SDR en una pantalla HDR.",
-
 	"caustica.options.rt.hdrPeak": "Brillo máximo HDR",
 	"caustica.options.rt.hdrPeak.tooltip": "Brillo absoluto (en nits) hacia el que se atenúan las altas luces. Ajústalo al brillo HDR máximo de tu pantalla.",
-
 	"caustica.options.rt.dlssQuality": "Calidad DLSS",
 	"caustica.options.rt.dlssQuality.tooltip": "Modo de calidad de DLSS Ray Reconstruction. Los modos de menor calidad renderizan menos píxeles y reescalan de forma más agresiva para lograr más fotogramas por segundo; los modos de mayor calidad renderizan más píxeles para una imagen más nítida. Solo afecta a la imagen cuando DLSS Ray Reconstruction está activado.",
 	"caustica.options.rt.dlssQuality.3": "Ultra rendimiento",
@@ -58,7 +41,6 @@
 	"caustica.options.rt.dlssQuality.1": "Equilibrado",
 	"caustica.options.rt.dlssQuality.2": "Calidad",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
-
 	"caustica.options.rt.debugView": "Vista de depuración",
 	"caustica.options.rt.debugView.tooltip": "Visualiza un búfer intermedio del trazado de rayos en lugar de la imagen final.",
 	"caustica.options.rt.debugView.0": "Desactivado",
@@ -71,7 +53,6 @@
 	"caustica.options.rt.debugView.7": "Movimiento especular",
 	"caustica.options.rt.debugView.8": "Máscara de emisión",
 	"caustica.options.rt.debugView.9": "Fuente de emisión",
-
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
 	"caustica.options.rt.blockEmissiveIntensity": "Emissive Block Intensity",
@@ -99,11 +80,9 @@
 	"caustica.options.rt.parallaxSmoothing.tooltip": "Switch LabPBR height, normal and surface sampling between smooth bilinear and crisp pixel-aligned sampling.",
 	"caustica.options.rt.parallaxDistance": "Parallax Distance",
 	"caustica.options.rt.parallaxDistance.tooltip": "Distance in blocks at which parallax smoothly disappears. Relief stays full through 80% of the selected range.",
-
 	"caustica.options.rt.dhRefresh": "Reload Distant Horizons Chunks",
 	"caustica.options.rt.dhRefresh.queued": "Distant Horizons Reload Queued",
 	"caustica.options.rt.dhRefresh.rtOnly": "Caustica RT Proxy Reload Queued",
-
 	"caustica.options.voxy.header": "Voxy LODs",
 	"caustica.options.voxy.enabled": "Voxy LODs",
 	"caustica.options.voxy.enabled.tooltip": "Enable Voxy distant terrain in the Caustica path tracer. This takes effect immediately.",
@@ -114,5 +93,18 @@
 	"caustica.options.voxy.chunks": "%s chunks",
 	"caustica.options.voxy.refresh": "Rebuild Voxy LODs",
 	"caustica.options.voxy.refresh.queued": "Voxy rebuild queued",
-	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable"
+	"caustica.options.voxy.refresh.unavailable": "Voxy is unavailable",
+	"caustica.options.rt.title": "Ray Tracing Settings",
+	"caustica.options.rt.settingsButton": "Ray Tracing Settings...",
+	"caustica.options.rt.settings": "Ray Tracing Settings",
+	"caustica.options.rt.qualityHeader": "Quality & Performance",
+	"caustica.options.rt.generalHeader": "General",
+	"caustica.options.rt.effectsHeader": "Effects",
+	"caustica.options.rt.pomHeader": "Parallax Occlusion Mapping",
+	"caustica.options.rt.cloudsHeader": "Clouds",
+	"caustica.options.rt.hdrHeader": "HDR",
+	"caustica.options.rt.debugHeader": "Debug",
+	"caustica.options.rt.dhHeader": "Distant Horizons",
+	"caustica.options.rt.exposureHeader": "Exposure",
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov"
 }
