@@ -78,7 +78,8 @@ public abstract class VideoSettingsScreenMixin {
                             net.minecraft.client.Options opts = minecraft.options;
                             net.minecraft.client.gui.screens.Screen rtScreen =
                                     new dev.comfyfluffy.caustica.client.gui.RtVideoOptionsScreen(current, opts);
-                            minecraft.setScreen(rtScreen);
+                            // In 26.2, setScreen moved from Minecraft to Gui: Minecraft.gui.setScreen()
+                            minecraft.gui.setScreen(rtScreen);
                         })
                 .width(310)
                 .build();
