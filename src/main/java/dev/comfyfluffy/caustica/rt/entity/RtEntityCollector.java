@@ -84,12 +84,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
     // Full-sprite UVs for the flame cube faces (remapped into the fire sprite's atlas region by the
-    // capture's uvRemap, which submitFlame sets).
+    // capture's uvRemap, which submitFlame sets). v=0 is the top of the texture (flame tips), so the
+    // quad's top samples v=0 and its bottom samples v=1 — the flames point up in world space.
     private static final float[] FLAME_UV_U = {0f, 1f, 1f, 0f};
-    private static final float[] FLAME_UV_V = {0f, 0f, 1f, 1f};
+    private static final float[] FLAME_UV_V = {1f, 1f, 0f, 0f};
     // Vanilla renders the entity flame with LightTexture.FULL_BRIGHT; the RT equivalent is a strong
     // per-prim self-emission (radiance = albedo * emission * the dynamic light scale).
-    private static final float FLAME_EMISSION = 1.0f;
+    private static final float FLAME_EMISSION = 1.5f;
     // The entity fire overlay uses the block atlas's animated fire_0 sprite.
     private static final Identifier FIRE_SPRITE = Identifier.withDefaultNamespace("block/fire_0");
     // Portal sprites that may reach the entity path (block entities, held/displayed blocks).
@@ -202,6 +203,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
+        // Reset the portal tag: it is per-submission (set only by the portal paths below), so an
+        // ordinary model after a portal layer in the same capture cannot inherit the abyss shading.
+        capture.currentPortalFlags = 0;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
@@ -407,6 +411,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 transmissive, false, emission > 0.0f);
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
         // Held/displayed portal blocks (endermen, block displays in 26.1+) render as baked quads with
         // the portal sprite; tag them for the procedural portal branches.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -895,6 +900,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             return;
         }
         flameSubmittedThisEntity = true; // vanilla's dispatcher asked for the flame this entity
+        // Never inherit a portal tag from an earlier submission in the same capture (e.g. an enderman
+        // holding a portal block that is also on fire): the flame is plain textured cutout geometry.
+        capture.currentPortalFlags = 0;
         TextureAtlasSprite fire = fireSprite();
         if (fire == null) {
             return;
@@ -907,10 +915,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0;
         capture.setUvRemap(fire.getU0(), fire.getV0(), fire.getU1(), fire.getV1());
         Matrix4f pose = poseStack.last().pose();
-        // Flame cube proportions: vanilla's ModelFlame box (8x8x8 in 16ths) is 0.5 blocks; a slightly
-        // taller box reads better on every mob size while staying close to the vanilla look.
-        float half = 0.3f;
-        float top = 0.7f;
+        // Flame cube proportions: the box must be WIDER than the mob's body (a zombie is 0.6 wide,
+        // half 0.3) so its front/side faces sit in front of the body and the fire shows over it —
+        // a flush cube hides entirely inside the body silhouette. The fire texture's transparent
+        // gaps let the body show through, which is exactly the vanilla look.
+        float half = 0.5f;
+        float top = 1.3f;
         float x0 = -half, x1 = half, z0 = -half, z1 = half, y0 = 0.0f, y1 = top;
         // Corner table (front face z-: 0..3 CCW from bottom-left; back face z+: 4..7). Face quads are
         // wound around the perimeter so every face is planar and the fire texture maps straight.
@@ -1186,6 +1196,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
         // Held/displayed portal blocks through FRAPI meshes (endermen, block displays): tag them for
         // the procedural portal branches, mirroring addQuad.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -1292,6 +1303,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
+        capture.currentPortalFlags = 0; // per-submission; tagPortalSubmission below may set it
         boolean stochasticAlpha = glint || isTranslucent(renderType);
         capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is

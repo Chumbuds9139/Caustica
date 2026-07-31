@@ -1,7 +1,6 @@
 // Procedural portal surfaces for world.rchit: the Nether portal's animated swirl and the End
-// portal's cosmic abyss (deep void purple + starfield). Kept fully self-contained (no imports) so
-// world.rmiss can keep its own endSky/stars copies without an import cycle; the two starfields
-// intentionally share their hash, so retuning one should be mirrored in the other.
+// portal's cosmic abyss (deep black void with a fine starfield). Kept fully self-contained (no
+// imports) so world.rmiss can keep its own endSky/stars copies without an import cycle.
 
 // Dave Hoskins' hash13 (the same hash world.rmiss uses for its starfields).
 float portalHash13(float3 p3) {
@@ -9,10 +8,6 @@ float portalHash13(float3 p3) {
     p3 += dot(p3, p3.zyx + 31.32);
     return frac((p3.x + p3.y) * p3.z);
 }
-
-// The End's own ambient fog tint (RtComposite.ambientFog for DIMENSION_END), so the abyss reads
-// identically from every dimension instead of taking the overworld's (zeroed) fog lane.
-static const float3 PORTAL_END_FOG = float3(0.010, 0.0055, 0.016);
 
 // Cube-face projection shared by the starfield layers (same layout as world.rmiss's stars()).
 float2 portalCubeUv(float3 dir, out float face) {
@@ -24,72 +19,54 @@ float2 portalCubeUv(float3 dir, out float face) {
     return uv;
 }
 
-// ---- End portal abyss. A 1x1 portal quad subtends only a few star cells of the sky field, so the
-// sky's own sparse starfield would read as a flat purple plane. The portal therefore layers a much
-// denser star field (four times the sky's cell count) plus soft cyan/magenta nebula blotches over
-// the same deep void gradient — the vanilla end_portal.png look — and everything drifts slowly so
-// the abyss is alive ("bigger on the inside") without ever repeating across the portal.
-static const float  PORTAL_STAR_CELLS     = 84.0;
-static const float  PORTAL_STAR_THRESHOLD = 0.72; // 28% of cells carry a star
-static const float  PORTAL_STAR_HALF      = 0.35; // large relative to the cell, like the vanilla texture
-static const float  PORTAL_NEBULA_CELLS   = 5.0;
-static const float  PORTAL_NEBULA_DENSITY = 0.55;
-static const float3 PORTAL_VOID_DEEP  = float3(0.055, 0.020, 0.095);
-static const float3 PORTAL_VOID_BAND  = float3(0.115, 0.045, 0.175);
-static const float3 PORTAL_NEBULA_CYAN    = float3(0.30, 0.75, 1.00);
-static const float3 PORTAL_NEBULA_MAGENTA = float3(0.85, 0.30, 0.95);
-
-float3 portalNebula(float2 uv, float face) {
-    float3 col = float3(0.0, 0.0, 0.0);
-    // Two octaves of soft hash blobs: large cyan/magenta sheets and smaller bright cores.
-    [unroll]
-    for (int octave = 0; octave < 2; octave++) {
-        float scale = octave == 0 ? PORTAL_NEBULA_CELLS : PORTAL_NEBULA_CELLS * 2.3;
-        float2 g = uv * scale;
-        float3 id = float3(floor(g), face + float(octave) * 7.0);
-        float2 f = frac(g) - 0.5;
-        float h = portalHash13(id);
-        float3 tint = octave == 0
-                ? lerp(PORTAL_NEBULA_CYAN, PORTAL_NEBULA_MAGENTA, h)
-                : float3(1.0, 0.9, 1.0);
-        float core = 1.0 - smoothstep(0.05, 0.38, length(f));
-        float density = octave == 0 ? PORTAL_NEBULA_DENSITY : 0.22;
-        col += tint * core * (0.25 + 0.75 * h) * density;
-    }
-    return col;
-}
+// ---- End portal abyss. A deep-black void with a fine, discrete starfield and a faint nebula
+// hint — a real starry sky behind the portal. All values are kept dark: the albedo is used as-is
+// (END_PORTAL_BRIGHTNESS is ~1), so the void stays black and only the star points carry light.
+static const float  PORTAL_STAR_CELLS     = 64.0;  // 64x64 cells per cube face
+static const float  PORTAL_STAR_THRESHOLD = 0.80;  // 20% of cells carry a star
+static const float  PORTAL_STAR_HALF      = 0.09;  // small points (~0.15% of the face), like real stars
+static const float3 PORTAL_VOID_DEEP      = float3(0.0025, 0.0012, 0.0065); // near-black void
+static const float3 PORTAL_VOID_BAND      = float3(0.0070, 0.0035, 0.0140); // faint horizontal band
+static const float  PORTAL_NEBULA_STRENGTH = 0.10; // very subtle color wash
 
 float3 endPortalAbyss(float3 rayDir, float time) {
-    // View-parallax drift: the starfield shifts with the ray direction and creeps slowly, so the
-    // abyss reads as a real volume instead of a flat decal.
-    float3 dir = normalize(rayDir + float3(time * 0.010, -time * 0.014, time * 0.006));
+    // Gentle drift — a tiny fraction of the (unit) ray direction, so the starfield slowly creeps
+    // without ever pinning all portal pixels to one direction (which made a single giant star).
+    // sin/cos keep the offset bounded forever instead of growing linearly with the wrapped clock.
+    float3 drift = float3(sin(time * 0.05) * 0.015, cos(time * 0.037) * 0.015, sin(time * 0.023) * 0.015);
+    float3 dir = normalize(rayDir + drift);
     float face;
     float2 uv = portalCubeUv(dir, face);
 
-    // Deep void gradient, brighter toward the horizontal band like the End sky.
+    // Deep void gradient, near black; the horizontal band is only slightly lighter.
     float band = 1.0 - abs(dir.y);
     float3 col = lerp(PORTAL_VOID_DEEP, PORTAL_VOID_BAND, band * band);
-    col = lerp(col, PORTAL_END_FOG * 0.35, 0.35);
 
-    // Nebula sheets (before the stars so stars sit on top).
-    col += portalNebula(uv, face);
+    // Faint single-octave nebula: a soft, dark color wash (never a bright explosion).
+    {
+        float2 g = uv * 5.0;
+        float3 nid = float3(floor(g), face);
+        float h = portalHash13(nid);
+        float3 tint = lerp(float3(0.06, 0.12, 0.17), float3(0.16, 0.06, 0.17), h);
+        float2 f = frac(g) - 0.5;
+        float core = 1.0 - smoothstep(0.15, 0.55, length(f));
+        col += tint * core * PORTAL_NEBULA_STRENGTH * (0.4 + 0.6 * h);
+    }
 
-    // Dense star field: 28% of 84x84 cells per face — a 1x1 portal quad at a few blocks shows tens
-    // of stars, reading as the vanilla texture's glittering void rather than a solid plane.
+    // Fine star points: small, round, dim-to-moderate so they read as discrete stars on black.
     float2 g = uv * PORTAL_STAR_CELLS;
     float3 id = float3(floor(g), face);
     if (portalHash13(id) >= PORTAL_STAR_THRESHOLD) {
-        float sz = PORTAL_STAR_HALF * (0.45 + 0.55 * portalHash13(id + 53.0));
+        float sz = PORTAL_STAR_HALF * (0.5 + 0.5 * portalHash13(id + 53.0));
         float inset = sz * 0.8;
         float2 center = inset + (1.0 - 2.0 * inset)
                 * float2(portalHash13(id + 11.0), portalHash13(id + 23.0));
         float2 q = frac(g) - center;
-        float box = max(abs(q.x), abs(q.y));
-        float star = 1.0 - smoothstep(sz * 0.55, sz, box);
+        float star = 1.0 - smoothstep(sz * 0.6, sz, length(q)); // round point, not a box
         if (star > 0.0) {
-            float3 starCol = lerp(float3(0.75, 0.80, 1.00), float3(1.0, 0.95, 1.0), portalHash13(id + 137.0));
+            float3 starCol = lerp(float3(0.65, 0.72, 1.00), float3(1.0, 0.92, 0.98), portalHash13(id + 137.0));
             float bright = 0.5 + 0.5 * portalHash13(id + 71.0);
-            col += star * starCol * (0.35 + 0.65 * bright);
+            col += star * starCol * (0.10 + 0.22 * bright);
         }
     }
     return col;
@@ -101,7 +78,7 @@ static const float NETHER_PORTAL_SCROLL_U = 0.012;
 static const float NETHER_PORTAL_SCROLL_V = 0.008;
 // Self-lit glow: the swirl's own colour radiates at luminance * this multiplier.
 static const float NETHER_PORTAL_EMISSION = 6.0;
-// Abyss brightness: albedo boost and emission multiplier so the portal reads as a bright starry
-// void even in a dark stronghold.
-static const float END_PORTAL_BRIGHTNESS = 4.0;
-static const float END_PORTAL_EMISSION = 8.0;
+// Abyss brightness: the void is used nearly as-is (dark), with a modest emission so the portal
+// glows faintly instead of reading as a black hole.
+static const float END_PORTAL_BRIGHTNESS = 1.0;
+static const float END_PORTAL_EMISSION = 2.0;

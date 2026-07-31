@@ -746,6 +746,9 @@ public final class RtEntities {
                     // if it didn't for this capture, emit the flame ourselves so burning entities
                     // always get their fire layer (no double geometry when the gate did fire).
                     if (entity.isOnFire() && !collector.flameSubmittedThisEntity()) {
+                        // Rebase to identity first: the dispatcher may leave the pose translated;
+                        // the flame must land in the same entity-local space as the body capture.
+                        resetPoseStack(entityPoseStack);
                         collector.submitFlame(entityPoseStack, state, null);
                     }
                 } finally {
