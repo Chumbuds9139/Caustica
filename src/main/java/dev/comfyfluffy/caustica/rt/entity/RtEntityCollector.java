@@ -949,12 +949,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         float[] cx = {x0, x1, x1, x0, x1, x0, x1, x0};
         float[] cy = {y0, y0, y1, y1, y0, y0, y1, y1};
         float[] cz = {z0, z0, z0, z0, z1, z1, z1, z1};
-        // Four sides + top, full sprite per face (order matches vanilla's cube winding: sides then top).
+        // Four open sides only — deliberately NO top cap. A horizontal top quad at head/neck height
+        // samples the whole fire sprite onto a flat plane, reading as a floating cut sheet ("flame
+        // hat"); the vanilla entity fire is an open box, so the flames rise naturally around the
+        // body and looking down shows the mob through the ring.
         emitFlameFace(pose, cx, cy, cz, new int[]{0, 1, 2, 3}, 0f, 0f, -1f);  // north (z-)
         emitFlameFace(pose, cx, cy, cz, new int[]{5, 4, 6, 7}, 0f, 0f, 1f);   // south (z+)
         emitFlameFace(pose, cx, cy, cz, new int[]{0, 3, 7, 5}, -1f, 0f, 0f);  // west (x-)
         emitFlameFace(pose, cx, cy, cz, new int[]{4, 1, 2, 6}, 1f, 0f, 0f);   // east (x+)
-        emitFlameFace(pose, cx, cy, cz, new int[]{3, 2, 6, 7}, 0f, 1f, 0f);   // top (y+)
         // The flame's sprite-rect remap is only for its own quads; leave the capture clean so a
         // later submission (held item / armour layer) cannot sample through the fire sprite region.
         capture.clearUvRemap();
