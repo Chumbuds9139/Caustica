@@ -8,6 +8,7 @@
 // load we actually want. The cold WorldPush struct is dereferenced only for the breaking overlay.
 import world_common;
 import math;
+import portals;
 
 [[vk::push_constant]] WorldPushConstants pc;
 
@@ -525,6 +526,40 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
         uint material = header.model;
+        // Portal surfaces captured through the entity/block-entity path (EndPortalRenderer's quad, or a
+        // held/displayed nether portal block): the same dedicated procedural shading as terrain portals,
+        // so the flat end_portal texture never shows. The collector stamps TERRAIN_PRIM_PORTAL_* into
+        // the entity prim's flags lane and forces the opaque bucket.
+        if ((pr.flags & (TERRAIN_PRIM_PORTAL_NETHER | TERRAIN_PRIM_PORTAL_END)) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float portalTime = worldPush.waterParams.w; // per-frame animation clock (seconds, wrapped)
+            float3 portalColor;
+            float portalEmission;
+            if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+                float3 abyss = endPortalAbyss(WorldRayDirection(), portalTime);
+                portalColor = abyss * END_PORTAL_BRIGHTNESS;
+                portalEmission = luminance(abyss) * END_PORTAL_EMISSION;
+            } else {
+                // Nether swirl on entity-held portal blocks: same in-sprite scroll as terrain.
+                float2 localUv = (euvCoord - header.albedoUv.xy) * header.albedoUv.zw;
+                float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
+                        portalTime * NETHER_PORTAL_SCROLL_V));
+                float2 swirlUv = header.albedoUv.xy + scrolled / header.albedoUv.zw;
+                float4 swirlTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(swirlUv, 0.0);
+                float3 swirl = srgbToLinear(swirlTexel.rgb) * pr.tint.rgb * (0.35 + 0.65 * swirlTexel.a);
+                portalColor = swirl;
+                portalEmission = luminance(swirl) * NETHER_PORTAL_EMISSION;
+            }
+            payload.albedo = half3(portalColor);
+            payload.normal = half3(n);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.04h, 0.04h, 0.04h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0, portalEmission, 0.0,
+                    1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+            payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            return;
+        }
         // POM on the opaque entity BLAS geometry only; cutout/translucent entities keep the exact UV
         // whose alpha the any-hit shader already validated (block-entity models like chests are opaque).
         if (GeometryIndex() == 0u && material == MATERIAL_OPAQUE) {
@@ -636,6 +671,58 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 glassSurface.metalness, 0.0, 0.0, materialHeader.params.z,
                 materialHeader.params.w, EMISSION_SOURCE_NONE);
         payloadSetDielectric(payload, MATERIAL_DIELECTRIC, entering);
+        return;
+    }
+
+    // ---- Portals. RtTerrainMesher routes the nether/end portal sprites into the SOLID bucket and
+    // tags their prims (TERRAIN_PRIM_PORTAL_*), so they never take the glass-dielectric path above:
+    // the Nether portal is a self-lit animated swirl, the End portal is the End sky's cosmic abyss
+    // (deep void purple + starfield), view-parallax like vanilla's end-portal shader.
+    uint terrainFlags = pr.flags;
+    if ((terrainFlags & TERRAIN_PRIM_PORTAL_NETHER) != 0u) {
+        WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+        float portalTime = worldPush.waterParams.w; // per-frame animation clock (seconds, wrapped)
+        // Scroll inside the sprite's own rect (local 0..1, wrapped) so the drift can never bleed a
+        // neighbouring atlas sprite in; the vanilla 32-frame atlas animation plays on top of it, so
+        // the swirl is alive either way. LOD 0 keeps the swirl texels crisp at any distance.
+        float2 localUv = (uv - materialHeader.albedoUv.xy) * materialHeader.albedoUv.zw;
+        float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
+                portalTime * NETHER_PORTAL_SCROLL_V));
+        float2 swirlUv = materialHeader.albedoUv.xy + scrolled / materialHeader.albedoUv.zw;
+        float4 swirlTexel = blockAlbedoAtlas.SampleLevel(swirlUv, 0.0);
+        // Tint is the quad's authored colour (white for vanilla), never the glass lerp toward white.
+        // The texture's own alpha darkens the gaps between the swirl arms instead of transmitting —
+        // the portal is a surface, not a dielectric.
+        float3 swirl = srgbToLinear(swirlTexel.rgb) * tint * (0.35 + 0.65 * swirlTexel.a);
+        float swirlLum = luminance(swirl);
+        payload.albedo = half3(swirl);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(0.04h, 0.04h, 0.04h);
+        payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0,
+                swirlLum * NETHER_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+        payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+        if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+            payload.flags |= PAYLOAD_EMITTER_IN_LIST;
+        }
+        return;
+    }
+    if ((terrainFlags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+        WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+        float portalTime = worldPush.waterParams.w;
+        float3 abyss = endPortalAbyss(WorldRayDirection(), portalTime);
+        payload.albedo = half3(abyss * END_PORTAL_BRIGHTNESS);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(0.04h, 0.04h, 0.04h);
+        payloadSetPacked(payload, MATERIAL_OPAQUE, 0.9, 0.0,
+                luminance(abyss) * END_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+        payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+        if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+            payload.flags |= PAYLOAD_EMITTER_IN_LIST;
+        }
         return;
     }
 

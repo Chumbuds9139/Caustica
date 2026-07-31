@@ -6,6 +6,7 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -32,6 +33,8 @@ import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
@@ -82,6 +85,27 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private static final float LEASH_WIDTH = 0.05f;
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
+    // Full-sprite UVs for the flame cube faces (remapped into the fire sprite's atlas region by the
+    // capture's uvRemap, which submitFlame sets). v=0 is the top of the texture (flame tips), so the
+    // quad's top samples v=0 and its bottom samples v=1 — the flames point up in world space.
+    private static final float[] FLAME_UV_U = {0f, 1f, 1f, 0f};
+    private static final float[] FLAME_UV_V = {1f, 1f, 0f, 0f};
+    // Vanilla renders the entity flame with LightTexture.FULL_BRIGHT; the RT equivalent is a strong
+    // per-prim self-emission (radiance = albedo * emission * the dynamic light scale).
+    private static final float FLAME_EMISSION = 1.5f;
+    // The entity fire overlay uses the block atlas's animated fire_0 sprite.
+    private static final Identifier FIRE_SPRITE = Identifier.withDefaultNamespace("block/fire_0");
+    // Portal sprites that may reach the entity path (block entities, held/displayed blocks).
+    private static final Identifier NETHER_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/nether_portal");
+    private static final Identifier END_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/end_portal");
+    // TerrainPrim.flags values (mirror world_common.slang / RtTerrainMesher).
+    private static final int TERRAIN_PRIM_PORTAL_NETHER = 2;
+    private static final int TERRAIN_PRIM_PORTAL_END = 4;
+    // Identity pose fallback for submitFlame when the caller hands over an empty PoseStack
+    // (read-only; transformPosition never mutates it).
+    private static final Matrix4f IDENTITY_POSE = new Matrix4f();
     // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
     // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
     // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
@@ -114,6 +138,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private final float[] meshX = new float[4], meshY = new float[4], meshZ = new float[4];
     private final float[] meshU = new float[4], meshV = new float[4];
     private final Vector3f meshPos = new Vector3f();
+    // The fire sprite for burning entities, cached per resource epoch (cleared by clearCaches).
+    private TextureAtlasSprite fireSprite;
+    private boolean loggedFlameSpriteFailure;
+    // Whether vanilla's dispatcher submitted the flame overlay for the entity currently being
+    // captured (set by submitFlame, reset per entity in begin). RtEntities uses this to emit the
+    // flame itself when the dispatcher's gate didn't fire for the RT capture.
+    private boolean flameSubmittedThisEntity;
     // Vanilla already computes the Glowing-effect outline colour (opaque team colour, or 0 when not
     // glowing) per submitModel call — see EntityRenderer.extractCommon's outlineColor. Every submitModel
     // call for one entity carries the same value, so the last non-zero one seen this entity is enough.
@@ -130,6 +161,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture != null) {
             this.outlineColor = 0;
             this.pendingOrder = 0;
+            this.flameSubmittedThisEntity = false;
         }
     }
 
@@ -142,6 +174,31 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     public void clearCaches() {
         cuboidEmitter.clear();
         blockQuadEmitter = null;
+        fireSprite = null;
+        loggedFlameSpriteFailure = false;
+    }
+
+    /**
+     * The block atlas's animated fire sprite (never null once the atlas is loaded; null on failure).
+     * Uses {@link AtlasIds#BLOCKS} — the same key RtTerrain's working sprite-finder uses — because
+     * {@code getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS)} (the legacy identifier) can throw on
+     * 26.x, which silently killed the whole flame overlay: submitFlame bailed out with no geometry
+     * and the fallback saw the "already submitted" flag.
+     */
+    private TextureAtlasSprite fireSprite() {
+        if (fireSprite == null) {
+            try {
+                fireSprite = Minecraft.getInstance().getAtlasManager()
+                        .getAtlasOrThrow(AtlasIds.BLOCKS).getSprite(FIRE_SPRITE);
+            } catch (Throwable t) {
+                fireSprite = null; // atlas not ready yet — retry next submission
+                if (!loggedFlameSpriteFailure) {
+                    loggedFlameSpriteFailure = true;
+                    CausticaMod.LOGGER.warn("RT flame sprite resolution failed (fire overlay disabled)", t);
+                }
+            }
+        }
+        return fireSprite;
     }
 
     @Override
@@ -163,12 +220,20 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
+        // Reset the portal tag: it is per-submission (set only by the portal paths below), so an
+        // ordinary model after a portal layer in the same capture cannot inherit the abyss shading.
+        capture.currentPortalFlags = 0;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         boolean stochasticAlpha = glint || isTranslucent(renderType);
         capture.currentAlphaBucket = glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType);
+        // End-portal block entities draw their cosmic abyss quad through this path; tag it so
+        // world.rchit shades it procedurally instead of sampling the flat end_portal texture.
+        if (isEndPortal(renderType)) {
+            tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
+        }
         // Resolve this submission's texture to a bindless slot; the capture stamps it on every prim.
         // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
         // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
@@ -363,6 +428,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 transmissive, false, emission > 0.0f);
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        // Held/displayed portal blocks (endermen, block displays in 26.1+) render as baked quads with
+        // the portal sprite; tag them for the procedural portal branches.
+        tagPortalSubmission(capture, portalFlagsForSprite(sprite));
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers), emission);
     }
 
@@ -460,6 +529,51 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
         String location = pipeline.getLocation().toString();
         return location.contains("glint");
+    }
+
+    /**
+     * Vanilla's end-portal render type (EndPortalRenderer, and the portal quad of the end gateway)
+     * draws the cosmic abyss with a special shader over the flat purple end_portal texture. In the RT
+     * path that quad is plain captured geometry, so it must be tagged for world.rchit's procedural
+     * abyss branch instead. Detected by pipeline location, mirroring {@link #isGlint}.
+     */
+    private static boolean isEndPortal(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        try {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            return pipeline.getLocation().toString().contains("end_portal");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Portal flags for an atlas sprite (held/displayed portal blocks), or 0 for ordinary sprites. */
+    private static int portalFlagsForSprite(TextureAtlasSprite sprite) {
+        if (sprite == null) {
+            return 0;
+        }
+        Identifier name = sprite.contents().name();
+        if (NETHER_PORTAL_SPRITE.equals(name)) {
+            return TERRAIN_PRIM_PORTAL_NETHER;
+        }
+        if (END_PORTAL_SPRITE.equals(name)) {
+            return TERRAIN_PRIM_PORTAL_END;
+        }
+        return 0;
+    }
+
+    /** Tag a portal submission (render-type or sprite detected) for world.rchit's portal branches. */
+    private static void tagPortalSubmission(RtEntityCapture capture, int portalFlags) {
+        if (portalFlags == 0) {
+            return;
+        }
+        capture.currentPortalFlags = portalFlags;
+        // Portal surfaces are opaque self-lit shader surfaces; never alpha-test or glass them.
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentOpacity = 1.0f;
     }
 
     private static boolean isWaterMask(RenderType renderType) {
@@ -791,8 +905,84 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
     }
 
+    // The classic flame overlay on burning entities. Vanilla's FlameFeatureRenderer renders the
+    // submitted flame nodes with the animated fire sprite and full-bright lighting; the RT path has no
+    // fixed-function flame pass, so capture the same look as real cutout geometry on the entity's BLAS:
+    // a flame cube around the feet textured with the block atlas's fire_0 sprite. The sprite lives in
+    // the live (animated) block atlas, so the flame flickers like vanilla's, and the per-prim emission
+    // makes it self-lit instead of shaded by the scene.
     @Override
     public void submitFlame(PoseStack poseStack, EntityRenderState renderState, Quaternionf rotation) {
+        if (capture == null) {
+            return;
+        }
+        flameSubmittedThisEntity = true; // vanilla's dispatcher asked for the flame this entity
+        // Never inherit a portal tag from an earlier submission in the same capture (e.g. an enderman
+        // holding a portal block that is also on fire): the flame is plain textured cutout geometry.
+        capture.currentPortalFlags = 0;
+        TextureAtlasSprite fire = fireSprite();
+        if (fire == null) {
+            return;
+        }
+        // The block atlas is pre-seeded as bindless slot 0 (RtEntityTextures.atlasSlotCache), and the
+        // fire sprite lives in it — no atlas-key lookup needed for the flame's sampler.
+        capture.currentTexSlot = 0;
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+        // The fire sprite's transparent gaps must not block the ray: alpha-test like any cutout layer.
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        capture.currentOpacity = 1.0f;
+        capture.currentOrder = 0;
+        capture.setUvRemap(fire.getU0(), fire.getV0(), fire.getU1(), fire.getV1());
+        // The dispatcher normally passes the entity's pushed pose; some callers pass an empty stack
+        // (our own fallback guarantees identity). An empty stack has no "last" pose — fall back to
+        // identity so the flame lands in the same entity-local space as the body capture.
+        Matrix4f pose = poseStack.isEmpty() ? IDENTITY_POSE : poseStack.last().pose();
+        // Flame cube proportions: the box must be WIDER than the mob's body (a zombie is 0.6 wide,
+        // half 0.3) so its front/side faces sit in front of the body and the fire shows over it —
+        // a flush cube hides entirely inside the body silhouette. The fire texture's transparent
+        // gaps let the body show through, which is exactly the vanilla look.
+        float half = 0.5f;
+        float top = 1.3f;
+        float x0 = -half, x1 = half, z0 = -half, z1 = half, y0 = 0.0f, y1 = top;
+        // Corner table (front face z-: 0..3 CCW from bottom-left; back face z+: 4..7). Face quads are
+        // wound around the perimeter so every face is planar and the fire texture maps straight.
+        float[] cx = {x0, x1, x1, x0, x1, x0, x1, x0};
+        float[] cy = {y0, y0, y1, y1, y0, y0, y1, y1};
+        float[] cz = {z0, z0, z0, z0, z1, z1, z1, z1};
+        // Four open sides only — deliberately NO top cap. A horizontal top quad at head/neck height
+        // samples the whole fire sprite onto a flat plane, reading as a floating cut sheet ("flame
+        // hat"); the vanilla entity fire is an open box, so the flames rise naturally around the
+        // body and looking down shows the mob through the ring.
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 1, 2, 3}, 0f, 0f, -1f);  // north (z-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{5, 4, 6, 7}, 0f, 0f, 1f);   // south (z+)
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 3, 7, 5}, -1f, 0f, 0f);  // west (x-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{4, 1, 2, 6}, 1f, 0f, 0f);   // east (x+)
+        // The flame's sprite-rect remap is only for its own quads; leave the capture clean so a
+        // later submission (held item / armour layer) cannot sample through the fire sprite region.
+        capture.clearUvRemap();
+    }
+
+    /** One flame-cube face, pose-transformed into the capture with the fire sprite's full region. */
+    private void emitFlameFace(Matrix4f pose, float[] cx, float[] cy, float[] cz, int[] corners,
+                               float nx, float ny, float nz) {
+        for (int i = 0; i < 4; i++) {
+            int p = corners[i];
+            pose.transformPosition(cx[p], cy[p], cz[p], meshPos);
+            meshX[i] = meshPos.x;
+            meshY[i] = meshPos.y;
+            meshZ[i] = meshPos.z;
+            meshU[i] = FLAME_UV_U[i];
+            meshV[i] = FLAME_UV_V[i];
+        }
+        // White tint, full-bright emission (vanilla renders the flame with LightTexture.FULL_BRIGHT).
+        capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, nx, ny, nz, -1, FLAME_EMISSION);
+    }
+
+    /** Whether vanilla's dispatcher submitted the flame overlay during this entity's capture (set in
+     *  {@link #submitFlame}, cleared per entity by {@link #begin}). Lets {@code RtEntities} emit the
+     *  flame itself when the dispatcher's gate didn't fire for the RT capture. */
+    public boolean flameSubmittedThisEntity() {
+        return flameSubmittedThisEntity;
     }
 
     // Leashes/leads: replicate LeashFeatureRenderer's geometry — a 24-segment curve with two crossed
@@ -1030,6 +1220,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        // Held/displayed portal blocks through FRAPI meshes (endermen, block displays): tag them for
+        // the procedural portal branches, mirroring addQuad.
+        tagPortalSubmission(capture, portalFlagsForSprite(sprite));
         for (int i = 0; i < 4; i++) {
             pose.transformPosition(quad.x(i) + offsetX, quad.y(i) + offsetY, quad.z(i) + offsetZ, meshPos);
             meshX[i] = meshPos.x;
@@ -1133,6 +1327,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
+        capture.currentPortalFlags = 0; // per-submission; tagPortalSubmission below may set it
         boolean stochasticAlpha = glint || isTranslucent(renderType);
         capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
@@ -1144,6 +1339,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
         capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE
                 : (glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType));
+        // End-portal block entities may submit their abyss quad as custom geometry (EndPortalRenderer
+        // renders a single textured quad); tag it for the procedural abyss branch.
+        if (!lines && isEndPortal(renderType)) {
+            tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
+        }
 
         if (lines) {
             lineVertexConsumer.begin();

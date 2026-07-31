@@ -188,6 +188,11 @@ public struct LightGridSpan {
 
 // TerrainPrim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
+// TerrainPrim.flags bits 1..2: portal surfaces tagged by RtTerrainMesher. The mesher routes their
+// quads into the SOLID bucket (never the translucent/glass path), and world.rchit shades them with
+// the dedicated portal branches (Nether swirl / End abyss) instead of the block texture.
+public static const uint TERRAIN_PRIM_PORTAL_NETHER = 2u;
+public static const uint TERRAIN_PRIM_PORTAL_END = 4u;
 
 // Largest finite half. The payload's half3 lanes carry HDR values (sky radiance most of all), so
 // producers clamp to this instead of letting the conversion round up to +inf.
