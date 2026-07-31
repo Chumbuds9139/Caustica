@@ -83,5 +83,5 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 - [X] Nether/End sky, weather, volumetric fog/clouds
 - [ ] NRD + FSR for non-NVIDIA GPUs
-- [ ] LOD
+- [X] LOD
 - [x] ReSTIR
