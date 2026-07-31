@@ -520,18 +520,28 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 // Only attempt if we have a camera state (i.e. we are inside beginFrame)
                 if (camState != null && dispatcher != null) {
                     net.minecraft.world.level.block.entity.BlockEntity be = null;
+                    // A contained chest is synthetic: it is not a world BE and used to be created at the
+                    // origin. BlockEntityRenderDispatcher#tryExtractRenderState applies its normal
+                    // 64-block cull to that position, so a ChestMinecartEntity outside that small area
+                    // never reached ChestRenderer and fell through to the beige proxy box. Keep the
+                    // synthetic BE near the camera solely for extraction/culling; its actual placement
+                    // still comes exclusively from the minecart's active pose below.
+                    boolean chestRendererOwnsTransform = blockState.getBlock()
+                            instanceof net.minecraft.world.level.block.ChestBlock;
+                    BlockPos syntheticPos = chestRendererOwnsTransform
+                            ? BlockPos.containing(camState.pos) : BlockPos.ZERO;
                     // Chest cases: normal, trapped, ender
                     if (blockState.is(net.minecraft.world.level.block.Blocks.CHEST)) {
-                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(syntheticPos, blockState);
                         be.setLevel(level);
                     } else if (blockState.is(net.minecraft.world.level.block.Blocks.TRAPPED_CHEST)) {
-                        be = new net.minecraft.world.level.block.entity.TrappedChestBlockEntity(BlockPos.ZERO, blockState);
+                        be = new net.minecraft.world.level.block.entity.TrappedChestBlockEntity(syntheticPos, blockState);
                         be.setLevel(level);
                     } else if (blockState.is(net.minecraft.world.level.block.Blocks.ENDER_CHEST)) {
                         be = new net.minecraft.world.level.block.entity.EnderChestBlockEntity(BlockPos.ZERO, blockState);
                         be.setLevel(level);
-                    } else if (blockState.getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
-                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                    } else if (chestRendererOwnsTransform) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(syntheticPos, blockState);
                         be.setLevel(level);
                     } else {
                         // Generic: try to create via Block's EntityBlock path if possible
@@ -554,7 +564,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                         if (berState != null) {
                             int idxBeforeBE = capture.idx.size();
                             poseStack.pushPose();
-                            if (transform != null) {
+                            // The intercepted display state already carries ChestRenderer's facing
+                            // transform. ChestRenderer.submit applies that exact transform from the
+                            // synthetic chest state, so applying it here as well would rotate the model
+                            // twice. Other block-entity paths retain their display transform unchanged.
+                            if (transform != null && !chestRendererOwnsTransform) {
                                 poseStack.mulPose(transform);
                             }
                             try {
