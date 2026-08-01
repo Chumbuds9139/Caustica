@@ -802,6 +802,18 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.entities", "entities.enabled", true);
             public static final BooleanSetting PARTICLES_ENABLED =
                     bool("caustica.rt.particles", "particles.enabled", true);
+            /**
+             * Ray-traced rain and snow. Vanilla draws weather in its own {@code WeatherEffectRenderer}
+             * pass inside {@code LevelRenderer.render}, which Caustica cancels, so this switch is what
+             * puts precipitation back in the world at all. The columns are vanilla's own — position,
+             * ground clipping and fall animation all come from the render state the game already
+             * extracts each frame — replayed as real geometry in the acceleration structure.
+             *
+             * <p>Shares the particle budget ({@code particles.max-particles}) and requires
+             * {@code particles.enabled}, since weather rides the same mesh/BLAS as particle billboards.
+             */
+            public static final BooleanSetting WEATHER_ENABLED =
+                    bool("caustica.rt.weatherParticles", "particles.weather-enabled", true);
             public static final BooleanSetting GLOW_ENABLED =
                     bool("caustica.rt.glow", "entities.glow.enabled", true);
             public static final BooleanSetting NAME_TAGS_ENABLED =

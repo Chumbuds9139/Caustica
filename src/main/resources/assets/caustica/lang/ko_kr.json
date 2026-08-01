@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "레이 트레이싱 장면에 엔티티와 블록 엔티티를 포함합니다.",
 	"caustica.options.rt.particles": "레이 트레이싱 파티클",
 	"caustica.options.rt.particles.tooltip": "트레이싱된 장면 안에서 파티클을 카메라 광선 빌보드로 그립니다.",
+	"caustica.options.rt.weatherParticles": "레이 트레이싱 날씨",
+	"caustica.options.rt.weatherParticles.tooltip": "트레이싱된 장면 안에서 비와 눈을 실제 지오메트리로 그립니다. 기둥은 마인크래프트 자체 날씨 시스템에서 가져오므로 땅과 나뭇잎, 지붕 아래에서 올바르게 멈추고 평소처럼 떨어집니다. 레이 트레이싱 파티클이 필요합니다.",
 	"caustica.options.rt.glow": "엔티티 발광 윤곽선",
 	"caustica.options.rt.glow.tooltip": "발광 중인 엔티티 주위에 바닐라 발광 효과 윤곽선(벽 너머 표시)을 그립니다.",
 	"caustica.options.rt.waterWaves": "애니메이션 물",

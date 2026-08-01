@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "Включает сущности и блочные сущности в сцену с трассировкой лучей.",
 	"caustica.options.rt.particles": "Трассируемые частицы",
 	"caustica.options.rt.particles.tooltip": "Рисует частицы как билборды вдоль лучей камеры внутри трассируемой сцены.",
+	"caustica.options.rt.weatherParticles": "Трассируемая погода",
+	"caustica.options.rt.weatherParticles.tooltip": "Рисует дождь и снег как настоящую геометрию внутри трассируемой сцены. Столбы берутся из собственной системы погоды Minecraft, поэтому они корректно останавливаются у земли, у листвы и под крышами и падают как обычно. Требуются трассируемые частицы.",
 	"caustica.options.rt.glow": "Контур свечения сущностей",
 	"caustica.options.rt.glow.tooltip": "Рисует ванильный контур эффекта свечения (сквозь стены) вокруг светящихся сущностей.",
 	"caustica.options.rt.waterWaves": "Анимированная вода",
