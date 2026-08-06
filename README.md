@@ -1,3 +1,5 @@
+## THIS IS A TESTING REPOSITORY, MOST JARS IS GLITCHY
+
 # Caustica
 
 Caustica is an experimental ray-traced renderer for Minecraft 26.2's Vulkan backend.
