@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "Incluye entidades y entidades de bloque en la escena con trazado de rayos.",
 	"caustica.options.rt.particles": "Partículas con trazado de rayos",
 	"caustica.options.rt.particles.tooltip": "Dibuja partículas como billboards de rayo de cámara dentro de la escena trazada.",
+	"caustica.options.rt.weatherParticles": "Clima con trazado de rayos",
+	"caustica.options.rt.weatherParticles.tooltip": "Dibuja la lluvia y la nieve como geometría real dentro de la escena trazada. Las columnas provienen del propio sistema meteorológico de Minecraft, por lo que se detienen correctamente en el suelo, en las hojas y bajo los techos, y caen con normalidad. Requiere Partículas con trazado de rayos.",
 	"caustica.options.rt.glow": "Contorno brillante de entidades",
 	"caustica.options.rt.glow.tooltip": "Dibuja el contorno del efecto Brillo de Minecraft vanilla (a través de paredes) alrededor de las entidades brillantes.",
 	"caustica.options.rt.waterWaves": "Agua animada",

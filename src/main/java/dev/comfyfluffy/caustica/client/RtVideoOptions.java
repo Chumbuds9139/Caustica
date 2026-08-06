@@ -42,6 +42,7 @@ public final class RtVideoOptions {
             sunSize(),
             entities(),
             particles(),
+            weatherParticles(),
             waterWaves(),
             // POM: the on/off toggle followed by its tuning sliders, shader-only and safe live.
             parallaxEnabled(),
@@ -86,6 +87,7 @@ public final class RtVideoOptions {
             sunSize(),
             entities(),
             particles(),
+            weatherParticles(),
             waterWaves(),
             handFov(),
         };
@@ -300,6 +302,15 @@ public final class RtVideoOptions {
 
     private static OptionInstance<Boolean> particles() {
         return bool("caustica.options.rt.particles", CausticaConfig.Rt.Entities.PARTICLES_ENABLED);
+    }
+
+    /**
+     * Ray-traced rain and snow. Caustica cancels vanilla's world renderer, and vanilla draws weather
+     * inside it, so this switch is what puts precipitation in the world at all — the same relationship
+     * the clouds toggle has. Weather shares the particle mesh, so it also needs Ray Traced Particles on.
+     */
+    private static OptionInstance<Boolean> weatherParticles() {
+        return bool("caustica.options.rt.weatherParticles", CausticaConfig.Rt.Entities.WEATHER_ENABLED);
     }
 
     private static OptionInstance<Boolean> waterWaves() {

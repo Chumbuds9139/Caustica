@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "将实体和方块实体加入光追场景。",
 	"caustica.options.rt.particles": "光追粒子",
 	"caustica.options.rt.particles.tooltip": "在追踪场景中，将粒子绘制为面向相机射线的公告板。",
+	"caustica.options.rt.weatherParticles": "光追天气",
+	"caustica.options.rt.weatherParticles.tooltip": "在追踪场景中将雨雪绘制为真实几何体。这些雨柱来自 Minecraft 自身的天气系统，因此会正确地止于地面、树叶和屋顶之下，并如常降落。需要开启光追粒子。",
 	"caustica.options.rt.glow": "实体发光轮廓",
 	"caustica.options.rt.glow.tooltip": "为发光实体绘制原版发光效果轮廓（可穿墙显示）。",
 	"caustica.options.rt.waterWaves": "动态水面",

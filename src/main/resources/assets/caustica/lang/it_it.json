@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "Include entità ed entità blocco nella scena con ray tracing.",
 	"caustica.options.rt.particles": "Particelle con ray tracing",
 	"caustica.options.rt.particles.tooltip": "Disegna le particelle come billboard dei raggi della telecamera nella scena tracciata.",
+	"caustica.options.rt.weatherParticles": "Meteo con ray tracing",
+	"caustica.options.rt.weatherParticles.tooltip": "Disegna pioggia e neve come geometria reale nella scena tracciata. Le colonne provengono dal sistema meteo di Minecraft, quindi si fermano correttamente a terra, sulle foglie e sotto i tetti, e cadono normalmente. Richiede Particelle con ray tracing.",
 	"caustica.options.rt.glow": "Contorno luminoso entità",
 	"caustica.options.rt.glow.tooltip": "Disegna il contorno vanilla dell'effetto Luminescenza (attraverso i muri) attorno alle entità luminose.",
 	"caustica.options.rt.waterWaves": "Acqua animata",

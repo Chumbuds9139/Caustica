@@ -126,6 +126,20 @@ public final class RtEntityTextures {
     }
 
     /**
+     * The bindless slot for a standalone texture file resolved through the {@link
+     * net.minecraft.client.renderer.texture.TextureManager} by {@link Identifier}.
+     *
+     * <p>Identical mechanics to {@link #slotForAtlas}: both go through {@code getTexture(location)} and
+     * cache the resulting slot per location. The distinction is purely descriptive — the weather sheets
+     * ({@code textures/environment/rain.png}, {@code snow.png}) are single images, not stitched atlases,
+     * so calling them "atlases" at the call site would misdescribe them. Sharing the same cache keeps a
+     * texture that is reachable both ways from consuming two slots.
+     */
+    public int slotForTexture(Identifier location) {
+        return slotForAtlas(location);
+    }
+
+    /**
      * The bindless slot for an <b>already-resolved</b> {@link GpuTextureView}, bypassing the
      * {@link RenderType}-keyed {@link #viewCache} entirely.
      *

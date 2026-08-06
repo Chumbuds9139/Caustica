@@ -35,6 +35,8 @@
 
 	"caustica.options.rt.particles": "Partículas com traçado de raios",
 	"caustica.options.rt.particles.tooltip": "Desenha partículas como billboards de raio da câmera dentro da cena traçada.",
+	"caustica.options.rt.weatherParticles": "Clima com traçado de raios",
+	"caustica.options.rt.weatherParticles.tooltip": "Desenha chuva e neve como geometria real dentro da cena traçada. As colunas vêm do próprio sistema de clima do Minecraft, então param corretamente no chão, nas folhas e sob telhados, e caem normalmente. Requer Partículas com traçado de raios.",
 
 	"caustica.options.rt.glow": "Contorno brilhante de entidades",
 	"caustica.options.rt.glow.tooltip": "Desenha o contorno vanilla do efeito Brilhante (através de paredes) ao redor de entidades brilhantes.",

@@ -16,6 +16,8 @@
 	"caustica.options.rt.entities.tooltip": "エンティティとブロックエンティティをレイトレーシングシーンに含めます。",
 	"caustica.options.rt.particles": "レイトレーシング対象パーティクル",
 	"caustica.options.rt.particles.tooltip": "トレースされたシーン内で、パーティクルをカメラレイに沿ったビルボードとして描画します。",
+	"caustica.options.rt.weatherParticles": "レイトレーシング対象の天候",
+	"caustica.options.rt.weatherParticles.tooltip": "トレースされたシーン内で、雨と雪を実際のジオメトリとして描画します。柱はマインクラフト本来の天候システムから取得するため、地面・葉・屋根の下で正しく止まり、通常どおり落下します。レイトレーシング対象パーティクルが必要です。",
 	"caustica.options.rt.glow": "エンティティの発光アウトライン",
 	"caustica.options.rt.glow.tooltip": "発光中のエンティティに、バニラの発光効果アウトライン（壁越し）を描画します。",
 	"caustica.options.rt.waterWaves": "アニメーションする水",
