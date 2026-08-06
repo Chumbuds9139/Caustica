@@ -57,6 +57,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         float3 toStart = ro - worldPush.camOffset;
         float prefixDist = length(toStart);
         if (prefixDist > 1.0e-4) {
+            // The ambient fog over this prefix was skipped for exactly the same reason the cloud was:
+            // pass A carries only a throughput and has no radiance accumulator to add the medium's own
+            // glow into, so it deliberately left both halves to whoever owns one. This pass does.
+            //
+            // Without this, a water or glass surface reflected and refracted a fully fogged storm scene
+            // while the camera -> interface segment itself stayed perfectly clear — so lakes and windows
+            // read as crisp holes punched through the weather. That is the "water is not affected by the
+            // rain/fog" case. The split-branch accounting is exact for the same reason as the cloud: the
+            // two branches' Fresnel throughputs sum to one, so the prefix is counted once, not twice.
+            AmbientFog preFog = evalAmbientFog(worldPush.ambientFog, prefixDist);
+            L += throughput * preFog.inScatter;
+            throughput *= preFog.transmittance;
+
             CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
                                            prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
             L += throughput * pre.scatter;

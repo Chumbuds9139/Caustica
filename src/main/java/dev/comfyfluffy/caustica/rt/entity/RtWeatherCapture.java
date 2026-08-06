@@ -80,6 +80,17 @@ public final class RtWeatherCapture {
     private static final float SNOW_MAX_ALPHA = 0.8f;
 
     /**
+     * Rain level below which no drops are drawn at all — the dead zone in {@link #visualIntensity}.
+     *
+     * <p>Vanilla's rain level ramps over roughly 5 seconds (it moves ~0.01/tick), so this holds the
+     * drops back for about the first second of that ramp and, symmetrically, removes them about a second
+     * before it reaches zero. That is enough for the sky to have visibly greyed first and to still look
+     * overcast as the last drops go, without a delay long enough to feel like a bug in the other
+     * direction.
+     */
+    private static final float RAIN_ONSET = 0.18f;
+
+    /**
      * Vanilla's per-column billboard orientation table. Each (x, z) offset around the camera gets a fixed
      * horizontal facing, so neighbouring columns fan out instead of all facing the same way — this is what
      * stops the rain from looking like one flat wall. Copied from {@code WeatherEffectRenderer}'s
@@ -96,6 +107,20 @@ public final class RtWeatherCapture {
                 float deltaX = x - HALF_RAIN_TABLE_SIZE;
                 float deltaZ = z - HALF_RAIN_TABLE_SIZE;
                 float distance = Mth.length(deltaX, deltaZ);
+                if (distance < 1.0e-4f) {
+                    // The exact table centre is the column the camera is standing in: deltaX == deltaZ == 0,
+                    // so vanilla's -deltaZ/distance is 0/0 = NaN. Vanilla gets away with it because a NaN
+                    // vertex is simply dropped by the rasteriser. Here the quad is fed to a BLAS build
+                    // instead, and a NaN-cornered triangle poisons that node's bounding box — every ray
+                    // that tests it degenerates, which is exactly the thin vertical sliver that appeared
+                    // after standing still long enough for the camera to settle inside one cell.
+                    //
+                    // Any unit direction is correct for a column centred on the camera (it is seen from
+                    // every side at once), so pick a fixed one rather than propagating the NaN.
+                    columnSizeX[z * RAIN_TABLE_SIZE + x] = 1.0f;
+                    columnSizeZ[z * RAIN_TABLE_SIZE + x] = 0.0f;
+                    continue;
+                }
                 columnSizeX[z * RAIN_TABLE_SIZE + x] = -deltaZ / distance;
                 columnSizeZ[z * RAIN_TABLE_SIZE + x] = deltaX / distance;
             }
@@ -128,12 +153,16 @@ public final class RtWeatherCapture {
         if (state == null || state.intensity <= 0.0f || state.radius <= 0) {
             return 0;
         }
+        float intensity = visualIntensity(state.intensity);
+        if (intensity <= 0.0f) {
+            return 0;
+        }
         int captured = 0;
         try {
             captured += captureColumns(capture, out, state.rainColumns, camPos, RAIN_MAX_ALPHA,
-                    state.radius, state.intensity, RAIN_LOCATION, budget - captured);
+                    state.radius, intensity, RAIN_LOCATION, budget - captured);
             captured += captureColumns(capture, out, state.snowColumns, camPos, SNOW_MAX_ALPHA,
-                    state.radius, state.intensity, SNOW_LOCATION, budget - captured);
+                    state.radius, intensity, SNOW_LOCATION, budget - captured);
         } catch (Throwable t) {
             // Never take the whole RT frame down over weather: log once and render this frame dry.
             if (!loggedFailure) {
@@ -143,6 +172,36 @@ public final class RtWeatherCapture {
             return captured;
         }
         return captured;
+    }
+
+    /**
+     * Reshape vanilla's raw rain level into the curve the <em>drops</em> should follow, so precipitation
+     * and the overcast sky arrive and leave together.
+     *
+     * <p>Minecraft ramps {@code rainLevel} linearly from 0 to 1 over a few seconds when weather starts or
+     * stops, and everything visual is driven from it. But the two things being driven have very different
+     * perceptual responses to a small value:
+     *
+     * <ul>
+     *   <li>the sky's overcast blend is <em>proportional</em> — at rain 0.05 it is 5% grey over blue,
+     *       which is invisible. The sky still reads as a clear blue day.</li>
+     *   <li>rain columns are <em>presence</em> — at rain 0.05 the sheets are faint but unmistakably
+     *       there, because a thin streak against a bright sky is high contrast.</li>
+     * </ul>
+     *
+     * <p>So with both fed the same number, the drops appear while the sky is still blue and linger after
+     * it has cleared — the reported "starts early, ends late". The fix is to hold the drops back until
+     * the sky has visibly committed to the storm, then bring them in quickly: a smoothstep with a dead
+     * zone at the bottom. Rain now starts a beat <em>after</em> the sky begins to grey and is gone a beat
+     * <em>before</em> it finishes clearing, which is the order the eye expects (clouds gather, then it
+     * rains; it stops raining, then the sky opens).
+     *
+     * <p>Deliberately applied here rather than to {@code weather.x}: that lane also drives the sun/moon
+     * attenuation and the fog, and delaying <em>those</em> is what would make the sky lag the storm.
+     */
+    private static float visualIntensity(float rainLevel) {
+        float t = Mth.clamp((rainLevel - RAIN_ONSET) / (1.0f - RAIN_ONSET), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t); // smoothstep
     }
 
     /**
@@ -196,20 +255,20 @@ public final class RtWeatherCapture {
             if (alpha <= 0.0f) {
                 continue;
             }
-            // Vanilla's per-column alpha is a raster blend weight, and the RT particle path has no blend
-            // stage to spend it on, so it is split across the two lanes that path does read:
+            // Vanilla's per-column alpha is a raster blend weight. The RT particle path has no blend
+            // stage, so it goes into the ALPHA lane only: RtEntityCapture stores it as the primitive
+            // coverage multiplier (aux0) and world.rahit folds it into the stochastic cutout together
+            // with the sheet texel's own alpha. Fading by *coverage* is what a blend weight actually
+            // means — fewer drop samples survive with distance — so the far columns thin out instead of
+            // changing colour.
             //
-            //   * the colour's ALPHA becomes the primitive coverage multiplier (RtEntityCapture stores it
-            //     in aux0). world.rahit multiplies it by the sheet texel's own alpha and discards below
-            //     the cutout threshold — so the transparent gaps between drops stay see-through, which is
-            //     what makes a column read as separate streaks instead of a frosted pane, and a barely
-            //     started drizzle correctly falls away to nothing.
-            //   * the colour's RGB carries the same factor as a tint, which world.rchit multiplies into
-            //     the sampled albedo. Without this the cutout is binary and every surviving column would
-            //     shade at full strength, so vanilla's near/far fade — the thing that stops rain from
-            //     looking like a hard cylinder wall around the player — would be lost.
-            int level = Mth.clamp(Math.round(alpha * 255.0f), 0, 255);
-            int color = ARGB.color(level, level, level, level);
+            // The RGB stays WHITE on purpose. An earlier version also scaled RGB by the same factor to
+            // reproduce the fade, but tint is not opacity: world.rchit multiplies it straight into the
+            // albedo, so it *darkened* the drops rather than thinning them. That is what produced the
+            // patch of rain that looked brighter than the rest — near columns kept a bright tint while
+            // columns a few blocks further out were shaded progressively darker, and the boundary
+            // between two adjacent alpha steps read as a visible seam across the sheet.
+            int color = ARGB.white(alpha);
 
             // The orientation table is indexed by the column's offset from the camera, biased to the
             // table centre. Columns beyond the table (a radius option larger than 16) would index out of

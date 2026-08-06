@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -30,6 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtWeatherCaptureTest {
     private static final int RAIN_TABLE_SIZE = 32;
     private static final int HALF_RAIN_TABLE_SIZE = 16;
+    /** Mirrors {@code RtWeatherCapture.RAIN_ONSET}. */
+    private static final float RAIN_ONSET = 0.18f;
 
     private static Path source() {
         return repoRoot().resolve(
@@ -60,11 +63,11 @@ final class RtWeatherCaptureTest {
                 float deltaX = x - HALF_RAIN_TABLE_SIZE;
                 float deltaZ = z - HALF_RAIN_TABLE_SIZE;
                 float len = (float) Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
+                if (len < 1.0e-4f) {
+                    continue; // the table centre is the degenerate cell — covered by its own test below
+                }
                 float sizeX = -deltaZ / len;
                 float sizeZ = deltaX / len;
-                if (Float.isNaN(sizeX) || Float.isNaN(sizeZ)) {
-                    continue; // the exact table centre divides by zero in vanilla too
-                }
                 // Perpendicular to the offset: their dot product is zero.
                 assertEquals(0.0f, sizeX * deltaX + sizeZ * deltaZ, 1.0e-3f,
                         "column (" + x + "," + z + ") must face across the view offset");
@@ -73,6 +76,82 @@ final class RtWeatherCaptureTest {
                         "column (" + x + "," + z + ") orientation must be normalised");
             }
         }
+    }
+
+    /**
+     * The table's exact centre is the column the camera stands in, where vanilla's {@code -deltaZ/dist}
+     * is 0/0.
+     *
+     * <p>Vanilla tolerates the resulting NaN because the rasteriser silently drops a NaN vertex. Caustica
+     * feeds these quads to a BLAS build instead, where a NaN corner poisons the acceleration structure
+     * node and every ray tested against it degenerates — which is what produced the thin vertical sliver
+     * that appeared after standing still long enough for the camera to settle into one cell. Assert the
+     * capture substitutes a finite direction rather than inheriting vanilla's NaN.
+     */
+    @Test
+    void tableCentreIsFiniteRatherThanVanillasNaN() throws IOException {
+        // The raw vanilla expression really is NaN at the centre — this is the hazard being guarded.
+        float degenerate = -0.0f / 0.0f;
+        assertTrue(Float.isNaN(degenerate), "0/0 must be NaN, or this test is not testing anything");
+
+        String src = Files.readString(source());
+        assertTrue(src.contains("distance < 1.0e-4f"),
+                "the degenerate centre cell must be detected before dividing");
+        // A NaN reaching the BLAS is the actual failure mode, so make the reason unmissable in-source.
+        assertTrue(src.contains("NaN"), "the centre-cell guard must explain the NaN/BLAS hazard");
+    }
+
+    /**
+     * Rain must not appear while the sky still looks clear, nor linger once it has cleared.
+     *
+     * <p>Vanilla ramps {@code rainLevel} linearly and drives both the sky's overcast blend and the drops
+     * from it, but the two have very different perceptual responses: at rain 0.05 the sky is blended only
+     * 5% grey (invisible) while thin bright streaks are already unmistakable. Feeding both the same
+     * number is what made rain start before the sky greyed and stop after it had gone blue again.
+     */
+    @Test
+    void dropsAreHeldBackUntilTheSkyHasVisiblyGreyed() {
+        assertEquals(0.0f, visualIntensity(0.0f), 1.0e-6f, "no rain means no drops");
+        assertEquals(0.0f, visualIntensity(0.05f), 1.0e-6f,
+                "a barely-started ramp must draw nothing: the sky is still blue here");
+        assertEquals(0.0f, visualIntensity(RAIN_ONSET), 1.0e-6f, "the onset itself is still dry");
+        assertEquals(1.0f, visualIntensity(1.0f), 1.0e-6f, "a full storm is at full strength");
+
+        // Monotonic in between, so the ramp never flickers.
+        float previous = -1.0f;
+        for (int i = 0; i <= 100; i++) {
+            float value = visualIntensity(i / 100.0f);
+            assertTrue(value >= previous, "visual intensity must be monotonic in the rain level");
+            previous = value;
+        }
+        // ...and genuinely eased rather than a hard switch at the onset.
+        assertTrue(visualIntensity(RAIN_ONSET + 0.02f) < 0.05f,
+                "drops must fade in smoothly just past the onset, not pop to full");
+    }
+
+    /** Mirrors {@code RtWeatherCapture.visualIntensity}. */
+    private static float visualIntensity(float rainLevel) {
+        float t = Math.max(0.0f, Math.min(1.0f, (rainLevel - RAIN_ONSET) / (1.0f - RAIN_ONSET)));
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    /**
+     * Distance fade must ride the ALPHA lane only.
+     *
+     * <p>An earlier version also scaled the vertex RGB by the fade to reproduce vanilla's falloff. But
+     * tint is not opacity: {@code world.rchit} multiplies it straight into the albedo, so far columns
+     * were rendered *darker* rather than thinner, and the step between two adjacent fade values showed up
+     * as a visible seam — one patch of rain brighter than the rest. Pin the white RGB so this cannot
+     * regress.
+     */
+    @Test
+    void distanceFadeUsesCoverageNotTint() throws IOException {
+        String src = Files.readString(source());
+
+        assertTrue(src.contains("ARGB.white(alpha)"),
+                "column colour must stay white: the fade belongs in alpha/coverage, not in the tint");
+        assertFalse(src.contains("ARGB.color(level, level, level, level)"),
+                "scaling RGB by the fade darkens distant rain instead of thinning it");
     }
 
     /**

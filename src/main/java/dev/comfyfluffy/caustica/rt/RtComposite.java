@@ -225,6 +225,27 @@ public final class RtComposite {
     // blocks overhead is already ~1750 blocks out. Keeping at least this many multiples of the deck's
     // height in view means the fade always stays down near the horizon where it belongs.
     private static final float CLOUD_VIEW_LIMIT_HEIGHT_MULTIPLE = 6.0f;
+
+    // ---- Overworld distance haze (see overworldFog).
+    //
+    // The haze is calibrated so that terrain at the far plane keeps this fraction of its radiance. Below
+    // ~0.5 the world reads as permanently misty; above ~0.8 the fog stops hiding the chunk-load edge it
+    // exists for. 0.62 leaves distant terrain clearly readable while its silhouette softens.
+    private static final float FOG_HORIZON_TRANSMITTANCE = 0.62f;
+    // Fog is calibrated against a fraction of the render distance rather than the whole of it: chunks
+    // stop at the render distance, so aiming the ramp slightly inside that keeps the last ring already
+    // faded by the time it unloads, instead of fading exactly as it disappears.
+    private static final float FOG_RENDER_DISTANCE_FRACTION = 0.85f;
+    // Night: modestly denser air, much darker colour. The density bump is small on purpose — the point
+    // is the gloom, and a heavy night fog makes torch-lit builds look washed out rather than moody.
+    private static final float NIGHT_FOG_DENSITY_SCALE = 1.35f;
+    // Rain multiplies the clear-day density: a downpour really does close the view down.
+    private static final float RAIN_FOG_DENSITY_SCALE = 3.2f;
+    // In-scatter radiance of the haze in each state. Day is pale sky-blue, night a deep cool blue (so it
+    // reads as darkness rather than a glowing veil), rain a flat desaturated grey.
+    private static final float[] FOG_DAY_COLOR = {0.052f, 0.066f, 0.090f};
+    private static final float[] FOG_NIGHT_COLOR = {0.0045f, 0.0060f, 0.0105f};
+    private static final float[] FOG_RAIN_COLOR = {0.062f, 0.067f, 0.076f};
     private static final Identifier SUN_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_IDS = createMoonIds();
     // Celestial rotation axis (the pole the sun/moon arc about): perpendicular to the east-west arc,
@@ -1138,7 +1159,9 @@ public final class RtComposite {
                             0.0f, 0.0f),
                     new Float4(weather.rain(), weather.thunder(), weather.skyDarken(),
                             weather.lightAttenuation()),
-                    ambientFog(dimension, weather),
+                    // dayFactor rides in sunDir.w (see skyPush): the fog dims and cools with it, so the
+                    // haze follows the same dusk curve as the light rather than switching at an angle.
+                    ambientFog(dimension, weather, sky.sunDir().w()),
                     clouds.clouds(),
                     clouds.anchor(),
                     // Shader-only POM: x relief depth (blocks), y fixed layer count, w fade distance.
@@ -1401,26 +1424,83 @@ public final class RtComposite {
      * <p>The Nether gets a thick warm haze: it is what makes the dimension read as enclosed and is a
      * large part of its ambient light, since a Nether cave has no sky to gather from. The End gets a
      * very thin violet dust that only becomes visible across the long sight lines of the outer islands.
-     * The Overworld is clear except in rain, where a light grey haze grows with the rain level and
-     * washes out distant terrain the way a real downpour does.
+     * The Overworld's air is resolved by {@link #overworldFog}, which keys a permanent distance haze to
+     * the render distance and thickens it for rain and night.
      *
      * <p>Densities are per block: 0.012 halves radiance at ~58 blocks, 0.0016 at ~430.
      */
-    private static Float4 ambientFog(int dimension, WeatherState weather) {
+    private static Float4 ambientFog(int dimension, WeatherState weather, float dayFactor) {
         return switch (dimension) {
             case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);
             case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);
-            default -> {
-                if (weather.rain() <= 0f) {
-                    yield new Float4(0f, 0f, 0f, 0f); // clear Overworld: the shader skips fog entirely
-                }
-                // Rain haze: neutral grey-blue, scaled by the same darkening the sky uses so it never
-                // out-glows the overcast it is supposed to be part of.
-                float scale = weather.rain() * weather.skyDarken();
-                yield new Float4(0.055f * scale, 0.060f * scale, 0.070f * scale,
-                        0.0035f * weather.rain());
-            }
+            default -> overworldFog(weather, dayFactor);
         };
+    }
+
+    /**
+     * The Overworld's air: an always-present distance haze keyed to the render distance, thickened by rain
+     * and tinted/deepened at night.
+     *
+     * <p><b>Why there is fog even on a clear day.</b> Without one, a chunk at the edge of the render
+     * distance is fully saturated right up to the moment it stops existing, so terrain pops in and out of
+     * a hard circle — the more render distance, the more jarring, because the popping edge is further
+     * away but just as sharp. Vanilla hides that seam behind a fog that ends exactly at the render
+     * distance. The density here is derived from the same distance rather than being a fixed constant, so
+     * the haze always lands in the same place relative to where chunks actually stop: at 8 chunks it is a
+     * near horizon, at 32 it is a faint far-field wash, and in both cases the last visible chunk has
+     * already faded rather than vanished.
+     *
+     * <p><b>Density from a target transmittance.</b> Picking a per-block sigma by hand does not survive a
+     * render-distance change (a value that looks right at 12 chunks is invisible at 32). Instead the
+     * density is solved from what the fog should *do*: leave {@link #FOG_HORIZON_TRANSMITTANCE} of the
+     * radiance at the far plane. Beer-Lambert inverts to {@code sigma = -ln(t) / d}, so the haze is
+     * scale-invariant by construction and every render distance gets the same visual amount of it.
+     *
+     * <p><b>Colour.</b> Daytime haze is the pale blue of scattered sky; at night it goes to a much darker
+     * blue so it reads as gloom rather than a grey veil glowing in the dark. Rain overrides both with a
+     * flat desaturated grey and multiplies the density, which is what makes a downpour genuinely close
+     * the view in. All three are the same medium — one colour and one density — so they cross-fade
+     * instead of fighting.
+     */
+    private static Float4 overworldFog(WeatherState weather, float dayFactor) {
+        float distance = fogDistanceBlocks();
+        // sigma such that exp(-sigma * distance) == FOG_HORIZON_TRANSMITTANCE at the far plane.
+        float baseDensity = (float) (-Math.log(FOG_HORIZON_TRANSMITTANCE) / Math.max(distance, 16.0));
+        float day = Math.clamp(dayFactor, 0f, 1f);
+        float rain = weather.rain();
+
+        // Night deepens the haze a little and darkens it a lot: the same amount of air, lit by the moon
+        // instead of the sun.
+        float density = baseDensity * Mth.lerp(day, NIGHT_FOG_DENSITY_SCALE, 1.0f);
+        float[] clear = new float[3];
+        for (int i = 0; i < 3; i++) {
+            clear[i] = Mth.lerp(day, FOG_NIGHT_COLOR[i], FOG_DAY_COLOR[i]);
+        }
+
+        if (rain > 0f) {
+            // Rain: denser and flat grey. Scaled by the same sky darkening the overcast uses, so the haze
+            // can never out-glow the sky it is supposed to be part of.
+            float scale = weather.skyDarken();
+            density *= Mth.lerp(rain, 1.0f, RAIN_FOG_DENSITY_SCALE);
+            for (int i = 0; i < 3; i++) {
+                clear[i] = Mth.lerp(rain, clear[i], FOG_RAIN_COLOR[i] * scale);
+            }
+        }
+        return new Float4(clear[0], clear[1], clear[2], density);
+    }
+
+    /**
+     * The distance the Overworld haze is calibrated against, in blocks.
+     *
+     * <p>Uses {@code Options.getEffectiveRenderDistance()}, which is already the minimum of the player's
+     * slider and the server's limit — so on a server that caps the view distance the fog tightens to
+     * where the terrain actually ends, instead of being calibrated for chunks the client will never
+     * receive. Falls back to the raw slider only if the options are unavailable (early boot).
+     */
+    private static float fogDistanceBlocks() {
+        Minecraft mc = Minecraft.getInstance();
+        int chunks = mc != null && mc.options != null ? mc.options.getEffectiveRenderDistance() : 12;
+        return Math.max(chunks, 2) * 16f * FOG_RENDER_DISTANCE_FRACTION;
     }
 
     /**
