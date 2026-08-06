@@ -54,36 +54,58 @@ $conta = (gh api user --jq '.login' 2>$null)
 Write-Host "Autenticado como: $conta"
 Write-Host "Consultando artifacts de $Repo..."
 
-$jq = ".artifacts[] | select(.expired==false) | select(.name==`"$Nome`") | {id: .id, size: .size_in_bytes, created: .created_at}"
+# IMPORTANTE: o filtro jq abaixo NAO pode conter aspas duplas.
+#
+# Ao invocar um executavel nativo, o PowerShell remove as aspas duplas internas do argumento antes
+# de entrega-lo ao processo. Um filtro como  select(.name=="caustica-bundled-jar")  chega ao jq como
+# select(.name==caustica-bundled-jar), que o jq interpreta como a subtracao dos identificadores
+# "caustica", "bundled" e "jar" -- e falha com  "function not defined: jar/0".
+#
+# A solucao e' nao filtrar por nome dentro do jq: pedimos todos os campos como TSV (sem nenhuma
+# aspa) e fazemos a filtragem por nome aqui no PowerShell, onde a comparacao de strings e' segura.
+$jq = '.artifacts[] | select(.expired==false) | [.id, .size_in_bytes, .created_at, .name] | @tsv'
 $bruto = gh api "repos/$Repo/actions/artifacts?per_page=100" --paginate --jq $jq 2>$null
 
-if ([string]::IsNullOrWhiteSpace($bruto)) {
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($bruto)) {
+    Write-Error "Falha ao consultar os artifacts. Confira 'gh auth status' e o acesso ao repositorio."
+    exit 1
+}
+
+$todos = $bruto -split "`n" |
+    Where-Object { $_.Trim() } |
+    ForEach-Object {
+        $c = $_ -split "`t"
+        [pscustomobject]@{
+            Id      = $c[0]
+            Size    = [long]$c[1]
+            Created = $c[2]
+            Name    = $c[3]
+        }
+    } |
+    Where-Object { $_.Name -eq $Nome } |
+    Sort-Object -Property Created -Descending
+
+if (-not $todos -or $todos.Count -eq 0) {
     Write-Host "Nenhum artifact '$Nome' encontrado. Nada a fazer."
     exit 0
 }
 
-# --jq devolve um objeto JSON por linha; converte cada um e ordena do mais novo para o mais antigo.
-$todos = $bruto -split "`n" |
-    Where-Object { $_.Trim() } |
-    ForEach-Object { $_ | ConvertFrom-Json } |
-    Sort-Object -Property created -Descending
-
-$totalMb = [math]::Round(($todos | Measure-Object -Property size -Sum).Sum / 1MB)
+$totalMb = [math]::Round(($todos | Measure-Object -Property Size -Sum).Sum / 1MB)
 Write-Host "Encontrados: $($todos.Count) jars, $totalMb MB no total."
 
 if ($Manter -gt 0) {
     Write-Host "Preservando os $Manter mais recentes."
-    $alvos = $todos | Select-Object -Skip $Manter
+    $alvos = @($todos | Select-Object -Skip $Manter)
 } else {
-    $alvos = $todos
+    $alvos = @($todos)
 }
 
-if (-not $alvos -or $alvos.Count -eq 0) {
+if ($alvos.Count -eq 0) {
     Write-Host "Nada sobrou para apagar depois de preservar $Manter."
     exit 0
 }
 
-$alvoMb = [math]::Round(($alvos | Measure-Object -Property size -Sum).Sum / 1MB)
+$alvoMb = [math]::Round(($alvos | Measure-Object -Property Size -Sum).Sum / 1MB)
 
 if (-not $Apagar) {
     Write-Host ''
@@ -91,7 +113,7 @@ if (-not $Apagar) {
     Write-Host "Seriam apagados $($alvos.Count) jars, liberando $alvoMb MB."
     Write-Host "Sobraria: $($totalMb - $alvoMb) MB de jars + ~11 MB de shims."
     Write-Host ''
-    Write-Host "Para apagar de verdade:  .\limpar-artifacts.ps1 -Apagar -Manter 1"
+    Write-Host 'Para apagar de verdade:  .\limpar-artifacts.ps1 -Apagar -Manter 1'
     exit 0
 }
 
@@ -100,25 +122,26 @@ Write-Host "Apagando $($alvos.Count) jars ($alvoMb MB)..."
 $ok = 0
 $falhou = 0
 foreach ($a in $alvos) {
-    gh api -X DELETE "repos/$Repo/actions/artifacts/$($a.id)" --silent 2>$null
+    gh api -X DELETE "repos/$Repo/actions/artifacts/$($a.Id)" --silent 2>$null
     if ($LASTEXITCODE -eq 0) {
         $ok++
         Write-Host -NoNewline "`r  apagados: $ok/$($alvos.Count)"
     } else {
         $falhou++
         Write-Host ''
-        Write-Host "  FALHOU id=$($a.id) -- sem permissao? confira 'gh auth status'"
+        Write-Host "  FALHOU id=$($a.Id) -- sem permissao? confira 'gh auth status'"
     }
 }
 Write-Host ''
 Write-Host "Concluido: $ok apagados, $falhou falharam."
 
+# Mesmo cuidado com aspas: filtro simples, sem nenhuma aspa dupla.
 $restante = gh api "repos/$Repo/actions/artifacts?per_page=100" --paginate `
     --jq '.artifacts[] | select(.expired==false) | .size_in_bytes' 2>$null
 if ($restante) {
-    $bytes = ($restante -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { [long]$_ } | Measure-Object -Sum).Sum
-    $n = ($restante -split "`n" | Where-Object { $_.Trim() }).Count
-    Write-Host "Uso atual: $n artifacts, $([math]::Round($bytes / 1MB)) MB  (limite Free: 500 MB)"
+    $linhas = @($restante -split "`n" | Where-Object { $_.Trim() })
+    $bytes = ($linhas | ForEach-Object { [long]$_ } | Measure-Object -Sum).Sum
+    Write-Host "Uso atual: $($linhas.Count) artifacts, $([math]::Round($bytes / 1MB)) MB  (limite Free: 500 MB)"
 }
 
 Write-Host ''
