@@ -38,6 +38,10 @@
 	"caustica.options.rt.particles.tooltip": "Draw particles as camera-ray billboards inside the traced scene.",
 	"caustica.options.rt.weatherParticles": "Ray-Traced Weather",
 	"caustica.options.rt.weatherParticles.tooltip": "Draw rain and snow as real geometry inside the traced scene. The columns come from Minecraft's own weather system, so they stop correctly at the ground, at leaves and under roofs, and fall as usual. Requires Ray-Traced Particles.",
+	"caustica.options.rt.omm": "Opacity Micromaps",
+	"caustica.options.rt.omm.tooltip": "Speeds up grass, leaves and other cutout blocks by skipping the any-hit test on provably opaque regions. If you ever see visual corruption or crashes around cutout terrain (rare, driver-dependent), turn this off — the terrain rebuilds without them. Note: if they were disabled at game launch, the Vulkan feature only engages after re-entering a world.",
+	"caustica.options.rt.rainDensity": "Rain Density",
+	"caustica.options.rt.rainDensity.tooltip": "How thick ray-traced rain and snow appear. 100% is the full vanilla downpour; lower values thin the streaks into a light drizzle. 0% hides precipitation entirely while the overcast sky, fog and dimming still follow the weather.",
 
 	"caustica.options.rt.glow": "Entity Glow Outline",
 	"caustica.options.rt.glow.tooltip": "Draw the vanilla Glowing-effect outline (through walls) around glowing entities.",

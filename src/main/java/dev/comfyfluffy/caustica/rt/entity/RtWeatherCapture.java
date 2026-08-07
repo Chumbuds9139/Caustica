@@ -48,7 +48,11 @@ import java.util.List;
  * — the same {@code columnSizeX/Z} lookup table, the same distance-faded alpha, the same {@code y * 0.25}
  * texture V mapping. Positions come out camera-relative (as vanilla emits them) and are shifted into the
  * renderer's rebased space so the TLAS instance transform stays identity, matching {@link
- * RtParticleCapture}.
+ * RtParticleCapture}. The single deliberate divergence: the column the camera stands inside is dropped
+ * before it reaches the BLAS. Vanilla never draws it either — its NaN orientation entry kills the quad
+ * in the rasteriser — but here the quad must be skipped explicitly, because a camera-facing sheet with
+ * the eye on its plane degenerates into a screen-spanning vertical line under ray tracing (see
+ * {@link #captureColumns}).
  *
  * <h2>How it reaches the screen</h2>
  * The quads are pushed through {@link RtEntityCapture} into the same combined particle mesh/BLAS the
@@ -117,6 +121,12 @@ public final class RtWeatherCapture {
                     //
                     // Any unit direction is correct for a column centred on the camera (it is seen from
                     // every side at once), so pick a fixed one rather than propagating the NaN.
+                    //
+                    // For context: vanilla keeps the NaN at this entry, and the rasteriser then drops
+                    // the whole quad whenever a vertex is NaN — so in vanilla the column the camera
+                    // stands inside is never actually drawn. Verified against the 26.2
+                    // WeatherEffectRenderer source (constructor stores -0.0f/0.0f; renderInstances has
+                    // no special case for the centre cell).
                     columnSizeX[z * RAIN_TABLE_SIZE + x] = 1.0f;
                     columnSizeZ[z * RAIN_TABLE_SIZE + x] = 0.0f;
                     continue;
@@ -154,10 +164,18 @@ public final class RtWeatherCapture {
             return 0;
         }
         float intensity = visualIntensity(state.intensity);
+        // Player's density slider: thins the streaks through the same coverage lane distance fading
+        // uses, so a lower setting reads as lighter rain rather than darker rain (see RAIN_DENSITY).
+        intensity *= Math.clamp(CausticaConfig.Rt.Entities.RAIN_DENSITY.value(), 0f, 1f);
         if (intensity <= 0.0f) {
             return 0;
         }
         int captured = 0;
+        // Tag every emitted sheet so raygen shades it UNLIT (see PRIM_WEATHER). The path tracer's
+        // direct/indirect light read as blotchy, blown-out streaks on the rain; the sheets stay real
+        // geometry (terrain occlusion and the heightmap clip are kept) but stop participating in
+        // lighting, the way vanilla's own weather pass is effectively unlit.
+        capture.currentPrimFlags = RtEntityCapture.PRIM_FLAG_WEATHER;
         try {
             captured += captureColumns(capture, out, state.rainColumns, camPos, RAIN_MAX_ALPHA,
                     state.radius, intensity, RAIN_LOCATION, budget - captured);
@@ -170,6 +188,8 @@ public final class RtWeatherCapture {
                 CausticaMod.LOGGER.warn("RT weather capture failed; rain/snow will not be ray traced", t);
             }
             return captured;
+        } finally {
+            capture.currentPrimFlags = 0;
         }
         return captured;
     }
@@ -247,6 +267,26 @@ public final class RtWeatherCapture {
         for (WeatherEffectRenderer.ColumnInstance column : columns) {
             if (emitted >= budget) {
                 break;
+            }
+            // Skip the column the camera stands inside — the one whose orientation-table entry is the
+            // table centre. Vanilla never draws it: that entry is NaN (-0/0 in its constructor), and the
+            // rasteriser discards any quad with a NaN vertex, so the accidental skip is part of the
+            // geometry vanilla actually presents. This table stores a real direction instead (a
+            // NaN-cornered triangle would poison its BLAS node — see the constructor), so the skip has
+            // to be reproduced explicitly here.
+            //
+            // It is also right on its own merits, not just vanilla-faithful. Every rain sheet faces the
+            // camera by construction — its span is perpendicular to the radial direction — so for this
+            // one column the sheet's plane passes through the eye itself, or within half a block of it.
+            // Rasterisation hides that: the quad projects to a near-zero-area sliver and vanishes. Ray
+            // tracing has no equivalent rejection — the primary ray runs with tmin 0, so it grazes the
+            // sheet edge-on at arbitrarily close range and the whole column draws itself as a
+            // razor-thin vertical line across the screen. That is exactly the artefact that appears
+            // after standing still (while walking, the camera keeps changing cells, so no single
+            // degenerate sheet persists long enough to be noticed). Losing half a block of rain
+            // directly around the eye is invisible in practice; the line was not.
+            if (column.x() == camFloorX && column.z() == camFloorZ) {
+                continue;
             }
             float relativeX = (float) (column.x() + 0.5 - camPos.x);
             float relativeZ = (float) (column.z() + 0.5 - camPos.z);

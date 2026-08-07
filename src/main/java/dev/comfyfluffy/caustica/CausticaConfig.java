@@ -643,10 +643,10 @@ public final class CausticaConfig {
             /**
              * Cloud thickness, 0..1, as a fraction of {@link #CLOUD_MAX_THICKNESS_BLOCKS}.
              *
-             * <p>0 is a flat sheet (the deck collapses to a plane and takes the cheap non-marched
-             * path); 1 is a deep bank. Applies to BOTH styles — classic clouds become real vanilla-like
-             * boxes with lit tops and shaded sides rather than a decal, and volumetric clouds gain the
-             * depth their shading needs to read as cumulus.
+             * <p>Volumetric: 0 is a flat sheet (the deck collapses to a plane and takes the cheap
+             * non-marched path); 1 is a deep bank. Classic: the slider scales the HEIGHT of vanilla's
+             * authored cell boxes, floored at vanilla's own 4-block extrusion — classic clouds are
+             * always real boxes with lit tops and shaded sides, never thinner than the game draws them.
              */
             public static final FloatSetting CLOUD_THICKNESS =
                     clampedFloat("caustica.rt.cloudThickness", "composite.cloud-thickness", 0.5f, 0.0f, 1.0f);
@@ -814,6 +814,16 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting WEATHER_ENABLED =
                     bool("caustica.rt.weatherParticles", "particles.weather-enabled", true);
+            /**
+             * Visual density of the ray-traced rain/snow sheets, 0..1.
+             *
+             * <p>Scales the per-column alpha the same way distance does — through stochastic coverage,
+             * so lowering it thins the streaks into a drizzle rather than dimming their colour. 1 is
+             * the full vanilla downpour; 0 hides precipitation entirely (the overcast sky, fog and
+             * light attenuation still follow the weather itself, which is a separate toggle).
+             */
+            public static final FloatSetting RAIN_DENSITY =
+                    clampedFloat("caustica.rt.rainDensity", "particles.rain-density", 1.0f, 0.0f, 1.0f);
             public static final BooleanSetting GLOW_ENABLED =
                     bool("caustica.rt.glow", "entities.glow.enabled", true);
             public static final BooleanSetting NAME_TAGS_ENABLED =

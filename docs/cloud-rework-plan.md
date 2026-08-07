@@ -106,3 +106,28 @@ with small targeted patches, and also raises `rainLight`/`rainSky` in `weatherSt
 touches `weatherState`'s neighbourhood (`ambientFog`) but not those lines. Before starting the rework,
 decide whether to merge #25 first and build on it, or supersede it — doing both independently will
 conflict in `cloudState` and `clouds.slang`.
+
+---
+
+## Status (2026-08-07) — rework implemented on arena/019fddc8-testingcasutica
+
+- **Classic style now reads `clouds.png`** (RtCloudCells → bit-packed occupancy map in the BDA push
+  ring, addressed from `WorldPush.cloudCellsAddr`). With thickness > 0 the deck is intersected
+  analytically (`cloudClassicBoxes`): per-cell AABBs, grid walk, no march. The noise-quantised classic
+  path remains only as the fallback for a missing/non-256x256 texture.
+- **Colour is `EnvironmentAttributes.CLOUD_COLOR`** (`WorldPush.cloudColor.xyz`), read through the
+  camera probe like the sun/star angles — bug 2 (white deck in rain) is fixed by the game's own value.
+- **Bug 3 fixed**: `cloudState` pushes the weather fill as its own lane (`cloudColor.w`), ramping to 1
+  on rain alone; both styles reach full cover — the classic style by progressively filling authored and
+  empty cells with stable per-cell hashes, the volumetric style via the coverage threshold with a hard
+  100% short-circuit.
+- **Bug 1 fixed**: `cloudMarch` applies the flat path's crossFade to the slab's sigma — the deck is
+  optically *excluded* inside the crossing region, so the band can no longer accumulate in-scatter.
+  The analytic classic path has no equivalent degeneracy (no mid-plane shading).
+- **Sun/moon discs fade out with the rain lane itself** (`world.rmiss`), no longer betting on the deck
+  covering them.
+- **Thickness slider**: classic floors at vanilla's 4-block box height and scales up; volumetric keeps
+  the full 0..110 range. Deck anchor Z offset matches vanilla's 3.96.
+- **Volumetric style untouched** per the scope decision: same field, same shape, same constants. Its
+  performance ideas from this plan (precomputed light march, cheaper diffuse bounces) are pending user
+  sign-off before any change.

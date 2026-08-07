@@ -60,6 +60,13 @@ public final class RtEntityCapture implements VertexConsumer {
     // block-entity portal geometry (EndPortalRenderer's quad, endermen holding portal blocks) with
     // the procedural portal surfaces instead of the flat atlas texture.
     int currentPortalFlags;
+    // Extra per-prim flags for the current submission, OR-ed into the same flags lane. Only the weather
+    // capture uses this today (PRIM_FLAG_WEATHER): rain/snow sheets must reach raygen tagged so they can
+    // be shaded UNLIT — the path tracer's light response was visibly breaking them. Particles share the
+    // flags lane but never carry portal tags, so the weather bit is unambiguous there.
+    int currentPrimFlags;
+    /** Mirrors world_common.slang's PRIM_WEATHER. */
+    static final int PRIM_FLAG_WEATHER = 16;
     // When a model textures from an atlas sprite (block entities: chests/signs/beds via a Material),
     // its ModelPart UVs are 0..1 in a virtual texture and must be remapped into the sprite's atlas
     // region — the work vanilla's sprite-coordinate-expander VertexConsumer does, which we bypass.
@@ -96,6 +103,7 @@ public final class RtEntityCapture implements VertexConsumer {
         currentOpacity = 1.0f;
         currentOrder = 0;
         currentPortalFlags = 0;
+        currentPrimFlags = 0;
         uvRemap = false;
     }
 
@@ -151,6 +159,7 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentOpacity = currentOpacity;
         target.currentOrder = currentOrder;
         target.currentPortalFlags = currentPortalFlags;
+        target.currentPrimFlags = currentPrimFlags;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
         target.uvV0 = uvV0;
@@ -424,7 +433,8 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tb);
             prim.add((float) currentTexSlot); // tint.w = bindless texture slot
             prim.add(Float.intBitsToFloat(currentMaterialId));
-            prim.add(Float.intBitsToFloat(currentPortalFlags)); // flags (portal tags for world.rchit)
+            // flags lane: portal tags (terrain shading) OR the weather bit (unlit rain/snow in raygen).
+            prim.add(Float.intBitsToFloat(currentPortalFlags | currentPrimFlags));
             prim.add(opacity); // aux0 = primitive coverage multiplier (read asfloat(aux0) in shaders)
             prim.add(0f); // aux1
             alphaBuckets.add(currentAlphaBucket);

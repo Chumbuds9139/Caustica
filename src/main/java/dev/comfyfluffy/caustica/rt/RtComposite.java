@@ -30,6 +30,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.util.ARGB;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.level.Level;
@@ -101,7 +102,11 @@ public final class RtComposite {
     private static final int READY_MASK_OFFSET = (WORLD_PUSH_SIZE + 15) & ~15;
     // Covers a 257x257x48-section window (render distance 128) with room to spare.
     private static final int READY_MASK_CAPACITY = 512 * 1024;
-    private static final int WORLD_PUSH_BUFFER_SIZE = READY_MASK_OFFSET + READY_MASK_CAPACITY;
+    // Vanilla's authored classic cloud shape (RtCloudCells): a bit-packed clouds.png occupancy bitmap
+    // riding the same ring slot, addressed from WorldPush.cloudCellsAddr exactly like the ready mask
+    // above is addressed from the push constants — no extra binding, one flush covers all three.
+    private static final int CLOUD_CELLS_OFFSET = (READY_MASK_OFFSET + READY_MASK_CAPACITY + 15) & ~15;
+    private static final int WORLD_PUSH_BUFFER_SIZE = CLOUD_CELLS_OFFSET + RtCloudCells.MAP_BYTES;
     // Real inline push constants (fast constant-bank reads), separate from the WorldPush BDA ring above.
     // Hot addresses/frameIndex and raygen's debugView avoid unnecessary global-memory dereferences;
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
@@ -215,6 +220,15 @@ public final class RtComposite {
     // layered, and since extinction is now normalised by the slab depth (CLOUD_REFERENCE_THICKNESS in
     // clouds.slang) raising this adds VOLUME without making the clouds more opaque.
     private static final float CLOUD_MAX_THICKNESS_BLOCKS = 110.0f;
+    // Classic boxes never get thinner than vanilla's own 4-block extrusion (CloudRenderer's
+    // putVec3(12, 4, 12)): the thickness slider scales the box HEIGHT from that baseline up, per the
+    // classic rework's "vanilla shapes, slider-driven depth" decision. Volumetric keeps the full
+    // 0..110 range, including the flat-sheet collapse at zero.
+    private static final float CLOUD_CLASSIC_MIN_THICKNESS = 4.0f;
+    // Vanilla offsets the deck half a cell minus a sliver in Z (CloudRenderer.render: cameraZ + 3.96),
+    // so the camera sits asymmetrically inside the cell grid. Matched for shape-parity with vanilla;
+    // the x offset is the wind scroll itself.
+    private static final double CLOUD_Z_OFFSET_BLOCKS = 3.96;
     // Mirrors clouds.slang's CLOUD_STYLE_* constants.
     private static final int CLOUD_STYLE_VOLUMETRIC = 1;
     // How far along the deck clouds remain visible. A plane extends to the horizon, where it degenerates
@@ -1044,6 +1058,20 @@ public final class RtComposite {
             int readyMaskBytes = RtTerrain.writeDistantReadyMask(readyMask);
             long readyMaskAddress = readyMaskBytes == 0
                     ? 0L : pushBuf.deviceAddress + READY_MASK_OFFSET;
+            // Vanilla's authored cloud shape for the classic deck (RtCloudCells), re-published into
+            // whichever ring slot this frame uses. 8 KiB of words — the copy is rounding error next to
+            // the push itself; doing it every frame keeps all six slots valid instead of tracking which
+            // slot last received the map. Address 0 when no usable clouds.png exists, which the shader
+            // reads as "fall back to the noise deck" — a resource pack can never remove the clouds.
+            int[] cloudCells = RtCloudCells.INSTANCE.cells();
+            long cloudCellsAddress = 0L;
+            if (cloudCells != null) {
+                ByteBuffer cellsBuf = MemoryUtil.memByteBuffer(
+                        pushBuf.mapped + CLOUD_CELLS_OFFSET, RtCloudCells.MAP_BYTES)
+                        .order(ByteOrder.nativeOrder());
+                cellsBuf.asIntBuffer().put(cloudCells, 0, RtCloudCells.MAP_WORDS);
+                cloudCellsAddress = pushBuf.deviceAddress + CLOUD_CELLS_OFFSET;
+            }
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) + W1 wave normals. Bit 1 used to
@@ -1164,12 +1192,18 @@ public final class RtComposite {
                     ambientFog(dimension, weather, sky.sunDir().w()),
                     clouds.clouds(),
                     clouds.anchor(),
+                    clouds.color(),
+                    cloudCellsAddress,
                     // Shader-only POM: x relief depth (blocks), y fixed layer count, w fade distance.
                     parallaxParams(),
                     dimension,
                     featureFlags()
             ).write(push);
-            pushBuf.flush(0L, Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes));
+            int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
+            if (cloudCellsAddress != 0L) {
+                flushBytes = Math.max(flushBytes, CLOUD_CELLS_OFFSET + RtCloudCells.MAP_BYTES);
+            }
+            pushBuf.flush(0L, flushBytes);
             // Upload any entity textures registered this frame into the bindless set before the trace.
             RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx));
             // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
@@ -1346,16 +1380,19 @@ public final class RtComposite {
     }
 
     /**
-     * The two {@code WorldPush} cloud lanes, resolved together by {@link #cloudState} so a caller cannot
-     * push a deck's parameters with a mismatched anchor.
+     * The three {@code WorldPush} cloud lanes, resolved together by {@link #cloudState} so a caller
+     * cannot push a deck's parameters with a mismatched anchor or a mismatched weather fill.
      *
-     * @param clouds x coverage, y opacity, z shadow strength, w camera-relative deck height
+     * @param clouds x player coverage (the slider — the shader folds the weather in itself), y opacity,
+     *               z shadow strength, w camera-relative deck height
      * @param anchor xy wrapped sample anchor, z slab thickness, w view limit
+     * @param color  xyz vanilla CLOUD_COLOR in linear space, w weather overcast fill 0..1
      */
-    private record CloudPush(Float4 clouds, Float4 anchor) {
+    private record CloudPush(Float4 clouds, Float4 anchor, Float4 color) {
         /** No deck at all: a zeroed coverage/opacity pair short-circuits every cloud path in the shader. */
         static final CloudPush NONE =
-                new CloudPush(new Float4(0f, 0f, 0f, 0f), new Float4(0f, 0f, 0f, 0f));
+                new CloudPush(new Float4(0f, 0f, 0f, 0f), new Float4(0f, 0f, 0f, 0f),
+                        new Float4(1f, 1f, 1f, 0f));
     }
 
     /**
@@ -1534,9 +1571,14 @@ public final class RtComposite {
             // Neither the Nether nor the End has a sky to put clouds in; both draw a closed skybox.
             return CloudPush.NONE;
         }
-        // Overcast ramp: rain closes most of the remaining gap toward full cover, thunder the rest.
-        float overcast = Math.min(1f, weather.rain() * 0.85f + weather.thunder() * 0.15f);
-        coverage = coverage + (1f - coverage) * overcast;
+        // Weather FILL, kept separate from the player's coverage slider all the way to the shader:
+        // rain alone must be able to close the sky completely (the old 0.85/0.15 split topped out
+        // short of full cover in a plain rainstorm — the reported bug 3 — and the classic style's
+        // threshold then read the shortfall as punched holes). Thunder implies rain in vanilla, so it
+        // only ever reinforces the ramp. The two classic/volumetric styles consume this differently
+        // (authored cells fill progressively vs. the noise threshold dropping), which is why it rides
+        // its own lane instead of being pre-merged into the coverage value here.
+        float fill = Math.min(1f, weather.rain() + weather.thunder());
         float height = CausticaConfig.Rt.Composite.CLOUD_HEIGHT.value();
         // Wind drift, in blocks, from world time. Wrapped with the anchor below.
         double gameTime = 0.0;
@@ -1547,14 +1589,20 @@ public final class RtComposite {
         }
         double drift = gameTime * CLOUD_WIND_BLOCKS_PER_TICK;
         // camX/camZ place the deck in world space; the shader adds the ray's camera-relative offset back
-        // on, so the pattern stays pinned to the world while the camera moves through it.
+        // on, so the pattern stays pinned to the world while the camera moves through it. The fixed Z
+        // offset matches vanilla's own (cameraZ + 3.96 in CloudRenderer.render).
         double anchorX = camX + drift;
-        double anchorZ = camZ;
-        // Player-controlled thickness, shared by both styles. At 0 the shader takes its flat-plane path
-        // (see CLOUD_FLAT_EPSILON in clouds.slang), so the slider bottoming out is genuinely a flat deck
-        // rather than a degenerate zero-length march.
+        double anchorZ = camZ + CLOUD_Z_OFFSET_BLOCKS;
+        // Player-controlled thickness. At 0 the shader takes its flat-plane path (see
+        // CLOUD_FLAT_EPSILON in clouds.slang), so the slider bottoming out is genuinely a flat deck
+        // rather than a degenerate zero-length march — that stays true for the volumetric style. The
+        // classic style floors at vanilla's own 4-block box height instead: its shapes come from the
+        // authored clouds.png cells, and the slider scales box HEIGHT from the vanilla baseline up.
         float thickness = Math.clamp(CausticaConfig.Rt.Composite.CLOUD_THICKNESS.value(), 0f, 1f)
                 * CLOUD_MAX_THICKNESS_BLOCKS;
+        if (CausticaConfig.Rt.Composite.cloudStyleIndex() != CLOUD_STYLE_VOLUMETRIC) {
+            thickness = Math.max(CLOUD_CLASSIC_MIN_THICKNESS, thickness);
+        }
         // The slider sets the deck's BASE, but the shader's slab is centred on the pushed height, so the
         // half-thickness is added back here. Pushing the base directly would make the clouds appear to
         // sink as the thickness slider is raised (the slab would grow downward as well as upward), which
@@ -1565,7 +1613,46 @@ public final class RtComposite {
                 new Float4(Math.clamp(coverage, 0f, 1f), Math.clamp(opacity, 0f, 1f),
                         Math.clamp(shadow, 0f, 1f), (float) (deckCentre - cameraY)),
                 new Float4(wrapCloudAnchor(anchorX), wrapCloudAnchor(anchorZ),
-                        thickness, cloudViewLimit(deckCentre - (float) cameraY)));
+                        thickness, cloudViewLimit(deckCentre - (float) cameraY)),
+                cloudColorState(fill));
+    }
+
+    /**
+     * The deck's albedo and the weather's overcast fill, in one lane.
+     *
+     * <p>The colour is {@code EnvironmentAttributes.CLOUD_COLOR} read through the same camera probe
+     * {@link #skyPush} already uses for the sun and star angles — the value the game itself resolves
+     * per dimension and per weather. That is the whole point of reading it instead of ramping by hand:
+     * the storm-grey deck is vanilla's own grey, on vanilla's own curve, and a dimension or pack that
+     * tints cloud colour gets the tint for free. Early-boot frames without a probe fall back to white,
+     * which is the Overworld's clear-day value anyway.
+     */
+    private static Float4 cloudColorState(float weatherFill) {
+        float r = 1f, g = 1f, b = 1f;
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.gameRenderer != null) {
+                float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                int argb = mc.gameRenderer.mainCamera().attributeProbe()
+                        .getValue(EnvironmentAttributes.CLOUD_COLOR, partial);
+                r = srgb8ToLinear(ARGB.red(argb));
+                g = srgb8ToLinear(ARGB.green(argb));
+                b = srgb8ToLinear(ARGB.blue(argb));
+            }
+        } catch (Throwable ignored) {
+            // Probe unavailable (early boot / unsupported context): white is the correct default.
+        }
+        return new Float4(r, g, b, Math.clamp(weatherFill, 0f, 1f));
+    }
+
+    /**
+     * Standard sRGB-to-linear decode for an 8-bit channel — the same curve the material compiler uses
+     * (RtMaterialTextureData keeps it package-private, so the one duplicate lives here rather than
+     * widening that class's visibility for a single caller).
+     */
+    private static float srgb8ToLinear(int value8) {
+        float v = (value8 & 0xFF) / 255.0f;
+        return v <= 0.04045f ? v / 12.92f : (float) Math.pow((v + 0.055f) / 1.055f, 2.4f);
     }
 
     /**

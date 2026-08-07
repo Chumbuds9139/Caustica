@@ -105,6 +105,15 @@ public struct WorldPush {
     // pushed raw so a mid-frame change takes effect on the next frame like every other RT option.
     public float4   clouds;           // x coverage 0..1, y opacity 0..1, z shadow strength 0..1, w deck height (camera-relative blocks)
     public float4   cloudAnchor;      // xy wind-scrolled sample anchor (blocks, wrapped), z slab thickness, w view limit
+    // Classic-style authored shape + colour. cloudColor.xyz is vanilla's own EnvironmentAttributes
+    // CLOUD_COLOR in linear space — the value the game already resolves per dimension AND per weather,
+    // so the deck greys in a storm with no hand-tuned ramp. cloudColor.w is the weather overcast fill
+    // 0..1: rain pushes it toward 1, and the shader uses it to close the sky beyond the authored/slid
+    // coverage (see cloudCoverage). cloudCellsAddr points at the bit-packed clouds.png occupancy map
+    // riding this same BDA ring slot (0 = unavailable, fall back to the noise deck) — same transport as
+    // the DH ready mask, no extra binding.
+    public float4   cloudColor;
+    public uint64_t cloudCellsAddr;
     // Shader-only Parallax Occlusion Mapping (LabPBR _n alpha height field). Geometry and BLASes are
     // never rebuilt; a zero relief depth disables the effect entirely.
     public float4   parallaxParams;   // x relief depth, y height-march layer count, z unused, w max distance
@@ -193,6 +202,13 @@ public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 // the dedicated portal branches (Nether swirl / End abyss) instead of the block texture.
 public static const uint TERRAIN_PRIM_PORTAL_NETHER = 2u;
 public static const uint TERRAIN_PRIM_PORTAL_END = 4u;
+// Prim.flags (entity prims): a vanilla rain/snow sheet captured by RtWeatherCapture. Shares the flags
+// lane the portal tags use on terrain — particles never carry portal tags, so the bit is unambiguous.
+// Raygen shades these sheets UNLIT (see PAYLOAD_WEATHER): the path tracer's direct/indirect light was
+// visibly breaking the rain (blotchy over-lit streaks), and vanilla's own weather pass is essentially
+// unlit too. The sheets stay real BLAS geometry, so terrain still occludes them and the heightmap
+// clip still works — only the lighting response is removed.
+public static const uint PRIM_WEATHER = 16u;
 
 // Largest finite half. The payload's half3 lanes carry HDR values (sky radiance most of all), so
 // producers clamp to this instead of letting the conversion round up to +inf.
@@ -211,7 +227,7 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
-    public uint   flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source.
+    public uint  flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source, bit 9 weather.
     public uint   roughMetal;  // packHalf2x16(roughness, metalness)
     public uint   emissionSss; // packHalf2x16(emission, sss)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
@@ -219,6 +235,10 @@ public struct Payload {
 };
 
 public static const uint PAYLOAD_SHOW_CELESTIAL = 4u;
+// Rain/snow sheet (Prim.flags carried through by world.rchit): raygen shades it unlit and ends the
+// path there — no NEE, no shadow ray, no RIS, no diffuse continuation — because the path tracer's
+// light response was visibly breaking the weather streaks. See PRIM_WEATHER.
+public static const uint PAYLOAD_WEATHER = 512u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
