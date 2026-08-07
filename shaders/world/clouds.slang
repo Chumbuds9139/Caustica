@@ -482,7 +482,14 @@ CloudVolume cloudClassicBoxes(WorldPush push, float3 originRel, float3 dir, floa
     float tHit = -1.0;
     float3 normal = float3(0.0, 1.0, 0.0);
 
-    if (cloudCellOccupied(push, cell)) {
+    // t0 == 0 means the origin itself is inside the slab, so `cell` (built from the position at t0)
+    // is the box the camera stands in — the visible surface is then the face the ray EXITS through
+    // (vanilla draws those interior faces for exactly this case). For t0 > 0 the ray ENTERS the slab
+    // at t0, and an occupied entry cell must be hit on its slab face right there: treating that case
+    // as "inside" (the previous code did) skipped the near face entirely — from below, the deck then
+    // showed only far faces and mid-slab side walls glimpsed through the gaps, which read as a
+    // cybernetic grid in the clouds' shape instead of solid boxes.
+    if (t0 <= 0.0 && cloudCellOccupied(push, cell)) {
         // Origin is inside an occupied box: the visible surface is the box face the ray EXITS through.
         float tExitX = 1.0e30;
         if (abs(dir.x) > 1.0e-8) {
@@ -514,6 +521,9 @@ CloudVolume cloudClassicBoxes(WorldPush push, float3 originRel, float3 dir, floa
         }
     } else {
         // Outside: walk the grid from the slab entry point until an occupied cell is crossed.
+        // (A ray whose origin is OUTSIDE the slab but whose entry cell is occupied falls in here too:
+        // the first-cell check below gives it the slab-face hit at t0 that the interior branch must
+        // not steal — see the note above.)
         int stepX = dir.x >= 0.0 ? 1 : -1;
         int stepZ = dir.z >= 0.0 ? 1 : -1;
         float tDeltaX = abs(dir.x) > 1.0e-8 ? CLOUD_CELL_BLOCKS / abs(dir.x) : 1.0e30;
