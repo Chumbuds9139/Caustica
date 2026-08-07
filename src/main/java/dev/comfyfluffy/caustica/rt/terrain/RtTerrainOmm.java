@@ -81,7 +81,12 @@ final class RtTerrainOmm {
      */
     static RtAccel.OpacityMicromapInput buildInput(int triCount, float[] cornerUv,
                                                    TextureAtlasSprite[] ommSprites, int ommSpriteCount) {
-        if (!RtDeviceBringup.ommEnabled()) {
+        // Two gates, deliberately separate: ommEnabled() is the DEVICE capability latched at RT
+        // bring-up (the Vulkan feature cannot be enabled after device creation), while the config
+        // value is read LIVE here — that is what lets the in-game toggle take effect at the next
+        // section build without a restart (the UI follows up with a full terrain rebuild so existing
+        // sections re-mesh under the new state).
+        if (!RtDeviceBringup.ommEnabled() || !CausticaConfig.Rt.Omm.ENABLED.value()) {
             recordOmmStatsDisabled();
             return null;
         }

@@ -18,6 +18,8 @@
 	"caustica.options.rt.particles.tooltip": "Zeichnet Partikel als Billboards entlang der Kamerastrahlen in der berechneten Szene.",
 	"caustica.options.rt.weatherParticles": "Raytracing-Wetter",
 	"caustica.options.rt.weatherParticles.tooltip": "Zeichnet Regen und Schnee als echte Geometrie in der berechneten Szene. Die Säulen stammen aus Minecrafts eigenem Wettersystem, sodass sie am Boden, an Blättern und unter Dächern korrekt enden und wie gewohnt fallen. Benötigt Raytracing-Partikel.",
+	"caustica.options.rt.omm": "Opacity Micromaps",
+	"caustica.options.rt.omm.tooltip": "Beschleunigt Gras, Laub und andere Cutout-Blöcke, indem der Any-Hit-Test für sichtbar opaque Bereiche übersprungen wird. Bei visuellen Fehlern oder Abstürzen (selten, treiberabhängig) kannst du sie hier deaktivieren; der Terrain wird dann neu aufgebaut. Hinweis: Waren sie beim Spielstart deaktiviert, wird das Vulkan-Feature erst nach erneutem Betreten einer Welt aktiviert.",
 	"caustica.options.rt.rainDensity": "Regendichte",
 	"caustica.options.rt.rainDensity.tooltip": "Wie dicht der raytraced Regen und Schnee erscheinen. 100% ist der volle Vanilla-Platzregen; niedrigere Werte verdünnen die Streifen zu einem Nieselregen. 0% versteckt den Niederschlag, behält aber den bedeckten Himmel.",
 	"caustica.options.rt.glow": "Leuchtkontur von Entitäten",

@@ -18,6 +18,8 @@
 	"caustica.options.rt.particles.tooltip": "在追踪场景中，将粒子绘制为面向相机射线的公告板。",
 	"caustica.options.rt.weatherParticles": "光追天气",
 	"caustica.options.rt.weatherParticles.tooltip": "在追踪场景中将雨雪绘制为真实几何体。这些雨柱来自 Minecraft 自身的天气系统，因此会正确地止于地面、树叶和屋顶之下，并如常降落。需要开启光追粒子。",
+	"caustica.options.rt.omm": "不透明度微映射",
+	"caustica.options.rt.omm.tooltip": "对确定为不透明的区域跳过 any-hit 测试，从而加速草丛、树叶等镂空方块。如果在镂空地形附近出现画面损坏或崩溃（罕见，取决于驱动），可在此关闭——地形会在没有它的情况下重建。注意：如果启动游戏时它是关闭的，需要重新进入世界才会启用该 Vulkan 功能。",
 	"caustica.options.rt.rainDensity": "降雨密度",
 	"caustica.options.rt.rainDensity.tooltip": "控制光线追踪雨雪的浓密程度。100% 是原版完整的大雨；调低数值会让雨丝变稀，成为毛毛细雨。0% 会隐藏降水，但阴云密布的天空、雾和变暗效果仍会跟随天气。",
 	"caustica.options.rt.glow": "实体发光轮廓",

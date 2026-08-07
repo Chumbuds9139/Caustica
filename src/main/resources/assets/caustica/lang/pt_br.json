@@ -37,6 +37,8 @@
 	"caustica.options.rt.particles.tooltip": "Desenha partículas como billboards de raio da câmera dentro da cena traçada.",
 	"caustica.options.rt.weatherParticles": "Clima com traçado de raios",
 	"caustica.options.rt.weatherParticles.tooltip": "Desenha chuva e neve como geometria real dentro da cena traçada. As colunas vêm do próprio sistema de clima do Minecraft, então param corretamente no chão, nas folhas e sob telhados, e caem normalmente. Requer Partículas com traçado de raios.",
+	"caustica.options.rt.omm": "Micromapas de Opacidade",
+	"caustica.options.rt.omm.tooltip": "Acelera grama, folhas e outros blocos com recorte pulando o teste any-hit nas regiões comprovadamente opacas. Se você ver corrupção visual ou travamentos perto de terreno com recorte (raro, depende do driver), desative aqui — o terreno é reconstruído sem elas. Nota: se estavam desativadas ao abrir o jogo, o recurso Vulkan só ativa ao entrar num mundo de novo.",
 	"caustica.options.rt.rainDensity": "Densidade da Chuva",
 	"caustica.options.rt.rainDensity.tooltip": "O quão densa a chuva e a neve com traçado de raios aparecem. 100% é o temporal completo da vanilla; valores menores raleiam os riscos até uma garoa leve. 0% esconde a precipitação, mas o céu nublado, a névoa e o escurecimento continuam seguindo o clima.",
 

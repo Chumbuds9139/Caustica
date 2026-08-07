@@ -11,6 +11,7 @@ import java.util.Locale;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
 import dev.comfyfluffy.caustica.compat.VoxyCompat;
 import dev.comfyfluffy.caustica.rt.terrain.RtDistantHorizonsTerrain;
+import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
@@ -23,12 +24,12 @@ import net.minecraft.network.chat.Component;
  * runtime setting: the initial value is read from the current config, and the value-update listener writes
  * back through {@code set(...)} so changes take effect on the next frame.
  *
- * <p>Only settings the renderer re-reads per-frame are exposed here — toggles that would require a device or
- * buffer-pool rebuild (worker threads, OMM, max-entity capacities, PBR material flags) are intentionally
- * left to the {@code -Dcaustica.*} startup surface. DLSS-RR quality is the exception: the render resolution
- * is queried from NGX for the chosen quality mode on every resize (see
- * {@code RtDlssRr.queryOptimalRenderSize}), and the RR feature itself is recreated live whenever
- * {@code quality} changes (see {@code RtDlssRr.ensureFeature}), so it is safe to expose here.
+ * <p>Only settings the renderer re-reads per-frame — or can apply through a bounded rebuild — are
+ * exposed here. Toggles that would require a device or buffer-pool rebuild (worker threads,
+ * max-entity capacities, PBR material flags) are intentionally left to the {@code -Dcaustica.*}
+ * startup surface. Two exceptions are handled specially: DLSS-RR quality recreates the RR feature
+ * live on change (see {@code RtDlssRr}), and the opacity-micromap toggle is read at section BUILD
+ * time and answered with a full terrain rebuild (see {@code omm()}), so both are safe to expose.
  */
 public final class RtVideoOptions {
     private RtVideoOptions() {
@@ -80,6 +81,7 @@ public final class RtVideoOptions {
             maxBounces(),
             dlssQuality(),
             denoiser(),
+            omm(),
         };
     }
 
@@ -635,5 +637,26 @@ public final class RtVideoOptions {
             OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
             setting.value(),
             setting::set);
+    }
+
+    /**
+     * Opacity micromaps for terrain cutout (grass, leaves...). Unlike the plain {@link #bool} toggles,
+     * flipping this cannot take effect "next frame": already-built BLASes keep the state they were
+     * built with, so the change handler requests a full terrain rebuild and every section re-meshes
+     * under the new gate — the same mechanism F3+A uses, so nothing about it is OMM-specific.
+     *
+     * <p>One asymmetry the tooltip spells out: the underlying Vulkan feature is latched at RT device
+     * bring-up, so a toggle that was OFF at launch only gains device support once the device is
+     * recreated (re-entering a world). Turning it OFF works immediately in every case.
+     */
+    private static OptionInstance<Boolean> omm() {
+        return OptionInstance.createBoolean(
+            "caustica.options.rt.omm",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.omm.tooltip")),
+            CausticaConfig.Rt.Omm.ENABLED.value(),
+            value -> {
+                CausticaConfig.Rt.Omm.ENABLED.set(value);
+                RtTerrain.requestFullClear();
+            });
     }
 }
