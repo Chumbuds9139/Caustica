@@ -549,10 +549,12 @@ public final class RtVideoOptions {
         }
         CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
         boolean supported = RtUpscalerSupport.dlssFrameGenerationSupported();
-        GatedButton button = new GatedButton(310, frameGenerationLabel(), clicked -> {
+        // active=false greys the button out and blocks clicks but leaves hover (and therefore the
+        // tooltip) intact, which is exactly the "visible but unavailable" state the gate wants.
+        Button button = Button.builder(frameGenerationLabel(), clicked -> {
             setting.set(!setting.value());
             clicked.setMessage(frameGenerationLabel());
-        });
+        }).width(310).build();
         button.active = supported;
         button.setTooltip(Tooltip.create(Component.translatable(supported
                 ? "caustica.options.rt.frameGeneration.tooltip"
@@ -564,24 +566,6 @@ public final class RtVideoOptions {
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.frameGeneration"),
                 Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
-    }
-
-    /**
-     * A {@link Button} that reports hover even while inactive ({@code active == false}): vanilla's tooltip
-     * dispatch filters widgets through {@code isMouseOver}, and {@code AbstractWidget.isMouseOver} requires
-     * {@code active} — without this override the greyed-out Frame Generation button could never show the
-     * tooltip explaining why it is grey.
-     */
-    private static final class GatedButton extends Button {
-        private GatedButton(int width, Component message, OnPress onPress) {
-            super(0, 0, width, 20, message, onPress);
-        }
-
-        @Override
-        public boolean isMouseOver(double mouseX, double mouseY) {
-            return this.visible && mouseX >= this.getX() && mouseY >= this.getY()
-                    && mouseX < this.getX() + this.width && mouseY < this.getY() + this.height;
-        }
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {
