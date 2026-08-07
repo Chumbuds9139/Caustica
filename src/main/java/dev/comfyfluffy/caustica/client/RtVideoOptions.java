@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.CausticaConfig.BooleanSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.FloatSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.IntSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
@@ -16,6 +17,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -30,6 +32,12 @@ import net.minecraft.network.chat.Component;
  * startup surface. Two exceptions are handled specially: DLSS-RR quality recreates the RR feature
  * live on change (see {@code RtDlssRr}), and the opacity-micromap toggle is read at section BUILD
  * time and answered with a full terrain rebuild (see {@code omm()}), so both are safe to expose.
+ *
+ * <p>Upscaling group: {@link #qualityOptions(Runnable)} starts with the upscaler selector
+ * (Off / DLSS, plus FSR 3 once its backend lands — see {@code RtUpscalerSupport}), and the rows that
+ * depend on that selection — the quality slider and the Frame Generation toggle — are built from the
+ * currently selected upscaler. Changing the selector reopens the screen through the supplied refresh
+ * callback so those rows switch together with the upscaler instead of lagging one screen behind.
  */
 public final class RtVideoOptions {
     private RtVideoOptions() {
@@ -75,14 +83,27 @@ public final class RtVideoOptions {
 
     // ===== Organized groups for the dedicated RT settings screen =====
 
-    public static OptionInstance<?>[] qualityOptions() {
-        return new OptionInstance<?>[] {
-            spp(),
-            maxBounces(),
-            dlssQuality(),
-            denoiser(),
-            omm(),
-        };
+    /**
+     * Quality section, headed by the upscaler selector. The selector's dependent rows — the quality
+     * slider (DLSS modes today, FSR modes once that backend lands) and, via
+     * {@link #frameGenerationButton()}, the Frame Generation toggle — are derived from the currently
+     * selected upscaler; {@code upscalerChanged} reopens the screen so they switch together with it.
+     * (The old standalone "Denoising Filter" toggle folded into the selector: Off is exactly the raw
+     * full-resolution view the toggle used to select.)
+     */
+    public static OptionInstance<?>[] qualityOptions(Runnable upscalerChanged) {
+        List<OptionInstance<?>> options = new ArrayList<>();
+        options.add(spp());
+        options.add(maxBounces());
+        options.add(upscaler(upscalerChanged));
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(dlssQuality());
+        } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+            options.add(fsrQuality());
+        }
+        options.add(omm());
+        return options.toArray(OptionInstance<?>[]::new);
     }
 
     public static OptionInstance<?>[] generalOptions() {
@@ -463,6 +484,104 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(0, DLSS_QUALITY_ORDER.size() - 1),
             initialPosition,
             position -> setting.set(DLSS_QUALITY_ORDER.get(position)));
+    }
+
+    /**
+     * The upscaler selector: Off (native-resolution trace) / DLSS (Ray Reconstruction denoise + upscale),
+     * plus FSR 3 once its backend reports available (see {@code RtUpscalerSupport.fsrUpscalingAvailable}).
+     * Selection maps onto the existing backend switches ({@code dlss-rr.enabled} / {@code fsr.enabled})
+     * rather than a new setting, so every renderer-side check keeps one source of truth, and the screen
+     * rebuilds through {@code onChanged} so the quality slider and Frame Generation toggle switch together
+     * with the selected upscaler.
+     */
+    private static OptionInstance<String> upscaler(Runnable onChanged) {
+        List<String> values = RtUpscalerSupport.upscalerValues();
+        String initial = RtUpscalerSupport.currentUpscalerMode();
+        if (!values.contains(initial)) {
+            // e.g. fsr.enabled hand-set in the config while no FSR backend is bundled yet: display the
+            // backend that is actually driving the image (DLSS if it is on), not a mode that cannot run.
+            initial = CausticaConfig.Rt.DlssRr.ENABLED.value()
+                    ? RtUpscalerSupport.MODE_DLSS : RtUpscalerSupport.MODE_NONE;
+        }
+        return new OptionInstance<>(
+            "caustica.options.rt.upscaler",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.upscaler.tooltip")),
+            // CycleButton (used for Enum values) already prepends "caption: " itself, so this must return
+            // only the value's text, not caption + value again.
+            (caption, value) -> Component.translatable("caustica.options.rt.upscaler." + value),
+            new OptionInstance.Enum<>(values, Codec.STRING),
+            initial,
+            value -> {
+                RtUpscalerSupport.applyUpscalerMode(value);
+                onChanged.run();
+            });
+    }
+
+    // Same PerfQuality vocabulary as DLSS (the FSR 3 upscaler uses the same mode scale), so until the FSR
+    // backend lands this row reuses the dlssQuality value-name keys; it only becomes reachable once
+    // RtUpscalerSupport.fsrUpscalingAvailable() turns true.
+    private static final List<Integer> FSR_QUALITY_ORDER = List.of(3, 0, 1, 2, 5);
+
+    private static OptionInstance<Integer> fsrQuality() {
+        IntSetting setting = CausticaConfig.Rt.Fsr.QUALITY;
+        int initialQuality = FSR_QUALITY_ORDER.contains(setting.value()) ? setting.value() : 2;
+        int initialPosition = FSR_QUALITY_ORDER.indexOf(initialQuality);
+        return new OptionInstance<>(
+            "caustica.options.rt.fsrQuality",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.fsrQuality.tooltip")),
+            (caption, position) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.dlssQuality." + FSR_QUALITY_ORDER.get(position))),
+            new OptionInstance.IntRange(0, FSR_QUALITY_ORDER.size() - 1),
+            initialPosition,
+            position -> setting.set(FSR_QUALITY_ORDER.get(position)));
+    }
+
+    /**
+     * The DLSS Frame Generation toggle (EXPERIMENTAL). Rides on the selected upscaler: returns null
+     * unless DLSS is active — with no upscaler there is no FG to toggle, and FSR 3 will bring its own
+     * toggle with its backend. Unsupported hardware (per the NGX capability query, or the RTX 40/50
+     * device-name fallback before NGX is up) gets a greyed-out button that stays visible so its tooltip
+     * can explain the requirement — it is not hidden.
+     */
+    public static Button frameGenerationButton() {
+        if (!RtUpscalerSupport.MODE_DLSS.equals(RtUpscalerSupport.currentUpscalerMode())) {
+            return null;
+        }
+        CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
+        boolean supported = RtUpscalerSupport.dlssFrameGenerationSupported();
+        GatedButton button = new GatedButton(310, frameGenerationLabel(), clicked -> {
+            setting.set(!setting.value());
+            clicked.setMessage(frameGenerationLabel());
+        });
+        button.active = supported;
+        button.setTooltip(Tooltip.create(Component.translatable(supported
+                ? "caustica.options.rt.frameGeneration.tooltip"
+                : "caustica.options.rt.frameGeneration.unsupported.tooltip")));
+        return button;
+    }
+
+    private static Component frameGenerationLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.frameGeneration"),
+                Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
+    /**
+     * A {@link Button} that reports hover even while inactive ({@code active == false}): vanilla's tooltip
+     * dispatch filters widgets through {@code isMouseOver}, and {@code AbstractWidget.isMouseOver} requires
+     * {@code active} — without this override the greyed-out Frame Generation button could never show the
+     * tooltip explaining why it is grey.
+     */
+    private static final class GatedButton extends Button {
+        private GatedButton(int width, Component message, OnPress onPress) {
+            super(0, 0, width, 20, message, onPress);
+        }
+
+        @Override
+        public boolean isMouseOver(double mouseX, double mouseY) {
+            return this.visible && mouseX >= this.getX() && mouseY >= this.getY()
+                    && mouseX < this.getX() + this.width && mouseY < this.getY() + this.height;
+        }
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {

@@ -18,9 +18,18 @@ import net.minecraft.network.chat.Component;
  * <p>Layout: Quality / General / Effects / Parallax / Clouds / HDR / Debug / DH / Voxy / Lighting / Tonemapping
  * Each section is a header + small options, with big buttons for refresh actions.
  *
+ * <p>The Quality section starts with the upscaler selector, whose dependent rows (the quality slider and
+ * the Frame Generation toggle) are rebuilt around the selected upscaler: changing the selector reopens
+ * this screen ({@link #rebuildForUpscalerChange}) instead of leaving stale rows behind.
+ *
  * <p>Config persistence: on removed() we call CausticaConfig.save() (same as VideoSettingsScreenMixin did).
  */
 public class RtVideoOptionsScreen extends OptionsSubScreen {
+
+    // Held locally (instead of relying on the superclass fields) so the screen can reopen itself with
+    // the same parent/options when the upscaler selection rebuilds the option rows.
+    private final Screen rtParent;
+    private final Options rtOptions;
 
     // Title + section headers
     private static final Component TITLE = Component.translatable("caustica.options.rt.title");
@@ -39,6 +48,18 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
 
     public RtVideoOptionsScreen(Screen parent, Options options) {
         super(parent, options, TITLE);
+        this.rtParent = parent;
+        this.rtOptions = options;
+    }
+
+    /**
+     * The upscaler selection changes which dependent rows exist (quality slider, Frame Generation
+     * toggle): reopen this screen so the OptionsList rebuilds around the new mode. Config persistence
+     * rides on removed(), which the reopen triggers, so the new selection is saved as well.
+     */
+    private void rebuildForUpscalerChange() {
+        // In 26.2, setScreen moved from Minecraft to Gui (same call VideoSettingsScreenMixin uses).
+        this.minecraft.gui.setScreen(new RtVideoOptionsScreen(this.rtParent, this.rtOptions));
     }
 
     @Override
@@ -52,8 +73,15 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         }
 
         // --- Quality / Performance ---
+        // The upscaler selector heads this section; the DLSS Frame Generation toggle (experimental,
+        // greyed out with a tooltip on unsupported GPUs) follows it only while DLSS is selected —
+        // it rides on the selected upscaler and switches together with it.
         list.addHeader(QUALITY_HEADER);
-        list.addSmall(RtVideoOptions.qualityOptions());
+        list.addSmall(RtVideoOptions.qualityOptions(this::rebuildForUpscalerChange));
+        net.minecraft.client.gui.components.Button frameGeneration = RtVideoOptions.frameGenerationButton();
+        if (frameGeneration != null) {
+            list.addBig(frameGeneration);
+        }
 
         // --- General ---
         list.addHeader(GENERAL_HEADER);
