@@ -60,6 +60,7 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -101,9 +102,15 @@ public final class CausticaConfig {
                         + " Buffer fill and BLAS/OMM preparation run on workers. max-inflight-sections bounds\n"
                         + " the complete snapshot -> worker -> GPU build -> publication lifecycle.");
         FILE.setComment("frame-generation",
-                " DLSS Frame Generation. Default off; gated additionally by hardware/driver availability.\n"
+                " DLSS Frame Generation. Default off; gated additionally by hardware/driver availability\n"
+                        + " (the driver's NGX capability query reports FrameGeneration_Available; RTX 40/50 series only).\n"
                         + " multi-frame-count: frames generated per rendered frame (1 = 2x, 2 = 3x, ...), clamped\n"
                         + " at runtime to the driver's reported DLSSG.MultiFrameCountMax.");
+        FILE.setComment("fsr",
+                " AMD FSR 3 upscaling (experimental). Reserved for the upcoming FidelityFX backend: the\n"
+                        + " Video Settings upscaler selector hides FSR 3 until the FFX runtime shim lands, so nothing\n"
+                        + " consumes these values yet. quality mirrors the DLSS PerfQuality numbering (0 Performance,\n"
+                        + " 1 Balanced, 2 Quality, 3 Ultra Performance, 5 native AA).");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -895,6 +902,24 @@ public final class CausticaConfig {
                     intAtLeast("caustica.rt.fg.multiFrameCount", "frame-generation.multi-frame-count", 1, 1);
 
             private Fg() {
+            }
+        }
+
+        /**
+         * AMD FidelityFX Super Resolution 3 (experimental, follow-up work). These settings exist so the
+         * config surface and the Video Settings upscaler selector are ready for the FSR 3 backend, but no
+         * renderer path consumes them yet: that backend needs its own native shim around the AMD FidelityFX
+         * (ffx_api) Vulkan runtime — mirroring {@code native/ngx_shim} for NGX — plus an {@code RtComposite}
+         * dispatch pass, and lands separately. Until then {@code RtUpscalerSupport.fsrUpscalingAvailable()}
+         * reports false and the selector does not offer FSR 3.
+         */
+        public static final class Fsr {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.fsr", "fsr.enabled", false);
+            /** PerfQuality numbering shared with DLSS: 0 Performance, 1 Balanced, 2 Quality, 3 Ultra
+             *  Performance, 5 native AA (4 Ultra Quality does not exist for the FSR 3 upscaler either). */
+            public static final IntSetting QUALITY = clampedInt("caustica.rt.fsr.quality", "fsr.quality", 2, 0, 5);
+
+            private Fsr() {
             }
         }
 
