@@ -281,7 +281,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // removed. The sheets stay real geometry in the BLAS: terrain still occludes them, the
             // heightmap clip still holds, they just stop participating in lighting.
             if ((payload.flags & PAYLOAD_WEATHER) != 0u) {
-                float weatherSheet = lerp(0.35, 1.0, worldPush.sunDir.w);
+                // Calibrated against feedback from in-game: the first pass (0.35..1.0) read inverted —
+                // far too bright against the near-black night sky and too dark against daylight. The
+                // sheet now nearly vanishes at night and sits well above the texture's own mid-grey in
+                // the day, so streaks read as a light veil over the bright sky.
+                float weatherSheet = lerp(0.12, 1.9, worldPush.sunDir.w);
                 L += throughput * albedo * weatherSheet;
                 break;
             }
