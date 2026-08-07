@@ -113,6 +113,9 @@ public final class CausticaClient implements ClientModInitializer {
 		}
 		// Shut NGX down once, after every feature (RR + FG) has been released above.
 		dev.comfyfluffy.caustica.ngx.NgxRuntime.INSTANCE.shutdown();
+		// Same ordering for the FidelityFX runtime: the FSR context is already released by
+		// RtComposite.destroy() above; this only clears the shared runtime state for the next device.
+		dev.comfyfluffy.caustica.fsr.FsrRuntime.INSTANCE.shutdown();
 		if (ctx != null) {
 			ctx.destroy();
 		}

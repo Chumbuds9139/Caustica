@@ -517,9 +517,9 @@ public final class RtVideoOptions {
             });
     }
 
-    // Same PerfQuality vocabulary as DLSS (the FSR 3 upscaler uses the same mode scale), so until the FSR
-    // backend lands this row reuses the dlssQuality value-name keys; it only becomes reachable once
-    // RtUpscalerSupport.fsrUpscalingAvailable() turns true.
+    // Same PerfQuality vocabulary as DLSS (the FSR 3 upscaler uses the same mode scale), so this row
+    // reuses the dlssQuality value-name keys. Reachable only once the selector offers FSR 3 —
+    // RtUpscalerSupport.fsrUpscalingAvailable() (the bundled FidelityFX runtime) decides that.
     private static final List<Integer> FSR_QUALITY_ORDER = List.of(3, 0, 1, 2, 5);
 
     private static OptionInstance<Integer> fsrQuality() {

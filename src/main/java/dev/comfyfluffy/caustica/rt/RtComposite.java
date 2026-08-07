@@ -62,6 +62,7 @@ import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
@@ -403,6 +404,10 @@ public final class RtComposite {
     // toggled) at a fixed window size is noticed even though displayW/displayH didn't change.
     private boolean renderSizeRrEnabled;
     private int renderSizeRrQuality = Integer.MIN_VALUE;
+    // FSR 3 occupies the same upscale slot as RR (never both): its state joins the render-size key
+    // so switching upscaler or FSR quality rebuilds the trace targets exactly like RR does.
+    private boolean renderSizeFsrEnabled;
+    private int renderSizeFsrQuality = Integer.MIN_VALUE;
 
     // Motion-vector reprojection state: the previous frame's camera-relative view-projection and
     // camera position, read into the push constant each frame then advanced at frame end.
@@ -915,10 +920,15 @@ public final class RtComposite {
     private void ensureOutput(RtContext ctx, int width, int height) {
         boolean rrEnabled = RtDlssRr.enabled();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
+        // FSR 3 only takes the upscale slot when RR is not running (the selector makes them
+        // mutually exclusive, but a hand-edited config could enable both — RR wins).
+        boolean fsrEnabled = !rrEnabled && RtFsrUpscaler.enabled();
+        int fsrQuality = fsrEnabled ? RtFsrUpscaler.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
-                && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
+                && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
+                && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality) {
             syncRestirResources(ctx);
             return;
         }
@@ -927,6 +937,8 @@ public final class RtComposite {
         // ensureFeature again in that state, so the RR feature (and its history buffers) would stay
         // allocated for the rest of the session; the device is idle right now, so release it here.
         RtDlssRr.INSTANCE.releaseIfDisabled();
+        // Same reasoning for the FSR context (its history textures) when the upscaler switches away.
+        RtFsrUpscaler.INSTANCE.releaseIfDisabled();
         if (displayImage != null) {
             displayImage.destroy();
         }
@@ -945,16 +957,27 @@ public final class RtComposite {
 
         displayW = width;
         displayH = height;
-        // The path tracer + its guide buffers run at render res; DLSS-RR (or a fallback blit) upscales
-        // to display res. With RR off there is no reconstruction pass, so trace at 1:1 for a faithful reference.
-        // With RR on, ask NGX what render resolution its chosen quality mode actually expects rather
-        // than assuming a fixed ratio: different quality modes (and driver versions) use different
-        // ratios, and DLSSD's own optimal-settings query is the source of truth for what it will accept.
-        int[] optimal = rrEnabled ? RtDlssRr.INSTANCE.queryOptimalRenderSize(width, height) : null;
+        // The path tracer + its guide buffers run at render res; the active upscaler — DLSS-RR
+        // (denoise + upscale) or FSR 3 (upscale only) — or a fallback blit brings the image to
+        // display res. With neither active there is no reconstruction pass, so trace at 1:1 for a
+        // faithful reference. With one active, ask IT what render resolution its chosen quality
+        // mode actually expects rather than assuming a fixed ratio: different quality modes (and
+        // driver/SDK versions) use different ratios, and each upscaler's own query is the source
+        // of truth for what its dispatch will accept.
+        int[] optimal;
+        if (rrEnabled) {
+            optimal = RtDlssRr.INSTANCE.queryOptimalRenderSize(width, height);
+        } else if (fsrEnabled) {
+            optimal = RtFsrUpscaler.INSTANCE.queryRenderSize(width, height);
+        } else {
+            optimal = null;
+        }
         renderW = optimal != null ? optimal[0] : width;
         renderH = optimal != null ? optimal[1] : height;
         renderSizeRrEnabled = rrEnabled;
         renderSizeRrQuality = rrQuality;
+        renderSizeFsrEnabled = fsrEnabled;
+        renderSizeFsrQuality = fsrQuality;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
         // mapping seam. displayImage stays R8G8B8A8 to match the main target it is copied into
@@ -1029,13 +1052,21 @@ public final class RtComposite {
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
-            // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
-            // Jitter is suppressed for the no-RR reference and for the debug guide views (raw inspection).
+            // The active upscaler drives the frame: trace + jitter at render res, then DLSS-RR
+            // (denoise+upscale) or FSR 3 (upscale only) brings it to display res. They occupy one
+            // slot — RR wins if both are somehow on — and jitter is suppressed for the no-upscaler
+            // reference and for the debug guide views (raw inspection).
             boolean rrPath = RtDlssRr.enabled() && debugView == 0;
+            boolean fsrPath = !rrPath && RtFsrUpscaler.enabled() && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
                 CausticaJitter.INSTANCE.prepare(renderW, renderH, displayW);
+                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
+                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+            } else if (fsrPath) {
+                // Same Halton(2,3) sequence, FSR 3's own phase-count rule (see CausticaJitter).
+                CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
@@ -1261,9 +1292,22 @@ public final class RtComposite {
                 }
             }
 
-            // When DLSS-RR did not produce the display-res image (disabled, debug view, or a runtime
+            // FSR 3 occupies the same slot when RR is not running: same inputs minus the RR guide
+            // buffers (color + depth + motion vectors), output straight into rrOutput so the rest of
+            // the frame (exposure metering, display mapping) is untouched.
+            if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.fsr")) {
+                    // Vertical FOV from the (unjittered) level projection, for FSR's depth heuristic.
+                    float fovY = (float) (2.0 * Math.atan(1.0 / frameProjection.m11()));
+                    rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), output, gDepth, gMotion, rrOutput,
+                            renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
+                }
+            }
+
+            // When no upscaler produced the display-res image (disabled, debug view, or a runtime
             // failure), bring the render-res trace up to display res with a linear blit so the display mapper
-            // always has a display-res RT image. With RR off render == display, so this is a 1:1 copy.
+            // always has a display-res RT image. With no upscaler render == display, so this is a 1:1 copy.
             if (!rrDone) {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
@@ -1857,6 +1901,8 @@ public final class RtComposite {
         // have been turned off after a feature was already created. destroy() is a no-op when nothing
         // was ever allocated, so asking it every time is what guarantees the feature is released.
         RtDlssRr.INSTANCE.destroy();
+        // Same contract for the FSR context (no-op when it was never created).
+        RtFsrUpscaler.INSTANCE.destroy();
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;

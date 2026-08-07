@@ -107,10 +107,11 @@ public final class CausticaConfig {
                         + " multi-frame-count: frames generated per rendered frame (1 = 2x, 2 = 3x, ...), clamped\n"
                         + " at runtime to the driver's reported DLSSG.MultiFrameCountMax.");
         FILE.setComment("fsr",
-                " AMD FSR 3 upscaling (experimental). Reserved for the upcoming FidelityFX backend: the\n"
-                        + " Video Settings upscaler selector hides FSR 3 until the FFX runtime shim lands, so nothing\n"
-                        + " consumes these values yet. quality mirrors the DLSS PerfQuality numbering (0 Performance,\n"
-                        + " 1 Balanced, 2 Quality, 3 Ultra Performance, 5 native AA).");
+                " AMD FSR 3 upscaling (experimental): upscales the path-traced image WITHOUT denoising,\n"
+                        + " so raw-trace noise follows the SPP setting until the NRD denoiser lands. quality\n"
+                        + " mirrors the DLSS PerfQuality numbering (0 Performance, 1 Balanced, 2 Quality,\n"
+                        + " 3 Ultra Performance, 5 native AA). The runtime is bundled for Windows only for\n"
+                        + " now; elsewhere the upscaler selector does not offer FSR 3.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -906,12 +907,11 @@ public final class CausticaConfig {
         }
 
         /**
-         * AMD FidelityFX Super Resolution 3 (experimental, follow-up work). These settings exist so the
-         * config surface and the Video Settings upscaler selector are ready for the FSR 3 backend, but no
-         * renderer path consumes them yet: that backend needs its own native shim around the AMD FidelityFX
-         * (ffx_api) Vulkan runtime — mirroring {@code native/ngx_shim} for NGX — plus an {@code RtComposite}
-         * dispatch pass, and lands separately. Until then {@code RtUpscalerSupport.fsrUpscalingAvailable()}
-         * reports false and the selector does not offer FSR 3.
+         * AMD FidelityFX Super Resolution 3 (experimental). Drives the FSR 3 upscaler backend
+         * ({@code RtFsrUpscaler} over {@code native/fsr_shim} + the signed AMD FidelityFX Vulkan
+         * runtime): FSR 3 upscales without denoising, so the raw trace quality follows SPP until the
+         * NRD denoiser lands — the UI labels it experimental accordingly. The runtime is bundled for
+         * Windows only for now; where it is absent the upscaler selector does not offer FSR 3.
          */
         public static final class Fsr {
             public static final BooleanSetting ENABLED = bool("caustica.rt.fsr", "fsr.enabled", false);

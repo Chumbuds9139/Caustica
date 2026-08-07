@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.fsr.FsrRuntime;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
@@ -63,15 +64,14 @@ public final class RtUpscalerSupport {
     }
 
     /**
-     * Whether the AMD FSR 3 upscaler can run on this system. FSR 3.1 is technically viable here — the
-     * AMD FidelityFX API ships a Vulkan implementation of the upscaler (and the FFX device-extension
-     * groundwork this mod enables at vkCreateDevice time was laid for it) — but the runtime backend
-     * (an FFX shim mirroring native/ngx_shim + an RtComposite dispatch pass) does not exist yet and
-     * lands as follow-up work. Flipping this to a real availability check is what unlocks the third
-     * selector value.
+     * Whether the AMD FSR 3 upscaler can run on this system. The backend (native/fsr_shim wrapping
+     * the signed AMD FidelityFX Vulkan runtime, bundled per-platform by gradle) is Windows-only for
+     * now — the SDK ships prebuilt runtimes for Windows, and a Linux build means compiling the
+     * ffx-api VK backend from source (follow-up). Where the runtime is not bundled the selector
+     * simply does not offer FSR 3.
      */
     public static boolean fsrUpscalingAvailable() {
-        return false;
+        return FsrRuntime.platformSupported();
     }
 
     /**
