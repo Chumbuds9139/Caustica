@@ -292,7 +292,15 @@ void main(inout Payload payload) {
     float3 skyAmbient = col;
 
     // Sun/Moon discs - keep original logic, sun size unchanged as requested
-    float discVisible = cloudsEnabled(worldPush) ? 1.0 : 1.0 - rainStrength;
+    //
+    // Rain hides the discs outright. It used to be `cloudsEnabled ? 1.0 : 1.0 - rainStrength` — i.e.
+    // with clouds on the discs were left 100% visible on the bet that the deck would cover them. But
+    // the deck is a shape (authored cells / noise), and any gap in it let the full sun punch straight
+    // through onto the terrain during a downpour, exactly when the sky is supposed to be closed. The
+    // discs now fade out with the rain lane itself, independently of the deck: the storm's overcast is
+    // a STATE, not an occlusion lottery. Cloud gaps in lesser weather still hide/show the discs
+    // geometrically via the cloudLayer composite below, as before.
+    float discVisible = 1.0 - rainStrength;
     if (showCelestial && discVisible > 0.0) {
         float2 local;
         squareBody(dir, sd, SUN_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
