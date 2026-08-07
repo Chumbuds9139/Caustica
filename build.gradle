@@ -363,6 +363,54 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 
 sourceSets.main.resources.srcDir(files(ngxNativeGenRoot).builtBy(bundleNgxNatives))
 
+// ===== AMD FSR natives (optional) =====
+// FSR 3 rides the AMD FidelityFX runtime: native/fsr_shim builds fsrshim.dll against the SDK's
+// signed prebuilt amd_fidelityfx_vk.dll and copies the runtime next to it. Bundling is OPT-IN —
+// a checkout without the built shim (every non-Windows host today) still builds the mod, with the
+// upscaler selector simply not offering FSR 3.
+def fsrNativeGenRoot = layout.buildDirectory.dir("generated/fsr-natives")
+def fsrShimOutDir = new File(layout.buildDirectory.dir("native/fsr_shim").get().asFile, "release")
+
+def bundleFsrNatives = tasks.register("bundleFsrNatives") {
+	group = "build"
+	description = "Bundles the FSR shim and AMD FidelityFX runtime into the mod resources (when built)."
+
+	inputs.files(fileTree(fsrShimOutDir) {
+		include "fsrshim.dll"
+		include "amd_fidelityfx_vk.dll"
+	}).withPropertyName("fsrNatives.windows-x64")
+	outputs.dir(fsrNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(fsrNativeGenRoot)
+		def shimFiles = fileTree(fsrShimOutDir) {
+			include "fsrshim.dll", "amd_fidelityfx_vk.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("FSR natives not found in ${fsrShimOutDir}; bundling without FSR support.")
+			return
+		}
+		def missing = ["fsrshim.dll", "amd_fidelityfx_vk.dll"].findAll { name ->
+			shimFiles.every { it.name != name }
+		}
+		if (!missing.empty) {
+			logger.warn("Incomplete FSR natives in ${fsrShimOutDir} (missing ${missing.join(', ')}); " +
+					"bundling without FSR support.")
+			return
+		}
+		copy {
+			from(fsrShimOutDir) {
+				include "fsrshim.dll", "amd_fidelityfx_vk.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into fsrNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(fsrNativeGenRoot).builtBy(bundleFsrNatives))
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }

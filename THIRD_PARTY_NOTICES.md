@@ -30,3 +30,20 @@ Bundled NVIDIA SDK runtime libraries may include files matching:
 
 Caustica's `ngxshim` native library is project-owned glue code and follows
 Caustica's project license unless otherwise noted.
+
+## AMD FidelityFX SDK (FSR 3)
+
+Caustica can build and distribute release artifacts that include AMD FidelityFX
+runtime components for FSR 3 upscaling. The signed `amd_fidelityfx_vk.dll`
+runtime is provided by AMD under the FidelityFX SDK license (MIT) and is not
+part of Caustica's LGPL grant:
+
+<https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/main/LICENSE.txt>
+
+Redistribution and use of those components must comply with AMD's license
+terms. Bundled AMD runtime libraries may include files matching:
+
+- `caustica/natives/windows-x64/amd_fidelityfx_vk.dll`
+
+Caustica's `fsrshim` native library is project-owned glue code and follows
+Caustica's project license unless otherwise noted.
