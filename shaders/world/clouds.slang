@@ -6,20 +6,22 @@
 // hid the celestial discs "behind the cloud deck" during rain, but nothing ever drew that deck. This
 // module is that deck.
 //
-// TWO STYLES, ONE FIELD. cloudCoverageField is the single source of truth for WHERE clouds are; both
-// styles, and the shadow query, are built on that same 2D map, so a cloud and the shadow it casts are
-// always in the same place. (The volumetric style then erodes that map into 3D detail, so its shadow is
-// a coverage-accurate approximation rather than a per-lobe match — see cloudSunShadow.)
-//   * CLOUD_STYLE_CLASSIC — vanilla's blocky clouds. Coverage is quantised to the 12-block cell grid,
-//     so the silhouette is genuinely square-edged, and the slab is marched as a BOX: real 3D cuboids
-//     with lit tops, shaded undersides and visibly darker vertical sides, exactly like vanilla's cloud
-//     geometry. At zero thickness it collapses to the old flat sheet.
-//   * CLOUD_STYLE_VOLUMETRIC — billowy, photoreal cumulus. The same coverage map drives a domain-warped
-//     fBm density with a cauliflower erosion profile, marched with light-marched self-shadowing,
-//     Beer-Lambert extinction, a dual-lobe Henyey-Greenstein phase and a powder (dark-edge) term.
+// TWO STYLES, TWO SHAPE SOURCES. Where clouds are is answered differently per style, and cloudCoverage
+// is the one place both answers live — so the visible deck and the shadow it casts always agree.
+//   * CLOUD_STYLE_CLASSIC — vanilla's blocky clouds, from vanilla's own SHAPE: the clouds.png cell map
+//     (one 12-block cell per pixel, bit-packed into the BDA ring by RtComposite). With real thickness
+//     the deck is intersected ANALYTICALLY — each occupied cell is an axis-aligned box and the ray walks
+//     the cell grid to the first one (cloudClassicBoxes), which is exact and needs no march at all.
+//     Colour is EnvironmentAttributes.CLOUD_COLOR — the game's own per-weather value — so a storm greys
+//     the deck with no hand-tuned ramp. At zero thickness it collapses to the flat sheet. If the map is
+//     unavailable the style degrades to the old noise-quantised deck rather than to nothing.
+//   * CLOUD_STYLE_VOLUMETRIC — billowy, photoreal cumulus. cloudCoverageField (three octaves of value
+//     noise) drives a domain-warped fBm density with a cauliflower erosion profile, marched with
+//     light-marched self-shadowing, Beer-Lambert extinction, a dual-lobe Henyey-Greenstein phase and a
+//     powder (dark-edge) term. Its field and shape are deliberately untouched by the classic rework.
 //
-// BOTH styles are marched volumes now, and both are driven by the same thickness slider, so "3D" is not
-// a property of one style — it is a property of the deck, and the style only decides its shape language.
+// Both styles honour the same thickness slider; the weather fill (cloudColor.w) closes either sky
+// completely in a storm.
 //
 // DEPTH-CORRECT AGAINST THE WORLD. Every entry point that produces visible cloud takes the distance to
 // the nearest scene hit and stops there, so terrain in front of a cloud occludes it. Getting this wrong
@@ -116,15 +118,37 @@ public static const float CLOUD_POWDER_STRENGTH = 0.7; // dark-edge / multiple-s
 // thickness rather than looking like translucent haze.
 public static const float CLOUD_CLASSIC_EXTINCTION_SCALE = 6.0;
 
+// ---- Authored cell map (classic style).
+//
+// The classic deck reads its SHAPE from vanilla's own textures/environment/clouds.png, uploaded by
+// RtComposite into this frame's BDA ring slot as a bit-packed occupancy bitmap (one bit per pixel,
+// 256x256, one pixel = one 12-block cell; a cell counts as cloud when its alpha is >= 10 — vanilla's
+// isCellEmpty threshold). Cloud shape is therefore AUTHORED data, exactly what vanilla extrudes,
+// instead of an emergent property of the noise field below — which is what stops "fix one classic
+// bug, surface another" from happening: there is no coverage threshold to tune against the shape.
+//
+// The map is exactly periodic over 256 cells * 12 blocks = 3072 blocks. The anchor RtComposite pushes
+// is wrapped to 24576 blocks, an exact multiple of 3072, so the wrap is seamless by construction —
+// the same property the noise field needs its power-of-two constants for, for free.
+public static const int   CLOUD_CELL_MAP_CELLS = 256;
+public static const int   CLOUD_CELL_MAP_MASK = CLOUD_CELL_MAP_CELLS - 1;
+// Longest cell walk a single classic ray may perform. A near-horizontal ray inside the slab could in
+// principle cross the whole view limit (3072/12 = 256 cells); the cap sits above that so the walk can
+// always finish, while a pathological configuration can never turn the deck into an unbounded loop.
+public static const int   CLOUD_CLASSIC_MAX_CROSSINGS = 320;
+
 /**
  * Whether this frame draws clouds at all. Coverage or opacity at zero answers false, so the player
  * sliders bottoming out costs one comparison rather than a wasted intersection, and every consumer
  * short-circuits to the exact pre-cloud result (bit-identical output when the feature is off).
  */
 public bool cloudsEnabled(WorldPush push) {
+    // clouds.x is the PLAYER coverage only (the weather fill rides cloudColor.w) — so the deck stays
+    // on when either one is non-zero. Gating on the slider alone would make a coverage-0 setting
+    // remove the storm's overcast along with the clear-sky clouds.
     return push.dimension == DIMENSION_OVERWORLD
         && worldFeature(push, FEATURE_CLOUDS)
-        && push.clouds.x > 0.0
+        && (push.clouds.x > 0.0 || push.cloudColor.w > 0.0)
         && push.clouds.y > 0.0;
 }
 
@@ -182,28 +206,70 @@ public float cloudCoverageField(float2 samplePos) {
 }
 
 /**
+ * One authored cell from the clouds.png occupancy bitmap (see CLOUD_CELL_MAP_CELLS). `cell` is in
+ * 12-block cell space; the map wraps at 256, matching the texture's own tiling.
+ */
+bool cloudCellOccupied(WorldPush push, int2 cell) {
+    int2 c = int2(cell.x & CLOUD_CELL_MAP_MASK, cell.y & CLOUD_CELL_MAP_MASK);
+    uint index = uint(c.y * CLOUD_CELL_MAP_CELLS + c.x);
+    ConstPtr<uint> map = ConstPtr<uint>(push.cloudCellsAddr);
+    return (map[index >> 5u] & (1u << (index & 31u))) != 0u;
+}
+
+/**
  * Coverage resolved into a 0..1 "how much cloud is here" for the current style.
  *
- * Classic QUANTISES to the cell grid: vanilla's clouds are axis-aligned quads on a 12-block lattice, so
- * a cell is either cloud or it is not. Sampling the field at the cell centre (rather than smoothstepping
- * the interpolated value) is what produces genuinely square edges instead of a soft blob that merely
- * looks low-resolution.
+ * The two lanes it reads: push.clouds.x is the PLAYER coverage (the slider: the fraction of sky the
+ * deck keeps in clear weather), push.cloudColor.w is the WEATHER fill (RtComposite ramps it toward 1
+ * as rain/thunder close in). They stay separate all the way to the shader because the classic and
+ * volumetric styles fold them together differently.
+ *
+ * CLASSIC reads the authored map. A cell is cloud when it is authored AND survives the slider's
+ * thinning, OR when the weather has filled it in:
+ *   * the per-cell hashes are evaluated on the cell index reduced to the map's own 256 period, so a
+ *     given authored cell gets the SAME decision in every 3072-block tile — thinning or filling it
+ *     differently across tiles would seam the sky at the wrap;
+ *   * both tests are monotone in their input and stable over time, so raising the slider or a rising
+ *     rain level only ever ADDS cells, and a full storm covers the whole sky (the old noise-quantised
+ *     path topped out short of that and left punched holes right under the threshold — the reported
+ *     bug 3);
+ *   * with no weather and the slider at 1 the deck is exactly the clouds.png pattern — vanilla's own
+ *     mix of large masses, small puffs and empty gaps, which no amount of noise tuning reproduces.
+ * The quantised cell-centre sampling of the old path is gone with it: occupancy is a bitmap lookup,
+ * so there is no threshold-vs-edge interaction left to produce holes.
+ *
+ * VOLUMETRIC keeps its smooth noise ramp, fed the weather-merged coverage. Full overcast short-
+ * circuits to exactly 1: smoothstep never reaches 1 below threshold + EDGE, so a plain merge would
+ * keep a residue of pinholes at "100%" coverage — and a storm sky has no pinholes.
+ *
+ * When the authored map is unavailable (cloudCellsAddr == 0 — texture missing, or a pack replaced it
+ * with something non-256x256) the classic style degrades to the OLD noise-quantised deck rather than
+ * to nothing, driven by the merged coverage so weather still closes the sky on that path.
  */
 public float cloudCoverage(WorldPush push, float2 samplePos) {
-    float threshold = 1.0 - clamp(push.clouds.x, 0.0, 1.0);
+    float retain = clamp(push.clouds.x, 0.0, 1.0);
+    float fill = clamp(push.cloudColor.w, 0.0, 1.0);
     if (cloudStyle(push) == CLOUD_STYLE_CLASSIC) {
-        // Snap to the cell centre so every point inside one cell gets the identical answer -> hard,
-        // axis-aligned edges exactly on the 12-block grid.
-        //
-        // The +EDGE*0.5 offset makes the two styles cover the SAME fraction of sky. The volumetric
-        // ramp crosses 0.5 at threshold + EDGE/2, so a hard cut at the bare threshold would call every
-        // partially-covered cell "full" and leave the classic sky markedly more overcast than the
-        // volumetric one at an identical coverage setting — switching style would look like the weather
-        // changed. Cutting at the ramp's own midpoint is what keeps them equivalent (measured: mean
-        // coverage 0.32 vs 0.36, and it is also where the correlation between the two peaks).
-        float2 cellCentre = (floor(samplePos / CLOUD_CELL_BLOCKS) + 0.5) * CLOUD_CELL_BLOCKS;
-        return cloudCoverageField(cellCentre) > threshold + CLOUD_EDGE_SOFTNESS * 0.5 ? 1.0 : 0.0;
+        if (push.cloudCellsAddr == 0u) {
+            float merged = retain + (1.0 - retain) * fill;
+            float threshold = 1.0 - clamp(merged, 0.0, 1.0);
+            float2 cellCentre = (floor(samplePos / CLOUD_CELL_BLOCKS) + 0.5) * CLOUD_CELL_BLOCKS;
+            return cloudCoverageField(cellCentre) > threshold + CLOUD_EDGE_SOFTNESS * 0.5 ? 1.0 : 0.0;
+        }
+        if (fill >= 1.0) {
+            return 1.0; // a full storm is a full sky — skip the lookup entirely
+        }
+        int2 cell = int2(floor(samplePos / CLOUD_CELL_BLOCKS));
+        int2 wrapped = int2(cell.x & CLOUD_CELL_MAP_MASK, cell.y & CLOUD_CELL_MAP_MASK);
+        bool authored = cloudCellOccupied(push, cell) && cloudHash(wrapped) < retain;
+        bool filled = cloudHash(wrapped + int2(127, 61)) < fill;
+        return (authored || filled) ? 1.0 : 0.0;
     }
+    float coverage = retain + (1.0 - retain) * fill;
+    if (coverage >= 1.0) {
+        return 1.0;
+    }
+    float threshold = 1.0 - clamp(coverage, 0.0, 1.0);
     return smoothstep(threshold, threshold + CLOUD_EDGE_SOFTNESS, cloudCoverageField(samplePos));
 }
 
@@ -324,25 +390,186 @@ public float cloudSunShadow(WorldPush push, float3 pointRel, float3 lightDir) {
 // ---- Classic (vanilla-style) shading -------------------------------------------------------------
 
 /**
- * Flat deck radiance, shaded like vanilla's cloud quads: a distinctly brighter top, a darker underside,
- * and a mid-tone for grazing/side views, so the deck reads as a solid box of cloud rather than a decal.
+ * Classic face shading, shared by the flat path and the analytic boxes. Vanilla shades cloud faces by
+ * ORIENTATION with flat, constant tones — no smooth lighting model: top bright, underside markedly
+ * darker, vertical sides in between. `faceLight` is that tone, picked by the caller from the face the
+ * ray actually meets (which is a real geometric normal for boxes, and the view direction for the flat
+ * sheet).
  *
  * Lit from worldPush.lightRadiance — the SAME value the ground's NEE uses — so the clouds ride every
  * curve the rest of the frame already follows: they redden through sunset on the atmosphere's own
  * transmittance, dim under the weather attenuation, and go to a dark sky-lit grey at night when the
  * moon takes over. Hand-picking a cloud colour is what makes cloud layers look pasted on.
  */
-float3 cloudRadianceClassic(WorldPush push, CloudHit h, float3 dir, float3 skyBehind) {
+float3 cloudRadianceClassic(WorldPush push, float faceLight, float3 albedo, float3 skyBehind) {
     float3 sunRadiance = push.lightRadiance.xyz;
-    // Vanilla shades cloud faces by orientation, not by a lighting model. Reproduce that: the face we
-    // are looking at is the top when the ray travels downward onto it, the bottom when it travels up.
-    float grazing = 1.0 - abs(dir.y);            // 1 looking along the deck, 0 straight up/down
-    float faceLight = h.fromBelow ? 0.52 : 1.0;  // vanilla's bottom face is markedly darker
-    faceLight = lerp(faceLight, 0.78, grazing);  // side faces sit between the two
-    float3 lit = CLOUD_ALBEDO * CLOUD_INV_PI * sunRadiance * faceLight;
+    float3 lit = albedo * CLOUD_INV_PI * sunRadiance * faceLight;
     // The classic deck is opaque, so it admits only a little sky fill — enough to keep it from going
     // black at night, when sunRadiance is near zero.
     return lit + skyBehind * 0.45;
+}
+
+/** Classic face tone for a unit face normal (see cloudRadianceClassic). */
+float cloudClassicFaceTone(float3 normal) {
+    if (normal.y > 0.5) {
+        return 1.0;   // top face
+    }
+    if (normal.y < -0.5) {
+        return 0.52;  // underside — vanilla's bottom face is markedly darker
+    }
+    return 0.78;      // vertical sides sit between the two
+}
+
+/**
+ * The classic deck as REAL vanilla geometry: one 12x12-block box per authored clouds.png cell,
+ * intersected analytically. No march, no density field — a cell is an axis-aligned box spanning the
+ * slab, so the ray's crossing of the deck is a walk over the 2D cell grid (Amanatides & Woo style)
+ * inside the slab's t-interval, stopping at the first occupied cell. That is exact by construction,
+ * and it is what makes the classic style cheaper than a short march instead of the most expensive one:
+ * the typical ray visits one or two cells.
+ *
+ * Two entry cases. An OUTSIDE ray meets the first occupied cell at the cell-boundary crossing the walk
+ * arrives at — except when it enters the slab inside that cell, in which case the visible face is the
+ * slab's top/bottom plane, exactly the face vanilla extrudes toward the viewer. A ray whose ORIGIN sits
+ * inside an occupied box (the camera flying through a cloud) instead sees the box's exit face — vanilla
+ * draws those interior faces for exactly this case (its FLAG_INSIDE_FACE ring).
+ *
+ * Depth is bounded by maxDistance like every other cloud entry point, so terrain in front of a box
+ * occludes it; the horizon fade matches the other paths so the deck ends where they end.
+ */
+CloudVolume cloudClassicBoxes(WorldPush push, float3 originRel, float3 dir, float maxDistance,
+                              float3 skyBehind) {
+    CloudVolume result;
+    result.scatter = float3(0.0, 0.0, 0.0);
+    result.transmittance = 1.0;
+
+    float thickness = max(push.cloudAnchor.z, 1.0);
+    float slabBottom = push.clouds.w - thickness * 0.5 - originRel.y;
+    float slabTop = push.clouds.w + thickness * 0.5 - originRel.y;
+
+    // Slab entry/exit along the ray — identical bounds to cloudMarch, so both paths agree about where
+    // the deck starts and stops for a given ray.
+    float t0, t1;
+    if (abs(dir.y) < 1.0e-6) {
+        if (slabBottom > 0.0 || slabTop < 0.0) {
+            return result; // parallel and outside the slab
+        }
+        t0 = 0.0;
+        t1 = push.cloudAnchor.w;
+    } else {
+        float ta = slabBottom / dir.y;
+        float tb = slabTop / dir.y;
+        t0 = min(ta, tb);
+        t1 = max(ta, tb);
+    }
+    t0 = max(t0, 0.0);
+    t1 = min(t1, min(maxDistance, push.cloudAnchor.w));
+    if (t1 <= t0) {
+        return result;
+    }
+    float horizon = length(dir.xz) * t0;
+    float fade = 1.0 - smoothstep(push.cloudAnchor.w * 0.55, push.cloudAnchor.w, horizon);
+    if (fade <= 0.0) {
+        return result;
+    }
+
+    // Grid walk happens in anchored deck space (anchor + camera-relative), where the authored cells are
+    // axis-aligned and exactly periodic; y stays camera-relative because the slab bounds already are.
+    float2 gridOrigin = push.cloudAnchor.xy + originRel.xz;
+    float2 p0 = gridOrigin + dir.xz * t0;
+    int2 cell = int2(floor(p0 / CLOUD_CELL_BLOCKS));
+
+    float tHit = -1.0;
+    float3 normal = float3(0.0, 1.0, 0.0);
+
+    if (cloudCellOccupied(push, cell)) {
+        // Origin is inside an occupied box: the visible surface is the box face the ray EXITS through.
+        float tExitX = 1.0e30;
+        if (abs(dir.x) > 1.0e-8) {
+            float boundX = dir.x > 0.0 ? (float(cell.x) + 1.0) * CLOUD_CELL_BLOCKS
+                                       : float(cell.x) * CLOUD_CELL_BLOCKS;
+            tExitX = (boundX - gridOrigin.x) / dir.x;
+        }
+        float tExitZ = 1.0e30;
+        if (abs(dir.z) > 1.0e-8) {
+            float boundZ = dir.z > 0.0 ? (float(cell.y) + 1.0) * CLOUD_CELL_BLOCKS
+                                       : float(cell.y) * CLOUD_CELL_BLOCKS;
+            tExitZ = (boundZ - gridOrigin.y) / dir.z;
+        }
+        float tExitY = dir.y > 0.0 ? slabTop / max(dir.y, 1.0e-8) : slabBottom / min(dir.y, -1.0e-8);
+        if (tExitY <= tExitX && tExitY <= tExitZ) {
+            tHit = tExitY;
+            // Seen from inside, the ceiling IS the underside and the floor the top face — shade by the
+            // face's own identity, not the viewing side, so the interior reads like vanilla's boxes.
+            normal = float3(0.0, dir.y > 0.0 ? -1.0 : 1.0, 0.0);
+        } else if (tExitX <= tExitZ) {
+            tHit = tExitX;
+            normal = float3(dir.x > 0.0 ? -1.0 : 1.0, 0.0, 0.0);
+        } else {
+            tHit = tExitZ;
+            normal = float3(0.0, 0.0, dir.z > 0.0 ? -1.0 : 1.0);
+        }
+        if (tHit >= t1) {
+            return result; // leaves the box beyond the bounded interval
+        }
+    } else {
+        // Outside: walk the grid from the slab entry point until an occupied cell is crossed.
+        int stepX = dir.x >= 0.0 ? 1 : -1;
+        int stepZ = dir.z >= 0.0 ? 1 : -1;
+        float tDeltaX = abs(dir.x) > 1.0e-8 ? CLOUD_CELL_BLOCKS / abs(dir.x) : 1.0e30;
+        float tDeltaZ = abs(dir.z) > 1.0e-8 ? CLOUD_CELL_BLOCKS / abs(dir.z) : 1.0e30;
+        float edgeX = dir.x >= 0.0 ? (float(cell.x) + 1.0) * CLOUD_CELL_BLOCKS
+                                   : float(cell.x) * CLOUD_CELL_BLOCKS;
+        float edgeZ = dir.z >= 0.0 ? (float(cell.y) + 1.0) * CLOUD_CELL_BLOCKS
+                                   : float(cell.y) * CLOUD_CELL_BLOCKS;
+        float tMaxX = abs(dir.x) > 1.0e-8 ? (edgeX - p0.x) / dir.x + t0 : 1.0e30;
+        float tMaxZ = abs(dir.z) > 1.0e-8 ? (edgeZ - p0.y) / dir.z + t0 : 1.0e30;
+        // The slab entry point itself may already sit in an occupied cell — then the face seen is the
+        // slab's own top/bottom plane, not a cell wall.
+        if (cloudCellOccupied(push, cell)) {
+            tHit = t0;
+            normal = float3(0.0, dir.y > 0.0 ? -1.0 : 1.0, 0.0);
+        } else {
+            for (int i = 0; i < CLOUD_CLASSIC_MAX_CROSSINGS; i++) {
+                float tNext;
+                int3 stepAxis;
+                if (tMaxX < tMaxZ) {
+                    tNext = tMaxX;
+                    cell.x += stepX;
+                    tMaxX += tDeltaX;
+                    stepAxis = int3(stepX, 0, 0);
+                } else {
+                    tNext = tMaxZ;
+                    cell.y += stepZ;
+                    tMaxZ += tDeltaZ;
+                    stepAxis = int3(0, 0, stepZ);
+                }
+                if (tNext >= t1) {
+                    break; // walked out of the bounded interval: open sky
+                }
+                if (cloudCellOccupied(push, cell)) {
+                    tHit = tNext;
+                    normal = float3(-stepAxis.x, 0.0, -stepAxis.z); // face the ray entered through
+                    break;
+                }
+            }
+        }
+        if (tHit < 0.0) {
+            return result; // no occupied cell before the interval ends
+        }
+    }
+
+    float alpha = clamp(push.clouds.y, 0.0, 1.0) * fade;
+    if (alpha <= 0.0) {
+        return result;
+    }
+    // Authored colour: vanilla's own CLOUD_COLOR, already greyed by the game's weather resolve — this
+    // is what fixes the white-in-rain deck without a hand-tuned ramp.
+    float3 radiance = cloudRadianceClassic(push, cloudClassicFaceTone(normal), push.cloudColor.xyz,
+                                           skyBehind);
+    result.scatter = radiance * alpha;
+    result.transmittance = 1.0 - alpha;
+    return result;
 }
 
 // ---- Volumetric shading --------------------------------------------------------------------------
@@ -519,6 +746,22 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     result.transmittance = 1.0;
 
     float thickness = max(push.cloudAnchor.z, 1.0);
+    // Crossing EXCLUSION. The flat path fades the deck out as the camera passes through its nominal
+    // thickness (cloudTrace's crossFade) so the transition reads as dissolving cloud instead of a
+    // one-pixel flip between lit top and dark underside. The march had no equivalent: with the camera
+    // sitting near the deck plane, near-horizontal rays start INSIDE the slab and integrate a whole
+    // slab-crossing of in-scatter from the first step, which painted a bright horizontal band around
+    // the camera tracking it everywhere — the reported "line" that brightens everything nearby. The
+    // fix is not another fade of coverage (coverage fading still lets the march accumulate light); the
+    // slab itself is optically excluded inside the crossing region: sigma scales by the same crossFade
+    // curve the flat path uses, so both extinction AND the in-scatter it feeds collapse together, and
+    // at the mid-plane the deck contributes exactly nothing while the camera crosses it.
+    float deckRel = push.clouds.w - originRel.y;
+    float halfThickness = max(thickness, 0.5) * 0.5;
+    float crossFade = smoothstep(halfThickness * 0.5, halfThickness * 1.5, abs(deckRel));
+    if (crossFade <= 0.0) {
+        return result;
+    }
     float slabBottom = push.clouds.w - thickness * 0.5 - originRel.y;
     float slabTop = push.clouds.w + thickness * 0.5 - originRel.y;
 
@@ -577,7 +820,7 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     // optical depth straight down, so THICKNESS controls shape and OPACITY controls see-through, with
     // no cross-talk. opacity is deliberately NOT folded in here — see the cap after the march.
     float sigma = CLOUD_EXTINCTION * (classic ? CLOUD_CLASSIC_EXTINCTION_SCALE : 1.0)
-            * (CLOUD_REFERENCE_THICKNESS / max(thickness, 1.0)) * fade;
+            * (CLOUD_REFERENCE_THICKNESS / max(thickness, 1.0)) * fade * crossFade;
     // Vanilla shades cloud faces by ORIENTATION with flat, constant tones — no smooth lighting model.
     // Reproducing that inside the march is what keeps the classic style looking like Minecraft even
     // though it is now a real volume: the box's top is bright, its underside dark, its vertical sides
@@ -605,7 +848,7 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
             // Flat, vanilla-style face tone. Self-shadowing is deliberately damped (mixed only 40% in)
             // so cloud boxes keep the poster-flat look instead of developing soft volumetric gradients.
             float shade = lerp(1.0, lightT, 0.4);
-            inScatter = CLOUD_ALBEDO * CLOUD_INV_PI
+            inScatter = push.cloudColor.xyz * CLOUD_INV_PI
                     * (sunRadiance * classicFace * shade * 3.0 + skyBehind * 1.4);
         } else {
             // Direct sun scattering + an ambient sky term so the shadowed interior is grey rather than
@@ -675,10 +918,17 @@ public CloudVolume cloudSegment(WorldPush push, float3 originRel, float3 dir, fl
     if (!cloudsEnabled(push)) {
         return result;
     }
-    // A deck with real thickness is a VOLUME for both styles — that is what makes the classic clouds
-    // actual boxes you can fly between rather than a decal. Only a thickness of (near) zero still takes
-    // the flat plane path, which is what the thickness slider at 0% asks for.
+    // Three physical decks, picked by style and thickness:
+    //   * classic with the authored map: ANALYTIC boxes — vanilla's exact cell geometry intersected
+    //     directly, no march at all (cloudClassicBoxes). This is the normal classic path;
+    //   * volumetric (and the classic map-unavailable fallback): the ray-marched slab;
+    //   * a (near) zero thickness collapses to the flat sheet, which is what that slider setting asks
+    //     for. It shades like the classic deck of whichever style is active.
+    bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
     if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON) {
+        if (classic && push.cloudCellsAddr != 0u) {
+            return cloudClassicBoxes(push, originRel, dir, maxDistance, ambient);
+        }
         return cloudMarch(push, originRel, dir, maxDistance, ambient, highQuality);
     }
     CloudHit h = cloudTrace(push, originRel, dir, maxDistance);
@@ -689,8 +939,14 @@ public CloudVolume cloudSegment(WorldPush push, float3 originRel, float3 dir, fl
     if (alpha <= 0.0) {
         return result;
     }
+    // The flat sheet keeps each style's look: the authored colour for classic, the volumetric albedo
+    // for the volumetric style (whose field and shading are otherwise untouched).
+    float3 albedo = classic ? push.cloudColor.xyz : CLOUD_ALBEDO;
+    float grazing = 1.0 - abs(dir.y);
+    float faceLight = h.fromBelow ? 0.52 : 1.0;
+    faceLight = lerp(faceLight, 0.78, grazing);
     // Premultiplied, so `background * transmittance + scatter` reproduces the lerp exactly.
-    result.scatter = cloudRadianceClassic(push, h, dir, ambient) * alpha;
+    result.scatter = cloudRadianceClassic(push, faceLight, albedo, ambient) * alpha;
     result.transmittance = 1.0 - alpha;
     return result;
 }

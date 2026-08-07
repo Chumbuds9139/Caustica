@@ -643,10 +643,10 @@ public final class CausticaConfig {
             /**
              * Cloud thickness, 0..1, as a fraction of {@link #CLOUD_MAX_THICKNESS_BLOCKS}.
              *
-             * <p>0 is a flat sheet (the deck collapses to a plane and takes the cheap non-marched
-             * path); 1 is a deep bank. Applies to BOTH styles — classic clouds become real vanilla-like
-             * boxes with lit tops and shaded sides rather than a decal, and volumetric clouds gain the
-             * depth their shading needs to read as cumulus.
+             * <p>Volumetric: 0 is a flat sheet (the deck collapses to a plane and takes the cheap
+             * non-marched path); 1 is a deep bank. Classic: the slider scales the HEIGHT of vanilla's
+             * authored cell boxes, floored at vanilla's own 4-block extrusion — classic clouds are
+             * always real boxes with lit tops and shaded sides, never thinner than the game draws them.
              */
             public static final FloatSetting CLOUD_THICKNESS =
                     clampedFloat("caustica.rt.cloudThickness", "composite.cloud-thickness", 0.5f, 0.0f, 1.0f);

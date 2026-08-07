@@ -105,6 +105,15 @@ public struct WorldPush {
     // pushed raw so a mid-frame change takes effect on the next frame like every other RT option.
     public float4   clouds;           // x coverage 0..1, y opacity 0..1, z shadow strength 0..1, w deck height (camera-relative blocks)
     public float4   cloudAnchor;      // xy wind-scrolled sample anchor (blocks, wrapped), z slab thickness, w view limit
+    // Classic-style authored shape + colour. cloudColor.xyz is vanilla's own EnvironmentAttributes
+    // CLOUD_COLOR in linear space — the value the game already resolves per dimension AND per weather,
+    // so the deck greys in a storm with no hand-tuned ramp. cloudColor.w is the weather overcast fill
+    // 0..1: rain pushes it toward 1, and the shader uses it to close the sky beyond the authored/slid
+    // coverage (see cloudCoverage). cloudCellsAddr points at the bit-packed clouds.png occupancy map
+    // riding this same BDA ring slot (0 = unavailable, fall back to the noise deck) — same transport as
+    // the DH ready mask, no extra binding.
+    public float4   cloudColor;
+    public uint64_t cloudCellsAddr;
     // Shader-only Parallax Occlusion Mapping (LabPBR _n alpha height field). Geometry and BLASes are
     // never rebuilt; a zero relief depth disables the effect entirely.
     public float4   parallaxParams;   // x relief depth, y height-march layer count, z unused, w max distance
