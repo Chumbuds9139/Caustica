@@ -271,6 +271,21 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         if (material == MATERIAL_PARTICLE) {
             float3 albedo = payload.albedo;
 
+            // Rain/snow sheets: deliberately UNLIT. The full particle light path below (sun NEE with a
+            // shadow ray, RIS block lights, a diffuse bounce off the sheet) read as blotchy, blown-out
+            // streaks on something the eye expects to be a soft translucent veil — vanilla's own weather
+            // pass is effectively unlit too (a lightmap-brightened blend, no per-drop lighting). So the
+            // sheet contributes its texel colour scaled only by the day/night curve, and the path ENDS
+            // here: rays that passed the stochastic cutout already carried the see-through share, and
+            // bouncing off rain would add the scene's light right back into it — the exact thing being
+            // removed. The sheets stay real geometry in the BLAS: terrain still occludes them, the
+            // heightmap clip still holds, they just stop participating in lighting.
+            if ((payload.flags & PAYLOAD_WEATHER) != 0u) {
+                float weatherSheet = lerp(0.35, 1.0, worldPush.sunDir.w);
+                L += throughput * albedo * weatherSheet;
+                break;
+            }
+
             float3 lightDir = worldPush.lightDir.xyz;
             float lightHalfAngle = worldPush.lightDir.w;
             if (lightHalfAngle > 0.0) {

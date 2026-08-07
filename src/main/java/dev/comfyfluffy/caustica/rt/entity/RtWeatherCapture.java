@@ -168,6 +168,11 @@ public final class RtWeatherCapture {
             return 0;
         }
         int captured = 0;
+        // Tag every emitted sheet so raygen shades it UNLIT (see PRIM_WEATHER). The path tracer's
+        // direct/indirect light read as blotchy, blown-out streaks on the rain; the sheets stay real
+        // geometry (terrain occlusion and the heightmap clip are kept) but stop participating in
+        // lighting, the way vanilla's own weather pass is effectively unlit.
+        capture.currentPrimFlags = RtEntityCapture.PRIM_FLAG_WEATHER;
         try {
             captured += captureColumns(capture, out, state.rainColumns, camPos, RAIN_MAX_ALPHA,
                     state.radius, intensity, RAIN_LOCATION, budget - captured);
@@ -180,6 +185,8 @@ public final class RtWeatherCapture {
                 CausticaMod.LOGGER.warn("RT weather capture failed; rain/snow will not be ray traced", t);
             }
             return captured;
+        } finally {
+            capture.currentPrimFlags = 0;
         }
         return captured;
     }

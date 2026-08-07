@@ -487,6 +487,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         payload.f0 = half3(0.0h, 0.0h, 0.0h);
         payloadSetPacked(payload, MATERIAL_PARTICLE, 1.0, 0.0, 0.0, 0.0,
                 1.0, 0.0, EMISSION_SOURCE_NONE);
+        // Rain/snow sheets are tagged at capture (RtWeatherCapture) and shaded unlit in raygen — the
+        // path tracer's light response was visibly breaking them (see PRIM_WEATHER).
+        if ((pr.flags & PRIM_WEATHER) != 0u) {
+            payload.flags |= PAYLOAD_WEATHER;
+        }
         return;
     }
     // Dynamic entities: instances with this custom-index flag bit carry real captured ModelPart
