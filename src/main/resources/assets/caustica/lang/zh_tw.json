@@ -48,7 +48,7 @@
 	"caustica.options.rt.dlssQuality.2": "品質",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
 	"caustica.options.rt.upscaler": "超解析度",
-	"caustica.options.rt.upscaler.tooltip": "選擇光線追蹤影像到達顯示器解析度的方式。關閉：以原生解析度追蹤，不進行超解析度。DLSS 使用 NVIDIA DLSS 光線重建，一次完成降噪與超解析度（需要支援的 GPU）。FSR 3 將在其後端隨附後作為實驗性 AMD FidelityFX 選項出現在這裡。",
+	"caustica.options.rt.upscaler.tooltip": "選擇光線追蹤影像到達顯示器解析度的方式。關閉：以原生解析度追蹤，不進行超解析度。DLSS 使用 NVIDIA DLSS 光線重建，一次完成降噪與超解析度（需要支援的 GPU）。FSR 3 即 AMD FidelityFX Super Resolution：實驗性選項，只升頻不降噪（在 NRD 降噪器加入之前，畫面雜訊隨取樣數變化），目前僅隨 Windows 版提供。",
 	"caustica.options.rt.upscaler.none": "關閉",
 	"caustica.options.rt.upscaler.dlss": "DLSS",
 	"caustica.options.rt.upscaler.fsr3": "FSR 3（實驗性）",

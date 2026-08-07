@@ -48,7 +48,7 @@
 	"caustica.options.rt.dlssQuality.2": "クオリティ",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
 	"caustica.options.rt.upscaler": "アップスケーラー",
-	"caustica.options.rt.upscaler.tooltip": "レイトレーシング画像を表示解像度へ届ける方法です。オフではネイティブ解像度でトレースし、アップスケーリングしません。DLSSはNVIDIA DLSS Ray Reconstructionを使用し、1パスでノイズ除去とアップスケールを行います（対応GPUが必要）。FSR 3は、そのバックエンドが同梱されると実験的なAMD FidelityFXオプションとしてここに追加されます。",
+	"caustica.options.rt.upscaler.tooltip": "レイトレーシング画像を表示解像度へ届ける方法です。オフではネイティブ解像度でトレースし、アップスケーリングしません。DLSSはNVIDIA DLSS Ray Reconstructionを使用し、1パスでノイズ除去とアップスケールを行います（対応GPUが必要）。FSR 3はAMD FidelityFX Super Resolutionです。実験的で、ノイズ除去なしのアップスケールを行います（NRDデノイサーが導入されるまで、画像のノイズはサンプル数に依存します）。Windows版のみに同梱されます。",
 	"caustica.options.rt.upscaler.none": "オフ",
 	"caustica.options.rt.upscaler.dlss": "DLSS",
 	"caustica.options.rt.upscaler.fsr3": "FSR 3（実験的）",

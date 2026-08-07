@@ -48,7 +48,7 @@
 	"caustica.options.rt.dlssQuality.2": "Qualité",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
 	"caustica.options.rt.upscaler": "Upscaler",
-	"caustica.options.rt.upscaler.tooltip": "Comment l'image ray tracing atteint la résolution de l'écran. Désactivé : rendu en résolution native sans mise à l'échelle. DLSS utilise NVIDIA DLSS Ray Reconstruction, qui débruite et met à l'échelle en une seule passe (nécessite un GPU compatible). FSR 3 apparaîtra ici comme option expérimentale AMD FidelityFX lorsque son backend sera fourni.",
+	"caustica.options.rt.upscaler.tooltip": "Comment l'image ray tracing atteint la résolution de l'écran. Désactivé : rendu en résolution native sans mise à l'échelle. DLSS utilise NVIDIA DLSS Ray Reconstruction, qui débruite et met à l'échelle en une seule passe (nécessite un GPU compatible). FSR 3 est AMD FidelityFX Super Resolution : expérimental, agrandit sans débruiter (le bruit de l'image suit le nombre d'échantillons jusqu'à l'arrivée du débruiteur NRD) et n'est fourni que pour Windows.",
 	"caustica.options.rt.upscaler.none": "Désactivé",
 	"caustica.options.rt.upscaler.dlss": "DLSS",
 	"caustica.options.rt.upscaler.fsr3": "FSR 3 (Expérimental)",

@@ -48,7 +48,7 @@
 	"caustica.options.rt.dlssQuality.2": "품질",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
 	"caustica.options.rt.upscaler": "업스케일러",
-	"caustica.options.rt.upscaler.tooltip": "레이 트레이싱 이미지가 디스플레이 해상도에 도달하는 방식을 선택합니다. 끔은 업스케일링 없이 기본 해상도로 렌더링합니다. DLSS는 NVIDIA DLSS Ray Reconstruction을 사용해 한 번에 노이즈 제거와 업스케일링을 수행합니다(지원되는 GPU 필요). FSR 3은 해당 백엔드가 포함되면 실험적인 AMD FidelityFX 옵션으로 여기에 표시됩니다.",
+	"caustica.options.rt.upscaler.tooltip": "레이 트레이싱 이미지가 디스플레이 해상도에 도달하는 방식을 선택합니다. 끔은 업스케일링 없이 기본 해상도로 렌더링합니다. DLSS는 NVIDIA DLSS Ray Reconstruction을 사용해 한 번에 노이즈 제거와 업스케일링을 수행합니다(지원되는 GPU 필요). FSR 3은 AMD FidelityFX Super Resolution입니다. 실험적이며, 노이즈 제거 없이 업스케일합니다(NRD 노이즈 제거기가 도입될 때까지 이미지 노이즈는 샘플 수를 따릅니다). Windows에만 포함됩니다.",
 	"caustica.options.rt.upscaler.none": "끔",
 	"caustica.options.rt.upscaler.dlss": "DLSS",
 	"caustica.options.rt.upscaler.fsr3": "FSR 3 (실험적)",
