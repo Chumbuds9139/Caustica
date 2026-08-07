@@ -117,6 +117,12 @@ public final class RtWeatherCapture {
                     //
                     // Any unit direction is correct for a column centred on the camera (it is seen from
                     // every side at once), so pick a fixed one rather than propagating the NaN.
+                    //
+                    // For context: vanilla keeps the NaN at this entry, and the rasteriser then drops
+                    // the whole quad whenever a vertex is NaN — so in vanilla the column the camera
+                    // stands inside is never actually drawn. Verified against the 26.2
+                    // WeatherEffectRenderer source (constructor stores -0.0f/0.0f; renderInstances has
+                    // no special case for the centre cell).
                     columnSizeX[z * RAIN_TABLE_SIZE + x] = 1.0f;
                     columnSizeZ[z * RAIN_TABLE_SIZE + x] = 0.0f;
                     continue;
