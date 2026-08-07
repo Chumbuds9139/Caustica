@@ -814,6 +814,16 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting WEATHER_ENABLED =
                     bool("caustica.rt.weatherParticles", "particles.weather-enabled", true);
+            /**
+             * Visual density of the ray-traced rain/snow sheets, 0..1.
+             *
+             * <p>Scales the per-column alpha the same way distance does — through stochastic coverage,
+             * so lowering it thins the streaks into a drizzle rather than dimming their colour. 1 is
+             * the full vanilla downpour; 0 hides precipitation entirely (the overcast sky, fog and
+             * light attenuation still follow the weather itself, which is a separate toggle).
+             */
+            public static final FloatSetting RAIN_DENSITY =
+                    clampedFloat("caustica.rt.rainDensity", "particles.rain-density", 1.0f, 0.0f, 1.0f);
             public static final BooleanSetting GLOW_ENABLED =
                     bool("caustica.rt.glow", "entities.glow.enabled", true);
             public static final BooleanSetting NAME_TAGS_ENABLED =

@@ -18,6 +18,8 @@
 	"caustica.options.rt.particles.tooltip": "在追蹤場景中，將粒子繪製為面向相機射線的看板。",
 	"caustica.options.rt.weatherParticles": "光追天氣",
 	"caustica.options.rt.weatherParticles.tooltip": "在追蹤場景中將雨雪繪製為真實幾何體。這些雨柱來自 Minecraft 自身的天氣系統，因此會正確地止於地面、樹葉和屋頂之下，並如常降落。需要開啟光追粒子。",
+	"caustica.options.rt.rainDensity": "降雨密度",
+	"caustica.options.rt.rainDensity.tooltip": "控制光線追蹤雨雪的濃密程度。100% 是原版完整的大雨；調低數值會讓雨絲變稀，成為毛毛細雨。0% 會隱藏降水，但陰雲密布的天空、霧和變暗效果仍會跟隨天氣。",
 	"caustica.options.rt.glow": "實體發光輪廓",
 	"caustica.options.rt.glow.tooltip": "為發光實體繪製原版發光效果輪廓（可穿牆顯示）。",
 	"caustica.options.rt.waterWaves": "動態水面",

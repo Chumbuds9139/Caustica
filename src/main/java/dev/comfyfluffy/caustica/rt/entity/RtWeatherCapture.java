@@ -164,6 +164,9 @@ public final class RtWeatherCapture {
             return 0;
         }
         float intensity = visualIntensity(state.intensity);
+        // Player's density slider: thins the streaks through the same coverage lane distance fading
+        // uses, so a lower setting reads as lighter rain rather than darker rain (see RAIN_DENSITY).
+        intensity *= Math.clamp(CausticaConfig.Rt.Entities.RAIN_DENSITY.value(), 0f, 1f);
         if (intensity <= 0.0f) {
             return 0;
         }

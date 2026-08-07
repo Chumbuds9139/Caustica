@@ -18,6 +18,8 @@
 	"caustica.options.rt.particles.tooltip": "Dibuja partículas como billboards de rayo de cámara dentro de la escena trazada.",
 	"caustica.options.rt.weatherParticles": "Clima con trazado de rayos",
 	"caustica.options.rt.weatherParticles.tooltip": "Dibuja la lluvia y la nieve como geometría real dentro de la escena trazada. Las columnas provienen del propio sistema meteorológico de Minecraft, por lo que se detienen correctamente en el suelo, en las hojas y bajo los techos, y caen con normalidad. Requiere Partículas con trazado de rayos.",
+	"caustica.options.rt.rainDensity": "Densidad de la lluvia",
+	"caustica.options.rt.rainDensity.tooltip": "Qué densos se ven la lluvia y la nieve con trazado de rayos. 100% es el aguacero completo de vanilla; valores más bajos convierten las vetas en una llovizna ligera. 0% oculta la precipitación, pero el cielo nublado, la niebla y el oscurecimiento siguen al clima.",
 	"caustica.options.rt.glow": "Contorno brillante de entidades",
 	"caustica.options.rt.glow.tooltip": "Dibuja el contorno del efecto Brillo de Minecraft vanilla (a través de paredes) alrededor de las entidades brillantes.",
 	"caustica.options.rt.waterWaves": "Agua animada",

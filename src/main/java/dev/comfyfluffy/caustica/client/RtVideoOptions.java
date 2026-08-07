@@ -43,6 +43,7 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             weatherParticles(),
+            rainDensity(),
             waterWaves(),
             // POM: the on/off toggle followed by its tuning sliders, shader-only and safe live.
             parallaxEnabled(),
@@ -88,6 +89,7 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             weatherParticles(),
+            rainDensity(),
             waterWaves(),
             handFov(),
         };
@@ -311,6 +313,10 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> weatherParticles() {
         return bool("caustica.options.rt.weatherParticles", CausticaConfig.Rt.Entities.WEATHER_ENABLED);
+    }
+
+    private static OptionInstance<Integer> rainDensity() {
+        return percent("caustica.options.rt.rainDensity", CausticaConfig.Rt.Entities.RAIN_DENSITY);
     }
 
     private static OptionInstance<Boolean> waterWaves() {
