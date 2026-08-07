@@ -33,6 +33,7 @@ import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME;
@@ -114,6 +115,11 @@ public final class RtDeviceBringup {
 
     private static volatile boolean rtRequested;
     private static volatile SerBackend serBackend = SerBackend.NONE;
+    // Identity of the device the last (i.e. current) vkCreateDevice used, captured unconditionally in
+    // addExtensions so UI capability hints (e.g. the Frame Generation gate on the options screen) can be
+    // answered from the render thread without forcing NGX/Vulkan bring-up on the main menu.
+    private static volatile String gpuName = "";
+    private static volatile String gpuVendorName = "";
     private static volatile boolean ommEnabled; // VK_EXT_opacity_micromap actually enabled on the device
     private static volatile boolean reflexEnabled; // VK_NV_low_latency2 actually enabled on the device
     private static volatile boolean presentIdEnabled; // VK_KHR_present_id actually enabled on the device
@@ -486,6 +492,7 @@ public final class RtDeviceBringup {
 
     /** Standalone path: add RT extension names to the (mutable) arg0 list. */
     public static void addExtensions(List<String> augmentedExtensions, VulkanPhysicalDevice physicalDevice) {
+        captureDeviceIdentity(physicalDevice);
         if (!enabledByProperty() || firstUnsupportedExtension(physicalDevice) != null) {
             return;
         }
@@ -603,6 +610,44 @@ public final class RtDeviceBringup {
                 RT_EXTENSIONS, serBackend.extensionName == null ? "" : " + " + serBackend.extensionName,
                 optionalExtensions.isEmpty() ? "" : " + " + optionalExtensions,
                 serBackend.label, physicalDevice.deviceName());
+    }
+
+    /** Records the selected device's name/vendor so capability hints work before any feature init. */
+    private static void captureDeviceIdentity(VulkanPhysicalDevice physicalDevice) {
+        try {
+            gpuName = physicalDevice.deviceName();
+            gpuVendorName = physicalDevice.vendorName();
+        } catch (Throwable t) {
+            // Identity capture is cosmetic (UI gating hints only); never let it break device creation.
+            gpuName = "";
+            gpuVendorName = "";
+        }
+    }
+
+    /** {@code VkPhysicalDeviceProperties.deviceName} of the device in use ("" before device creation). */
+    public static String gpuName() {
+        return gpuName;
+    }
+
+    /**
+     * Best-effort, NAME-BASED guess at DLSS Frame Generation hardware support, for the options screen's
+     * FG gate before NGX is initialized (NGX init happens with the first DLSS render, not on the main
+     * menu, and initializing it purely for a UI hint would be invasive). The authoritative answer is the
+     * driver's own NGX capability query ({@code NVSDK_NGX_Parameter_FrameGeneration_Available}, see
+     * {@code ngxshim_dlssg_available}); {@code RtUpscalerSupport} prefers it whenever NGX is up and only
+     * falls back to this heuristic.
+     *
+     * <p>NVIDIA restricts DLSSG to GeForce RTX 40/50 series, so the heuristic matches exactly that: an
+     * NVIDIA device whose reported name contains an RTX 40xx/50xx model token. Anything unrecognized —
+     * including professional RTX cards and every non-NVIDIA device — is treated as NOT supported, per the
+     * safe default for a name-based guess.
+     */
+    public static boolean looksLikeRtxFrameGenerationSeries() {
+        if (!"NVIDIA".equalsIgnoreCase(gpuVendorName)) {
+            return false;
+        }
+        // "NVIDIA GeForce RTX 4090", "... RTX 5070 Ti", "NVIDIA RTX 5880 Ada Generation", ...
+        return gpuName.toUpperCase(Locale.ROOT).matches(".*\\bRTX\\s*(?:PRO\\s*)?[45]\\d{3}\\b.*");
     }
 
     /**
