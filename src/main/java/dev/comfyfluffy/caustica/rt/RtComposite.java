@@ -1371,9 +1371,15 @@ public final class RtComposite {
             if (nrdPath && gViewZ != null && nrdDiffOut != null) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
+                    // Camera position in the rebased terrain coordinates the signals live in (same
+                    // offset pushed to the shaders): NRD derives camera motion from the worldToView
+                    // translation built from it.
                     nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
                             gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
-                            frameProjection, frameViewRotation, jitterX, jitterY, (int) frameCounter);
+                            frameProjection, frameViewRotation,
+                            (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
+                            (float) (camZ - terrain.blockZ),
+                            jitterX, jitterY, (int) frameCounter);
                 }
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine

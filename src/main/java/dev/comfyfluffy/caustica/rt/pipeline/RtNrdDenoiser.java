@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.nrd.NrdLibrary;
 import dev.comfyfluffy.caustica.nrd.NrdRuntime;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 
+import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
 
@@ -40,27 +41,40 @@ public final class RtNrdDenoiser {
     // rejection misfires (the camera-move smearing). AREA_5X5 is the mode whose required probability
     // range [1/16, 15/16] contains our [0.1, 0.9] clamp; AREA_3X3 would need [0.25, 0.75] + Bayer.
     private static final int HIT_DIST_RECONSTRUCTION_AREA_5X5 = 2;
+    // Camera moves a handful of blocks per frame at most; a bigger offset jump means the terrain
+    // rebase anchor shifted or the player teleported — the world coordinates NRD accumulates against
+    // just moved under its feet, so its history must be thrown away that frame.
+    private static final float REBASE_JUMP_BLOCKS = 32.0f;
 
     private boolean failed;
     private boolean hasPrev;
     private boolean reblurSettingsSent;
     private final float[] prevViewToClip = new float[16];
     private final float[] prevWorldToView = new float[16];
-    private float prevJitterX;
-    private float prevJitterY;
+    private float prevOffsetX;
+    private float prevOffsetY;
+    private float prevOffsetZ;
 
     private RtNrdDenoiser() {
     }
 
     /**
      * Record one NRD denoise into {@code cmd}: consumes the trace's per-lobe signals + guides and
-     * writes the denoised outputs. Returns false (caller falls back to the undenoised image) when
+     * writes the denoised outputs. {@code viewRotation} is the rotation-only view matrix and
+     * {@code cameraOffsetX/Y/Z} the camera position in the rebased terrain coordinates the signals
+     * live in — NRD derives camera motion from the worldToView translation, so the matrix is built
+     * here as rotation x translate(-offset). A rotation-only matrix made NRD compute a zero camera
+     * delta, breaking its previous-position reconstruction (the error grows radially from the screen
+     * centre — the "giant stable circle with noisy edges" artifact). {@code jitterPixelsX/Y} are the
+     * raw sub-pixel jitter values in PIXEL units: NRD validates cameraJitter against [-0.5, 0.5] and
+     * does the UV conversion itself. Returns false (caller falls back to the undenoised image) when
      * the runtime is unavailable or the call fails.
      */
     public boolean denoise(long cmd, int renderWidth, int renderHeight,
                            RtImage motion, RtImage normalRoughness, RtImage viewZ,
                            RtImage diffIn, RtImage specIn, RtImage diffOut, RtImage specOut,
-                           Matrix4fc viewToClip, Matrix4fc worldToView,
+                           Matrix4fc viewToClip, Matrix4fc viewRotation,
+                           float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
                            float jitterPixelsX, float jitterPixelsY, int frameIndex) {
         if (failed || !enabled()) {
             return false;
@@ -78,6 +92,30 @@ public final class RtNrdDenoiser {
                 reblurSettingsSent = true;
             }
             lib.newFrame();
+
+            // worldToView with the camera translation in the rebased terrain space: NRD pulls the
+            // camera position out of this matrix (and its prev counterpart) to get the per-frame
+            // camera delta its reconstruction needs. The terrain space is static between rebase
+            // anchor rebuilds, which is exactly the "static world, moving camera" model NRD assumes.
+            Matrix4f worldToView = new Matrix4f(viewRotation)
+                    .translate(-cameraOffsetX, -cameraOffsetY, -cameraOffsetZ);
+            // NRD's reconstruction assumes a +Z-forward view space matching IN_VIEWZ (positive linear
+            // depth: ReconstructViewPosition sets p.z = viewZ). Minecraft's view space is the GL
+            // convention (-Z forward), so flip the view-space Z axis; NRD detects the resulting
+            // handedness from the matrix itself. IN_VIEWZ stays as-is (it is the +dist value this
+            // flipped space expects).
+            worldToView = new Matrix4f().scaling(1f, 1f, -1f).mul(worldToView);
+
+            // Rebase anchor shift or teleport: the terrain coordinates NRD accumulates against just
+            // jumped; the history is unrecoverable, so clear it this frame and start over.
+            boolean jumped = false;
+            if (hasPrev) {
+                float dx = cameraOffsetX - prevOffsetX;
+                float dy = cameraOffsetY - prevOffsetY;
+                float dz = cameraOffsetZ - prevOffsetZ;
+                jumped = dx * dx + dy * dy + dz * dz > REBASE_JUMP_BLOCKS * REBASE_JUMP_BLOCKS;
+            }
+
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment v2c = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 MemorySegment v2cPrev = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
@@ -86,30 +124,29 @@ public final class RtNrdDenoiser {
                 // JOML's get(float[]) is column-major, exactly NRD's "vector is a column" layout.
                 viewToClip.get(v2c.asByteBuffer().asFloatBuffer());
                 worldToView.get(w2v.asByteBuffer().asFloatBuffer());
-                if (hasPrev) {
+                if (hasPrev && !jumped) {
                     prevViewToClip(v2cPrev);
                     prevWorldToView(w2vPrev);
                 } else {
-                    // First frame after (re)creation: "previous" equals current, so NRD does not
-                    // reproject history that does not exist yet.
+                    // First frame after (re)creation or a world-coordinate jump: "previous" equals
+                    // current, so NRD does not reproject history that is invalid or does not exist.
                     viewToClip.get(v2cPrev.asByteBuffer().asFloatBuffer());
                     worldToView.get(w2vPrev.asByteBuffer().asFloatBuffer());
                 }
-                // Jitter in UV units (NRD: sampleUv = pixelUv + cameraJitter); MV scale converts the
-                // renderer's render-pixel MVs to the UV space NRD reprojects with (same pixel->UV
-                // lesson as the FSR integration).
-                float jitterUvX = jitterPixelsX / renderWidth;
-                float jitterUvY = jitterPixelsY / renderHeight;
+                // cameraJitter is the raw sub-pixel jitter in PIXEL units (NRD's [-0.5, 0.5]
+                // contract); NRD itself converts it when de-jittering the input samples. The MV scale
+                // converts the renderer's render-pixel MVs to the UV space NRD reprojects with.
                 int rc = lib.setSettings(v2c, v2cPrev, w2v, w2vPrev,
-                        jitterUvX, jitterUvY, hasPrev ? prevJitterX : jitterUvX, hasPrev ? prevJitterY : jitterUvY,
+                        jitterPixelsX, jitterPixelsY, jitterPixelsX, jitterPixelsY,
                         1.0f / renderWidth, 1.0f / renderHeight,
-                        frameIndex, hasPrev ? 0 : 1);
+                        frameIndex, (hasPrev && !jumped) ? 0 : 1);
                 if (rc != 0) {
                     throw new IllegalStateException("nrdshim_set_settings failed: " + rc + " last=" + lib.lastResult());
                 }
             }
-            prevJitterX = jitterPixelsX / renderWidth;
-            prevJitterY = jitterPixelsY / renderHeight;
+            prevOffsetX = cameraOffsetX;
+            prevOffsetY = cameraOffsetY;
+            prevOffsetZ = cameraOffsetZ;
             viewToClip.get(prevViewToClip);
             worldToView.get(prevWorldToView);
             hasPrev = true;
