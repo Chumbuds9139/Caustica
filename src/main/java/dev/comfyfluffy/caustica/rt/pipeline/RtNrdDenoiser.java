@@ -51,6 +51,10 @@ public final class RtNrdDenoiser {
     // rebase anchor shifted or the player teleported — the world coordinates NRD accumulates against
     // just moved under its feet, so its history must be thrown away that frame.
     private static final float REBASE_JUMP_BLOCKS = 32.0f;
+    // Near plane value written into the sanitized depth row of the projection handed to NRD (see
+    // denoise): Minecraft's own depth row carries a degenerate effective near (~4.77e-6) that
+    // collapsed every NRD world-space scale derived from it; 0.05 is vanilla's real near plane.
+    private static final float NRD_PROJECTION_NEAR = 0.05f;
 
     private boolean failed;
     private boolean hasPrev;
@@ -118,6 +122,20 @@ public final class RtNrdDenoiser {
             // the renderer keeps the original matrix for everything else.
             Matrix4f nrdViewToClip = new Matrix4f(viewToClip);
             nrdViewToClip.m11(-viewToClip.m11());
+            // Sanitize the depth row too. NRD derives ALL of its world-space scales from it
+            // (unproject = C0*a23/a32 in DecomposeProjection -> gUnproject -> frustumSize ->
+            // disocclusion thresholds, hit-distance factors, blur clamps). Minecraft's float-Z
+            // reverse-Z projection carries a degenerate effective near (a23 ~ 4.77e-6), which made
+            // every threshold ~40x tighter than NRD's design point: any reprojection error above a
+            // microscopic fraction of depth failed the disocclusion test, so temporal history only
+            // survived near the screen centre (minimum error) — the visible "circle", with everything
+            // outside it never accumulating ("weird/buggy"). A clean reverse-Z infinite row with the
+            // vanilla near plane restores NRD's intended scale. Nothing else changes: REBLUR never
+            // reads a depth buffer (only IN_VIEWZ) and GetScreenUv consumes clip.xy/w alone.
+            nrdViewToClip.m22(0f);
+            nrdViewToClip.m23(NRD_PROJECTION_NEAR);
+            nrdViewToClip.m32(1f);
+            nrdViewToClip.m33(0f);
 
             // worldToView with the camera translation in the rebased terrain space, passed
             // UNMODIFIED: Minecraft's view space is already the +Z-forward LH space NRD works in
