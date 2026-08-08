@@ -88,7 +88,12 @@ public final class RtNrdDenoiser {
         }
         try {
             if (!reblurSettingsSent) {
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 0, 0);
+                // REBLUR stays SPATIAL-ONLY (temporal accumulation = 1 frame): its internal temporal
+                // reprojection depends on matrix conventions this renderer cannot verify without
+                // in-game debugging (it produced a screen-space "circle" of stale history), while the
+                // temporal noise-killing is done by the renderer's own TAA pass on top, using the
+                // motion vectors FSR already reprojects with successfully.
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 1, 1);
                 reblurSettingsSent = true;
             }
             lib.newFrame();

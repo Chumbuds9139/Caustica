@@ -204,6 +204,12 @@ public final class RtComposite {
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
     // penumbrae). Radii in degrees; the real sun/moon are ~0.27°, but a touch larger reads pleasantly.
     private static final int WATER_ANCHOR_MASK = 4095;
+    // Matches the viewZ cap the tracer writes for sky/miss pixels: everything beyond is passed
+    // through the denoise chain raw (the sky never accumulates history).
+    private static final float NRD_DENOISING_RANGE = 500000.0f;
+    // Temporal accumulation window: long enough to converge static noise at SPP 1, short enough
+    // that ghosting after a reset decays quickly.
+    private static final float TAA_MAX_FRAMES = 32.0f;
     // ---- Cloud deck. These mirror clouds.slang and must stay in lock-step with it.
     //
     // The classic field repeats every CLOUD_CELL_BLOCKS * CLOUD_PERIOD_CELLS = 12 * 512 = 6144 blocks,
@@ -411,6 +417,16 @@ public final class RtComposite {
     private RtImage nrdSpecOut;
     private RtImage nrdCombined;
     private RtNrdCombinePipeline nrdCombinePipeline;
+    // Temporal accumulation ping-pong over the (spatially) denoised radiance; alpha channel carries
+    // the per-pixel frame count. Swapped every frame.
+    private RtImage taaPing;
+    private RtImage taaPong;
+    private boolean taaWriteToPing;
+    private boolean taaHasPrev;
+    private RtTaaPipeline taaPipeline;
+    private final float[] prevProjection = new float[16];
+    private final float[] curProjection = new float[16];
+    private boolean prevProjectionValid;
     private boolean renderSizeNrdEnabled;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
@@ -893,6 +909,14 @@ public final class RtComposite {
             nrdCombined.destroy();
             nrdCombined = null;
         }
+        if (taaPing != null) {
+            taaPing.destroy();
+            taaPing = null;
+        }
+        if (taaPong != null) {
+            taaPong.destroy();
+            taaPong = null;
+        }
         if (rrOutput != null) {
             rrOutput.destroy();
             rrOutput = null;
@@ -1067,10 +1091,18 @@ public final class RtComposite {
             nrdDiffOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised diffuse " + renderW + "x" + renderH);
             nrdSpecOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised specular " + renderW + "x" + renderH);
             nrdCombined = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd combined radiance " + renderW + "x" + renderH);
+            taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
+            taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
             if (nrdCombinePipeline == null) {
                 nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
             }
-            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view);
+            if (taaPipeline == null) {
+                taaPipeline = RtTaaPipeline.create(ctx);
+            }
+            // Fresh buffers: the accumulation history no longer corresponds to anything.
+            taaHasPrev = false;
+            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view,
+                    gNrdDiff.view, gNrdSpec.view, gViewZ.view);
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
@@ -1368,6 +1400,16 @@ public final class RtComposite {
             // GENERAL state the renderer keeps them in); the barrier after the combine covers its
             // writes for the upscale reads.
             boolean nrdDone = false;
+            RtImage denoisedSource = null;
+            // FOV changes (sprint/fly) warp the reprojection space the temporal stages live in;
+            // detected from the projection matrix itself and used to restart accumulation.
+            frameProjection.get(curProjection);
+            boolean projectionChanged = !prevProjectionValid;
+            if (prevProjectionValid) {
+                for (int i = 0; i < 16 && !projectionChanged; i++) {
+                    projectionChanged = Math.abs(prevProjection[i] - curProjection[i]) > 1.0e-5f;
+                }
+            }
             if (nrdPath && gViewZ != null && nrdDiffOut != null) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
@@ -1384,10 +1426,28 @@ public final class RtComposite {
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
                     try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
-                        nrdCombinePipeline.dispatch(cmd, renderW, renderH);
+                        nrdCombinePipeline.dispatch(cmd, renderW, renderH, NRD_DENOISING_RANGE);
                     }
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the upscale
+                    // Temporal accumulation over the spatially denoised radiance — the real noise
+                    // killer. Reprojects with the renderer's own jitter-free MVs (the same vectors
+                    // FSR consumes successfully), neighborhood-clamped, capped window; restarted on
+                    // projection (FOV) changes and rebase/teleport jumps.
+                    RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
+                    RtImage outImg = taaWriteToPing ? taaPing : taaPong;
+                    taaPipeline.setImages(nrdCombined.view, historyImg.view, outImg.view,
+                            gMotion.view, gViewZ.view);
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the TAA
+                    try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.taa")) {
+                        taaPipeline.dispatch(cmd, renderW, renderH, 1.0f / renderW, 1.0f / renderH,
+                                projectionChanged || !taaHasPrev, TAA_MAX_FRAMES);
+                    }
+                    taaWriteToPing = !taaWriteToPing;
+                    taaHasPrev = true;
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // TAA output visible to the upscale
+                    denoisedSource = outImg;
                 }
+                frameProjection.get(prevProjection);
+                prevProjectionValid = true;
             }
 
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
@@ -1405,7 +1465,7 @@ public final class RtComposite {
             // buffers (color + depth + motion vectors), output straight into rrOutput so the rest of
             // the frame (exposure metering, display mapping) is untouched.
             // The upscale stage consumes the DENOISED combined radiance when NRD ran, else the raw trace.
-            RtImage upscaleSource = nrdDone ? nrdCombined : output;
+            RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.fsr")) {
@@ -2021,6 +2081,12 @@ public final class RtComposite {
             nrdCombinePipeline.destroy();
             nrdCombinePipeline = null;
         }
+        if (taaPipeline != null) {
+            taaPipeline.destroy();
+            taaPipeline = null;
+        }
+        taaHasPrev = false;
+        prevProjectionValid = false;
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;
