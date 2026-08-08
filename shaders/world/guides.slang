@@ -244,7 +244,17 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     // INF pixels and the TAA recognizes "accumulate in place". Written here (Pass A) because the
     // primary hit is owned here; Pass B only reads it for hit-distance normalization.
     if (nrdEnabled() || taaEnabled()) {
-        gViewZ[pix] = curClip.w > 0.0 ? min(curClip.w, 1.0e6) : 1.0e6;
+        // BUGFIX: for sky, curClip.w works out to ~1e6 * |rd.z_view|, which is DIRECTION-dependent:
+        // sky rays near the view axis exceed denoisingRange (correctly INF) but sky rays far from the
+        // axis fall BELOW it, so the NRD mistakes edge-of-screen sky for geometry and tries to denoise
+        // it — a visible circular boundary between "sky treated as sky" and "sky treated as geometry".
+        // Detect sky robustly by hit distance instead: sky sits at |gv_hitCamRel| = 1e6 exactly (the
+        // miss path writes rd*1e6, sq = 1e12), while real geometry never approaches that — even far LOD
+        // terrain stays well under 1e5 blocks (sq < 1e10). A 1e11 threshold separates the two with wide
+        // margins on both sides. Force sky viewZ to a guaranteed-INF value regardless of ray direction.
+        float hitDistSq = dot(gv_hitCamRel, gv_hitCamRel);
+        bool isSky = hitDistSq > 1.0e11;
+        gViewZ[pix] = isSky ? 1.0e6 : (curClip.w > 0.0 ? min(curClip.w, 1.0e6) : 1.0e6);
     }
 
     // Motion vector: reproject this guide point through the previous frame's view-projection.
