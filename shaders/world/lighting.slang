@@ -71,10 +71,15 @@ public Reservoir resEmpty() {
 //   - twoSided (particles): billboards have no back face, ndl=abs(ndl) folds both sides into the front;
 //   - back hemisphere with sss>0 (LabPBR leaves/grass): HG transmission phase — cosT = dot(wi,rd) peaks
 //     when the ray points from the light through the slab toward the camera (same as the sun SSS term).
-public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos, float3 n,
+// Split variant of the estimator above: bit-identical math and phat, but the diffuse (Lambert, SSS
+// transmission) and specular (GGX) BRDF terms come out separately. NRD's REBLUR_DIFFUSE_SPECULAR
+// needs per-lobe radiance; the ordinary path keeps using evalSampleContrib, which forwards here.
+public float3 evalSampleContribSplit(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos, float3 n,
                          float3 v, float3 rd, float3 diffAlb, float3 F0, float rough,
-                         bool twoSided, float sss, out float phat) {
+                         bool twoSided, float sss, out float phat, out float3 outDiff, out float3 outSpec) {
     phat = 0.0;
+    outDiff = float3(0.0, 0.0, 0.0);
+    outSpec = float3(0.0, 0.0, 0.0);
     float3 toL = sp - hitPos;
     float dist2 = dot(toL, toL);
     if (dist2 < 1.0e-6) {
@@ -93,7 +98,8 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     float3 contrib = float3(0.0, 0.0, 0.0);
     if (ndl > 0.0) {
         float G = ndl * cosL / dist2; // area-light geometry term (x area)
-        float3 brdf = diffAlb * INV_PI;
+        float3 brdfDiff = diffAlb * INV_PI;
+        float3 brdfSpec = float3(0.0, 0.0, 0.0);
         // twoSided callers are particle billboards, which pass rough=1/F0=0 and want diffuse-only
         // shading: fresnelSchlick still returns up to full white at grazing angles even with F0=0 (that
         // IS the Fresnel effect), so skipping the term here — not just zeroing F0 — is what keeps
@@ -106,14 +112,17 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
             float D = ggxD(ndh, rough);
             float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
             float3 Fs = fresnelSchlick(vdh, F0);
-            brdf += (D * Gs) * Fs / (4.0 * ndv * ndl);
+            brdfSpec = (D * Gs) * Fs / (4.0 * ndv * ndl);
         }
-        contrib = brdf * le * (G * area);
+        outDiff = brdfDiff * le * (G * area);
+        outSpec = brdfSpec * le * (G * area);
+        contrib = outDiff + outSpec;
     } else if (sss > 0.0) {
         float backNdl = -ndl;
         float G = backNdl * cosL / dist2;
         float cosT = dot(wi, rd);
-        contrib = diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * le * (G * area);
+        outDiff = diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * le * (G * area);
+        contrib = outDiff;
     }
     float rawPhat = luminance(contrib);
     // If facing away and no SSS, this is truly unlit -> keep zero to allow culling.
@@ -121,6 +130,8 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     // aggressive discard of dim but valid emissives (Shroomlight fix).
     if (rawPhat <= 0.0) {
         phat = 0.0;
+        outDiff = float3(0.0, 0.0, 0.0);
+        outSpec = float3(0.0, 0.0, 0.0);
         return float3(0.0,0.0,0.0);
     }
     // Minimum importance floor: prevents aggressive discard of emissive samples like
@@ -128,6 +139,15 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     float emissiveFloor = luminance(le) * 0.01 * saturate(area / max(dist2, 1.0));
     phat = max(rawPhat, max(RESTIR_MIN_PHAT, max(emissiveFloor * 0.1, RESTIR_PHAT_EMISSIVE_FLOOR)));
     return contrib;
+}
+
+public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos, float3 n,
+                         float3 v, float3 rd, float3 diffAlb, float3 F0, float rough,
+                         bool twoSided, float sss, out float phat) {
+    float3 unusedDiff;
+    float3 unusedSpec;
+    return evalSampleContribSplit(sp, lnrm, le, area, hitPos, n, v, rd, diffAlb, F0, rough,
+            twoSided, sss, phat, unusedDiff, unusedSpec);
 }
 
 
@@ -671,6 +691,52 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
         }
     }
     return shaded;
+}
+
+// NRD-only twin of shadeReservoir: the SAME winning-sample estimate (identical shadow ray, W cap and
+// firefly clamp), but with the diffuse/specular terms split for REBLUR_DIFFUSE_SPECULAR. Kept as a
+// separate entry point so the ordinary path keeps calling shadeReservoir untouched.
+public void shadeReservoirSplit(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
+                      float3 F0, float rough, bool twoSided, float sss,
+                      out float3 outDiff, out float3 outSpec) {
+    outDiff = float3(0.0, 0.0, 0.0);
+    outSpec = float3(0.0, 0.0, 0.0);
+    if (s.W <= 0.0 || s.phat <= 0.0) {
+        return;
+    }
+    float phat;
+    float3 diffPart;
+    float3 specPart;
+    evalSampleContribSplit(s.pos, s.lnrm, s.le, s.area, hitPos, n, v, rd,
+            diffAlb, F0, rough, twoSided, sss, phat, diffPart, specPart);
+    if (phat <= 0.0) {
+        return;
+    }
+    // Same origin/measure/shadow sequence as shadeReservoir — see the comments there; the two must
+    // stay in lockstep or the split estimate diverges from the ordinary one.
+    float side = dot(n, s.pos - hitPos) >= 0.0 ? 1.0 : -1.0;
+    float3 origin = hitPos + side * n * SURF_BIAS;
+    float3 toL = s.pos - origin;
+    float dist = length(toL);
+    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    float3 vis = shadow.transmittance;
+    float appliedW = s.restir != 0u ? min(s.W, RESTIR_MAX_W) : s.W;
+    outDiff = diffPart * vis * appliedW;
+    outSpec = specPart * vis * appliedW;
+    if (s.restir != 0u) {
+        // Same luminance clamp as shadeReservoir, applied proportionally so the split keeps the hue.
+        float shadedLuminance = luminance(outDiff + outSpec);
+        if (!(shadedLuminance >= 0.0)) {
+            outDiff = float3(0.0, 0.0, 0.0);
+            outSpec = float3(0.0, 0.0, 0.0);
+            return;
+        }
+        if (shadedLuminance > RESTIR_MAX_SAMPLE_LUMINANCE) {
+            float scale = RESTIR_MAX_SAMPLE_LUMINANCE / shadedLuminance;
+            outDiff *= scale;
+            outSpec *= scale;
+        }
+    }
 }
 
 // TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):

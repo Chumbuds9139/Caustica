@@ -17,6 +17,14 @@ import world_common;
 [[vk::binding(6, 0)]] [format("rg16f")]   public RWTexture2D<float2> gMotion;     // screen-space motion (render px)
 [[vk::binding(7, 0)]] [format("rgba16f")] public RWTexture2D<float4> gSpecAlbedo; // exact-mirror reflected diffuse × reflectance; material reflectance otherwise
 [[vk::binding(8, 0)]] [format("rg16f")]   public RWTexture2D<float2> gSpecMotion; // reflection MVs for RR
+// NRD (REBLUR_DIFFUSE_SPECULAR) signals, written ONLY when nrdEnabled(): gViewZ in Pass A, the
+// YCoCg-packed per-lobe radiance + normalized hit distance in Pass B. Formats are the NRD front-end
+// contract (IN_VIEWZ = R16f+; IN_*_RADIANCE_HITDIST = RGBA16f with the REBLUR pack); the normal +
+// roughness input is gNormal itself (NRD is built with the RGBA16/SNORM normal encoding + LINEAR
+// roughness, whose unpack is exactly xyz + w — no repack needed).
+[[vk::binding(9, 0)]]  [format("r32f")]    public RWTexture2D<float>  gViewZ;    // linear view depth, primary hit (sky = large)
+[[vk::binding(10, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdDiff;  // YCoCg diffuse radiance, w = normalized hit distance
+[[vk::binding(11, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdSpec;  // YCoCg specular radiance, w = normalized hit distance
 
 // Per-frame push data loaded once from the BDA buffer at the top of main() (same pattern as the GLSL
 // `worldPush` global). Layout constants generated from this module's SPIR-V — see world_common.WorldPush.
@@ -56,6 +64,7 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 // what a flag means, and gives one place to look when a new option is added.
 public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
 public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
+public bool nrdEnabled() { return worldFeature(worldPush, FEATURE_NRD); }
 public bool restirEnabled() {
     // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
     // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.
@@ -114,6 +123,32 @@ public static const float SPEC_MOTION_ALPHA_MAX = 0.25; // perceptual smoothness
 
 public bool isDeltaAlpha(float roughness) {
     return clamp(roughness, 0.0, 1.0) <= MIRROR_ALPHA_MAX;
+}
+
+// ---- NRD (REBLUR) front-end pack helpers. These MUST stay in sync with NRD.hlsli's front-end
+// functions — NRD decodes with the matching back-end math, and a drift here silently corrupts the
+// denoised image. The hit-distance normalization constants are REBLUR's default
+// ReblurHitDistanceParameters (A = 3, B = 0.1, C = 20) on the host side; if the host ever tunes
+// them, these must move with them.
+public float3 nrdLinearToYCoCg(float3 color) {
+    float Y  = dot(color, float3(0.25, 0.5, 0.25));
+    float Co = dot(color, float3(0.5, 0.0, -0.5));
+    float Cg = dot(color, float3(-0.25, 0.5, -0.25));
+    return float3(Y, Co, Cg);
+}
+
+// "spec magic curve" from NRD.hlsli (_NRD_GetSpecMagicCurve with power = 0.5).
+public float nrdSpecMagicCurve(float roughness) {
+    float f = 1.0 - exp2(-200.0 * roughness * roughness);
+    return f * pow(saturate(roughness), 0.5);
+}
+
+// REBLUR_FrontEnd_GetNormHitDist with the default (A, B, C): normalizes the raw hit distance into
+// (0, 1] using the view depth and roughness. Call ONLY when the lobe was actually traced — 0 stays
+// reserved for "lobe skipped / no data", which is how REBLUR detects probabilistic selection.
+public float nrdNormHitDist(float hitDist, float viewZ, float roughness) {
+    float f = (3.0 + abs(viewZ) * 0.1) * lerp(20.0, 1.0, nrdSpecMagicCurve(roughness));
+    return max(saturate(hitDist / f), 1.0e-4);
 }
 
 // Continuations one sample may carry: the camera segment, plus the reflection branch a primary

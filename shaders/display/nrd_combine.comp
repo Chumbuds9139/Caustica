@@ -1,0 +1,31 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba16f) uniform readonly image2D nrdDiff;   // OUT_DIFF_RADIANCE_HITDIST (YCoCg radiance, w = normHitDist)
+layout(binding = 1, set = 0, rgba16f) uniform readonly image2D nrdSpec;   // OUT_SPEC_RADIANCE_HITDIST (YCoCg radiance, w = normHitDist)
+layout(binding = 2, set = 0, rgba16f) uniform writeonly image2D combined; // denoised linear HDR radiance (the upscale source)
+
+layout(push_constant) uniform Push {
+    int width;
+    int height;
+} pc;
+
+// Inverse of NRD's _NRD_LinearToYCoCg (Y, Co, Cg -> linear RGB). REBLUR emits the same YCoCg
+// packing the front-end wrote, so decoding here is the exact round trip.
+vec3 yCoCgToLinear(vec3 c) {
+    float Y = c.r;
+    float Co = c.g;
+    float Cg = c.b;
+    return vec3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= pc.width || pix.y >= pc.height) {
+        return;
+    }
+    vec3 diffRadiance = yCoCgToLinear(imageLoad(nrdDiff, pix).rgb);
+    vec3 specRadiance = yCoCgToLinear(imageLoad(nrdSpec, pix).rgb);
+    imageStore(combined, pix, vec4(max(diffRadiance + specRadiance, vec3(0.0)), 1.0));
+}
