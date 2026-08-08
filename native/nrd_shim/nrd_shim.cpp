@@ -23,10 +23,16 @@
 
 #include "NRI.h"
 #include "Extensions/NRIHelper.h"
+// NRIWrapperVK.h's AccelerationStructureVKDesc references nri::AccelerationStructureBits, which
+// lives in NRIRayTracing.h — a header NRIWrapperVK.h does not include itself (it expects the
+// includer to have pulled it in), so it must come first.
+#include "Extensions/NRIRayTracing.h"
 #include "Extensions/NRIWrapperVK.h"
 
 #include "NRD.h"
 #include "NRDIntegration.h"
+// Header-only implementation of the Integration layer (method bodies live in the .hpp).
+#include "NRDIntegration.hpp"
 
 #include <cstring>
 #include <cstdlib>
