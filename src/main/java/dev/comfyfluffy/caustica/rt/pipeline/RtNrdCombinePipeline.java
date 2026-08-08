@@ -123,13 +123,13 @@ public final class RtNrdCombinePipeline {
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             long[] views = {diffView, specView, combinedView, rawDiffView, rawSpecView, viewZView};
-            VkDescriptorImageInfo.Buffer infos = VkDescriptorImageInfo.calloc(6, stack);
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(6, stack);
             for (int i = 0; i < 6; i++) {
-                infos.get(i).imageView(views[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
+                info.get(0).imageView(views[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 writes.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i)
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                        .pImageInfo(infos.get(i).address());
+                        .pImageInfo(info);
             }
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
