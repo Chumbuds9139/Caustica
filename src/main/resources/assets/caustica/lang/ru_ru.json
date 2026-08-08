@@ -54,6 +54,8 @@
 	"caustica.options.rt.upscaler.fsr3": "FSR 3 (Экспериментально)",
 	"caustica.options.rt.fsrQuality": "Качество FSR 3",
 	"caustica.options.rt.fsrQuality.tooltip": "Режим качества апскейлера AMD FSR 3. Режимы более низкого качества рендерят меньше пикселей и агрессивнее масштабируют изображение для более высокой частоты кадров; режимы более высокого качества рендерят больше пикселей для более резкого изображения.",
+	"caustica.options.rt.nrd": "Денуазер NRD (Экспериментально)",
+	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers (REBLUR): убирает шум изображения с трассировкой лучей в разрешении рендеринга на GPU без DLSS Ray Reconstruction. Сочетайте с апскейлером FSR 3 для полного пути денуазинг+апскейл, либо с Выкл. для родного разрешения без шума. Экспериментально: настройка изображения продолжается.",
 	"caustica.options.rt.frameGeneration": "Генерация кадров (Экспериментально)",
 	"caustica.options.rt.frameGeneration.tooltip": "DLSS Frame Generation синтезирует промежуточные кадры, чтобы умножить воспринимаемую частоту кадров. ЭКСПЕРИМЕНТАЛЬНО: возможна повышенная задержка и артефакты. Требуются апскейлер DLSS и GPU NVIDIA GeForce RTX 40-й или 50-й серии.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Недоступно на этом GPU: для DLSS Frame Generation требуется видеокарта NVIDIA GeForce RTX 40-й или 50-й серии. Поддержка определяется по запросу возможностей NGX драйвера, когда он активен, иначе — по имени GPU.",

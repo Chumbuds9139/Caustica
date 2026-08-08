@@ -83,6 +83,8 @@
 	"caustica.options.rt.upscaler.fsr3": "FSR 3 (Experimental)",
 	"caustica.options.rt.fsrQuality": "Qualidade FSR 3",
 	"caustica.options.rt.fsrQuality.tooltip": "Modo de qualidade do upscaler AMD FSR 3. Modos de menor qualidade renderizam menos pixels e fazem upscaling mais agressivo para obter taxas de quadros maiores; modos de maior qualidade renderizam mais pixels para uma imagem mais nítida.",
+	"caustica.options.rt.nrd": "Denoiser NRD (Experimental)",
+	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers (REBLUR): remove o ruído da imagem com ray tracing na resolução de render em GPUs sem DLSS Ray Reconstruction. Combine com o upscaler FSR 3 para um caminho completo de denoise+upscale, ou com Desligado para resolução nativa sem ruído. Experimental: ajustes de imagem em andamento.",
 	"caustica.options.rt.frameGeneration": "Geração de Quadros (Experimental)",
 	"caustica.options.rt.frameGeneration.tooltip": "O DLSS Frame Generation sintetiza quadros intermediários para multiplicar a taxa de quadros percebida. EXPERIMENTAL: pode aumentar a latência ou causar artefatos. Requer o upscaler DLSS e uma GPU NVIDIA GeForce RTX das séries 40 ou 50.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Indisponível nesta GPU: o DLSS Frame Generation requer uma placa NVIDIA GeForce RTX das séries 40 ou 50. O suporte vem da consulta de capacidade NGX do driver quando ativa e, caso contrário, do nome da GPU.",

@@ -411,6 +411,44 @@ def bundleFsrNatives = tasks.register("bundleFsrNatives") {
 
 sourceSets.main.resources.srcDir(files(fsrNativeGenRoot).builtBy(bundleFsrNatives))
 
+// ===== NRD natives (optional) =====
+// Same opt-in pattern: CI builds native/nrd_shim (NRD + NRI statically linked, SPIR-V embedded) and
+// drops nrdshim.dll into build/native/nrd_shim/release; local checkouts without it still build, and
+// the NRD toggle simply stays hidden (NrdRuntime.platformSupported probes the bundled resource).
+def nrdNativeGenRoot = layout.buildDirectory.dir("generated/nrd-natives")
+def nrdShimOutDir = new File(layout.buildDirectory.dir("native/nrd_shim").get().asFile, "release")
+
+def bundleNrdNatives = tasks.register("bundleNrdNatives") {
+	group = "build"
+	description = "Bundles the NRD shim into the mod resources (when built)."
+
+	inputs.files(fileTree(nrdShimOutDir) {
+		include "nrdshim.dll"
+	}).withPropertyName("nrdNatives.windows-x64")
+	outputs.dir(nrdNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(nrdNativeGenRoot)
+		def shimFiles = fileTree(nrdShimOutDir) {
+			include "nrdshim.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("NRD natives not found in ${nrdShimOutDir}; bundling without NRD support.")
+			return
+		}
+		copy {
+			from(nrdShimOutDir) {
+				include "nrdshim.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into nrdNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(nrdNativeGenRoot).builtBy(bundleNrdNatives))
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
