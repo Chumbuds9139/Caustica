@@ -243,7 +243,8 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
     dispatch.viewSpaceToMetersFactor = 1.0f; // a Minecraft block is a meter
     dispatch.flags = 0;
 
-    ffxReturnCode_t r = p_ffxDispatch(upscaler->context, &dispatch.header);
+    // ffx_api takes a POINTER to the context handle on every entry point (create may rewrite it).
+    ffxReturnCode_t r = p_ffxDispatch(&upscaler->context, &dispatch.header);
     g_lastResult = (int) r;
     if (r != FFX_API_RETURN_OK) {
         FSR_LOG("dispatch_upscale: FAILED r=%u", (unsigned) r);
