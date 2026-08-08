@@ -60,7 +60,7 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Nrd.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -108,10 +108,14 @@ public final class CausticaConfig {
                         + " at runtime to the driver's reported DLSSG.MultiFrameCountMax.");
         FILE.setComment("fsr",
                 " AMD FSR 3 upscaling (experimental): upscales the path-traced image WITHOUT denoising,\n"
-                        + " so raw-trace noise follows the SPP setting until the NRD denoiser lands. quality\n"
+                        + " so raw-trace noise follows the SPP setting unless the NRD denoiser is also on. quality\n"
                         + " mirrors the DLSS PerfQuality numbering (0 Performance, 1 Balanced, 2 Quality,\n"
                         + " 3 Ultra Performance, 5 native AA). The runtime is bundled for Windows only for\n"
                         + " now; elsewhere the upscaler selector does not offer FSR 3.");
+        FILE.setComment("nrd",
+                " NRD (NVIDIA Real-time Denoisers) REBLUR denoising (experimental): the denoiser path for\n"
+                        + " GPUs without DLSS Ray Reconstruction. Denoises at render resolution; combine with the\n"
+                        + " FSR 3 upscaler (or none) for the display. Mutually exclusive with DLSS in the UI.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -920,6 +924,21 @@ public final class CausticaConfig {
             public static final IntSetting QUALITY = clampedInt("caustica.rt.fsr.quality", "fsr.quality", 2, 0, 5);
 
             private Fsr() {
+            }
+        }
+
+        /**
+         * NRD (NVIDIA Real-time Denoisers) REBLUR denoising (EXPERIMENTAL): the denoiser alternative
+         * for GPUs without DLSS Ray Reconstruction. Consumes the per-lobe radiance + hit-distance
+         * signals the tracer captures under {@code FEATURE_NRD} and denoises them at render resolution;
+         * the upscale stage (FSR 3, or none) then brings the result to display resolution. Mutually
+         * exclusive with DLSS-RR in the UI (RR already denoises + upscales in one pass); when both
+         * are somehow on, RR wins.
+         */
+        public static final class Nrd {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);
+
+            private Nrd() {
             }
         }
 

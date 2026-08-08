@@ -102,6 +102,12 @@ public final class RtVideoOptions {
         } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
             options.add(fsrQuality());
         }
+        // NRD is the denoiser alternative for the non-DLSS paths: hidden while DLSS is active (RR
+        // already denoises + upscales in one pass) and where the NRD runtime is not bundled.
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)
+                && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
+            options.add(nrdDenoiser());
+        }
         options.add(omm());
         return options.toArray(OptionInstance<?>[]::new);
     }
@@ -534,6 +540,15 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(0, FSR_QUALITY_ORDER.size() - 1),
             initialPosition,
             position -> setting.set(FSR_QUALITY_ORDER.get(position)));
+    }
+
+    /**
+     * NRD (REBLUR) denoiser toggle for the non-DLSS paths. Live-safe like the other per-frame
+     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
+     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
+     */
+    private static OptionInstance<Boolean> nrdDenoiser() {
+        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
     }
 
     /**

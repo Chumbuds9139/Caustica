@@ -63,6 +63,8 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
+import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
@@ -111,7 +113,9 @@ public final class RtComposite {
     // Real inline push constants (fast constant-bank reads), separate from the WorldPush BDA ring above.
     // Hot addresses/frameIndex and raygen's debugView avoid unnecessary global-memory dereferences;
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
-    private static final int GUIDE_COUNT = 6; // RR guide buffers bound at world-pipeline bindings 3..8
+    // RR guide buffers (bindings 3..8) + NRD signals (bindings 9..11: viewZ + per-lobe radiance/hit
+    // distance). The NRD images are only written when FEATURE_NRD is on, but the bindings always exist.
+    private static final int GUIDE_COUNT = 9;
     private static final long PATH_RECORD_BYTES = 48L;
     // Reflected from PackedRestirReservoir's std430 array stride (world_layout_probe.slang).
     private static final long RESTIR_RECORD_BYTES = RestirReservoirData.BYTE_SIZE;
@@ -148,6 +152,7 @@ public final class RtComposite {
     private static final int FEATURE_CLOUDS = 8;
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
     private static final int FEATURE_RESTIR = 32;
+    private static final int FEATURE_NRD = 64;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -186,6 +191,12 @@ public final class RtComposite {
         // will be denoised rather than whether the player would like it to be.
         if (RtDlssRr.enabled() && debugView() == 0) {
             flags |= FEATURE_DENOISER;
+        } else if (RtNrdDenoiser.enabled() && debugView() == 0) {
+            // NRD signal capture (per-lobe radiance + hit distance + viewZ) only runs when RR is not
+            // already denoising: the two are mutually exclusive in the UI, and if a hand-edited config
+            // somehow enables both, RR wins — capturing the signals would burn ALU + bandwidth for
+            // buffers nothing consumes.
+            flags |= FEATURE_NRD;
         }
         return flags;
     }
@@ -390,6 +401,17 @@ public final class RtComposite {
     private RtImage gMotion;
     private RtImage gSpecAlbedo;
     private RtImage gSpecMotion;
+    // NRD signals (only written when FEATURE_NRD is on): primary-hit linear view depth + per-lobe
+    // YCoCg radiance with REBLUR-normalized hit distance, and the denoiser's own input/output pair +
+    // the combined (decoded + summed) radiance the upscale stage consumes.
+    private RtImage gViewZ;
+    private RtImage gNrdDiff;
+    private RtImage gNrdSpec;
+    private RtImage nrdDiffOut;
+    private RtImage nrdSpecOut;
+    private RtImage nrdCombined;
+    private RtNrdCombinePipeline nrdCombinePipeline;
+    private boolean renderSizeNrdEnabled;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -816,6 +838,10 @@ public final class RtComposite {
         worldPipeline.setExtraStorageImage(3, gMotion.view);
         worldPipeline.setExtraStorageImage(4, gSpecAlbedo.view);
         worldPipeline.setExtraStorageImage(5, gSpecMotion.view);
+        // NRD signals: always bound (the layout carries them); only written under FEATURE_NRD.
+        worldPipeline.setExtraStorageImage(6, gViewZ.view);
+        worldPipeline.setExtraStorageImage(7, gNrdDiff.view);
+        worldPipeline.setExtraStorageImage(8, gNrdSpec.view);
     }
 
     private void destroyGuideImages() {
@@ -842,6 +868,30 @@ public final class RtComposite {
         if (gSpecMotion != null) {
             gSpecMotion.destroy();
             gSpecMotion = null;
+        }
+        if (gViewZ != null) {
+            gViewZ.destroy();
+            gViewZ = null;
+        }
+        if (gNrdDiff != null) {
+            gNrdDiff.destroy();
+            gNrdDiff = null;
+        }
+        if (gNrdSpec != null) {
+            gNrdSpec.destroy();
+            gNrdSpec = null;
+        }
+        if (nrdDiffOut != null) {
+            nrdDiffOut.destroy();
+            nrdDiffOut = null;
+        }
+        if (nrdSpecOut != null) {
+            nrdSpecOut.destroy();
+            nrdSpecOut = null;
+        }
+        if (nrdCombined != null) {
+            nrdCombined.destroy();
+            nrdCombined = null;
         }
         if (rrOutput != null) {
             rrOutput.destroy();
@@ -924,11 +974,14 @@ public final class RtComposite {
         // mutually exclusive, but a hand-edited config could enable both — RR wins).
         boolean fsrEnabled = !rrEnabled && RtFsrUpscaler.enabled();
         int fsrQuality = fsrEnabled ? RtFsrUpscaler.quality() : Integer.MIN_VALUE;
+        // NRD's denoise slot has the same exclusivity: off whenever RR is denoising.
+        boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
-                && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality) {
+                && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
+                && renderSizeNrdEnabled == nrdEnabled) {
             syncRestirResources(ctx);
             return;
         }
@@ -978,6 +1031,7 @@ public final class RtComposite {
         renderSizeRrQuality = rrQuality;
         renderSizeFsrEnabled = fsrEnabled;
         renderSizeFsrQuality = fsrQuality;
+        renderSizeNrdEnabled = nrdEnabled;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
         // mapping seam. displayImage stays R8G8B8A8 to match the main target it is copied into
@@ -1000,6 +1054,24 @@ public final class RtComposite {
         gMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderW + "x" + renderH);
         gSpecAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderW + "x" + renderH);
         gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
+        // NRD signal inputs are bound into the world pipeline every frame (the descriptor layout always
+        // carries them), so they are allocated even while the NRD toggle is off; the tracer only WRITES
+        // them under FEATURE_NRD. Their formats are the NRD front-end contract: viewZ linear depth
+        // (R32f), per-lobe YCoCg radiance + normalized hit distance (RGBA16f).
+        gViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "nrd viewZ " + renderW + "x" + renderH);
+        gNrdDiff = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd diffuse radiance+hitdist " + renderW + "x" + renderH);
+        gNrdSpec = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd specular radiance+hitdist " + renderW + "x" + renderH);
+        // Denoiser outputs + the decoded/summed image the upscale stage consumes exist only while NRD
+        // actually runs; the combine pipeline is created lazily with them.
+        if (nrdEnabled) {
+            nrdDiffOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised diffuse " + renderW + "x" + renderH);
+            nrdSpecOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised specular " + renderW + "x" + renderH);
+            nrdCombined = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd combined radiance " + renderW + "x" + renderH);
+            if (nrdCombinePipeline == null) {
+                nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
+            }
+            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view);
+        }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         exposure.ensureResources(ctx);
@@ -1058,6 +1130,10 @@ public final class RtComposite {
             // reference and for the debug guide views (raw inspection).
             boolean rrPath = RtDlssRr.enabled() && debugView == 0;
             boolean fsrPath = !rrPath && RtFsrUpscaler.enabled() && debugView == 0;
+            // NRD needs a jittered trace to accumulate (its history reprojection compensates using the
+            // jitter reported in CommonSettings); when an upscaler shares the frame, both consumers
+            // get the same jitter sequence.
+            boolean nrdPath = !rrPath && RtNrdDenoiser.enabled() && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
@@ -1066,6 +1142,10 @@ public final class RtComposite {
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             } else if (fsrPath) {
                 // Same Halton(2,3) sequence, FSR 3's own phase-count rule (see CausticaJitter).
+                CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
+                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
+                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+            } else if (nrdPath) {
                 CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
@@ -1281,6 +1361,29 @@ public final class RtComposite {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
+            // NRD denoise (the non-DLSS path): consumes the tracer's per-lobe signals + guides at
+            // render res, writes denoised YCoCg outputs, and the combine pass decodes + sums them
+            // into nrdCombined — the radiance the upscale stage below consumes instead of the raw
+            // trace. NRD inserts its own barriers around the denoise (resources are declared in the
+            // GENERAL state the renderer keeps them in); the barrier after the combine covers its
+            // writes for the upscale reads.
+            boolean nrdDone = false;
+            if (nrdPath && gViewZ != null && nrdDiffOut != null) {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
+                    nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
+                            gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
+                            frameProjection, frameViewRotation, jitterX, jitterY, (int) frameCounter);
+                }
+                if (nrdDone) {
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
+                    try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
+                        nrdCombinePipeline.dispatch(cmd, renderW, renderH);
+                    }
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the upscale
+                }
+            }
+
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
             if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
@@ -1295,12 +1398,14 @@ public final class RtComposite {
             // FSR 3 occupies the same slot when RR is not running: same inputs minus the RR guide
             // buffers (color + depth + motion vectors), output straight into rrOutput so the rest of
             // the frame (exposure metering, display mapping) is untouched.
+            // The upscale stage consumes the DENOISED combined radiance when NRD ran, else the raw trace.
+            RtImage upscaleSource = nrdDone ? nrdCombined : output;
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.fsr")) {
                     // Vertical FOV from the (unjittered) level projection, for FSR's depth heuristic.
                     float fovY = (float) (2.0 * Math.atan(1.0 / frameProjection.m11()));
-                    rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), output, gDepth, gMotion, rrOutput,
+                    rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion, rrOutput,
                             renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
                 }
             }
@@ -1312,7 +1417,7 @@ public final class RtComposite {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
-                    blitUpscale(cmd, stack, output, rrOutput);
+                    blitUpscale(cmd, stack, upscaleSource, rrOutput);
                 }
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
@@ -1903,6 +2008,13 @@ public final class RtComposite {
         RtDlssRr.INSTANCE.destroy();
         // Same contract for the FSR context (no-op when it was never created).
         RtFsrUpscaler.INSTANCE.destroy();
+        // Tear down the NRD integration (wraps the Vulkan device via NRI) only after its images are
+        // released below; destroyGuideImages runs after this in the teardown sequence.
+        RtNrdDenoiser.INSTANCE.destroy();
+        if (nrdCombinePipeline != null) {
+            nrdCombinePipeline.destroy();
+            nrdCombinePipeline = null;
+        }
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;
