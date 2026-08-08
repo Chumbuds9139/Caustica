@@ -24,9 +24,15 @@ import java.lang.foreign.ValueLayout;
  * REBLUR-normalized hit distances) at render resolution; {@code RtNrdCombinePipeline} then decodes
  * and sums the two outputs into the radiance image the upscale stage consumes.
  *
- * <p>Settings contract with the shim (mirrors NRD's CommonSettings): non-jittered column-major
- * matrices, jitter in UV units, motion-vector scale converting the renderer's render-pixel MVs to
- * UV space, and the renderer's frame counter as NRD's frame index.
+ * <p>Matrix conventions, verified against NRD v4.17.3 sources (InstanceImpl + mathlib):
+ * Minecraft 26.x view space is already the +Z-forward LEFT-handed space NRD works in, so the
+ * rotation x translate(-cameraOffset) worldToView is passed UNMODIFIED — DecomposeProjection
+ * detects the handedness from viewToClip and converts RH inputs itself (negating the view Z
+ * column/row); pre-flipping Z here made NRD flip a second time, mirroring reconstructed depth
+ * about the camera (the "giant circle" of misreprojected history). The projection itself must
+ * have Vulkan's NDC-y-flip UNDONE before handing it over: NRD assumes y-up NDC (STYLE_D3D) and
+ * applies the top-left-origin flip itself in GetScreenUv. IN_VIEWZ is positive linear distance,
+ * IN_MV is previous-minus-current in render pixels (scaled to UV via motionVectorScale).
  */
 public final class RtNrdDenoiser {
     public static final RtNrdDenoiser INSTANCE = new RtNrdDenoiser();
@@ -54,6 +60,8 @@ public final class RtNrdDenoiser {
     private float prevOffsetX;
     private float prevOffsetY;
     private float prevOffsetZ;
+    private int lastWidth;
+    private int lastHeight;
 
     private RtNrdDenoiser() {
     }
@@ -63,19 +71,19 @@ public final class RtNrdDenoiser {
      * writes the denoised outputs. {@code viewRotation} is the rotation-only view matrix and
      * {@code cameraOffsetX/Y/Z} the camera position in the rebased terrain coordinates the signals
      * live in — NRD derives camera motion from the worldToView translation, so the matrix is built
-     * here as rotation x translate(-offset). A rotation-only matrix made NRD compute a zero camera
-     * delta, breaking its previous-position reconstruction (the error grows radially from the screen
-     * centre — the "giant stable circle with noisy edges" artifact). {@code jitterPixelsX/Y} are the
-     * raw sub-pixel jitter values in PIXEL units: NRD validates cameraJitter against [-0.5, 0.5] and
-     * does the UV conversion itself. Returns false (caller falls back to the undenoised image) when
-     * the runtime is unavailable or the call fails.
+     * here as rotation x translate(-offset). {@code jitterPixelsX/Y} are the raw sub-pixel jitter
+     * values in PIXEL units: NRD validates cameraJitter against [-0.5, 0.5] and does the UV
+     * conversion itself. {@code projectionChanged} marks FOV/projection jumps (sprint, fly) that
+     * warp the reprojection space the temporal accumulation lives in. Returns false (caller falls
+     * back to the undenoised image) when the runtime is unavailable or the call fails.
      */
     public boolean denoise(long cmd, int renderWidth, int renderHeight,
                            RtImage motion, RtImage normalRoughness, RtImage viewZ,
                            RtImage diffIn, RtImage specIn, RtImage diffOut, RtImage specOut,
                            Matrix4fc viewToClip, Matrix4fc viewRotation,
                            float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
-                           float jitterPixelsX, float jitterPixelsY, int frameIndex) {
+                           float jitterPixelsX, float jitterPixelsY, int frameIndex,
+                           boolean projectionChanged) {
         if (failed || !enabled()) {
             return false;
         }
@@ -88,33 +96,36 @@ public final class RtNrdDenoiser {
         }
         try {
             if (!reblurSettingsSent) {
-                // REBLUR stays SPATIAL-ONLY (temporal accumulation = 1 frame): its internal temporal
-                // reprojection depends on matrix conventions this renderer cannot verify without
-                // in-game debugging (it produced a screen-space "circle" of stale history), while the
-                // temporal noise-killing is done by the renderer's own TAA pass on top, using the
-                // motion vectors FSR already reprojects with successfully.
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 1, 1);
+                // REBLUR with full temporal accumulation (NRD defaults for 60 FPS): the temporal
+                // stage is the actual noise killer and now runs with verified matrix conventions
+                // (class header). AREA_5X5 reconstructs the lobe whose hit distance arrived as 0
+                // from the tracer's probabilistic single-lobe sampling.
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 30, 6);
                 reblurSettingsSent = true;
             }
             lib.newFrame();
 
-            // worldToView with the camera translation in the rebased terrain space: NRD pulls the
-            // camera position out of this matrix (and its prev counterpart) to get the per-frame
-            // camera delta its reconstruction needs. The terrain space is static between rebase
-            // anchor rebuilds, which is exactly the "static world, moving camera" model NRD assumes.
+            // Minecraft's Vulkan clip space has NDC y pointing DOWN; NRD assumes y-UP NDC and does
+            // the top-left-origin flip itself (GetScreenUv). Feeding the flipped projection made
+            // REBLUR reconstruct every view position vertically mirrored, so its reprojection
+            // sampled history from the wrong half of the screen. Undo the flip on a private copy —
+            // the renderer keeps the original matrix for everything else.
+            Matrix4f nrdViewToClip = new Matrix4f(viewToClip);
+            nrdViewToClip.m11(-viewToClip.m11());
+
+            // worldToView with the camera translation in the rebased terrain space, passed
+            // UNMODIFIED: Minecraft's view space is already the +Z-forward LH space NRD works in
+            // (see class header). The terrain space is static between rebase anchor rebuilds,
+            // which is exactly the "static world, moving camera" model NRD assumes.
             Matrix4f worldToView = new Matrix4f(viewRotation)
                     .translate(-cameraOffsetX, -cameraOffsetY, -cameraOffsetZ);
-            // NRD's reconstruction assumes a +Z-forward view space matching IN_VIEWZ (positive linear
-            // depth: ReconstructViewPosition sets p.z = viewZ). Minecraft's view space is the GL
-            // convention (-Z forward), so flip the view-space Z axis; NRD detects the resulting
-            // handedness from the matrix itself. IN_VIEWZ stays as-is (it is the +dist value this
-            // flipped space expects).
-            worldToView = new Matrix4f().scaling(1f, 1f, -1f).mul(worldToView);
 
             // Rebase anchor shift or teleport: the terrain coordinates NRD accumulates against just
-            // jumped; the history is unrecoverable, so clear it this frame and start over.
-            boolean jumped = false;
-            if (hasPrev) {
+            // jumped; the history is unrecoverable, so clear it this frame and start over. Same for
+            // a resolution change (the shim recreated the integration, its pools are empty) and a
+            // projection change (FOV lerp warped the reprojection space).
+            boolean jumped = projectionChanged || lastWidth != renderWidth || lastHeight != renderHeight;
+            if (hasPrev && !jumped) {
                 float dx = cameraOffsetX - prevOffsetX;
                 float dy = cameraOffsetY - prevOffsetY;
                 float dz = cameraOffsetZ - prevOffsetZ;
@@ -127,7 +138,7 @@ public final class RtNrdDenoiser {
                 MemorySegment w2v = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 MemorySegment w2vPrev = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 // JOML's get(float[]) is column-major, exactly NRD's "vector is a column" layout.
-                viewToClip.get(v2c.asByteBuffer().asFloatBuffer());
+                nrdViewToClip.get(v2c.asByteBuffer().asFloatBuffer());
                 worldToView.get(w2v.asByteBuffer().asFloatBuffer());
                 if (hasPrev && !jumped) {
                     prevViewToClip(v2cPrev);
@@ -135,7 +146,7 @@ public final class RtNrdDenoiser {
                 } else {
                     // First frame after (re)creation or a world-coordinate jump: "previous" equals
                     // current, so NRD does not reproject history that is invalid or does not exist.
-                    viewToClip.get(v2cPrev.asByteBuffer().asFloatBuffer());
+                    nrdViewToClip.get(v2cPrev.asByteBuffer().asFloatBuffer());
                     worldToView.get(w2vPrev.asByteBuffer().asFloatBuffer());
                 }
                 // cameraJitter is the raw sub-pixel jitter in PIXEL units (NRD's [-0.5, 0.5]
@@ -152,8 +163,10 @@ public final class RtNrdDenoiser {
             prevOffsetX = cameraOffsetX;
             prevOffsetY = cameraOffsetY;
             prevOffsetZ = cameraOffsetZ;
-            viewToClip.get(prevViewToClip);
+            nrdViewToClip.get(prevViewToClip);
             worldToView.get(prevWorldToView);
+            lastWidth = renderWidth;
+            lastHeight = renderHeight;
             hasPrev = true;
 
             int rc = lib.denoise(cmd,

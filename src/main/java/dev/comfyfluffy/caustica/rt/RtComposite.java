@@ -1416,36 +1416,27 @@ public final class RtComposite {
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
                     // Camera position in the rebased terrain coordinates the signals live in (same
                     // offset pushed to the shaders): NRD derives camera motion from the worldToView
-                    // translation built from it.
+                    // translation built from it. projectionChanged restarts REBLUR's history when
+                    // the FOV lerps (sprint/fly), same trigger the old TAA used.
                     nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
                             gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
                             frameProjection, frameViewRotation,
                             (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
                             (float) (camZ - terrain.blockZ),
-                            jitterX, jitterY, (int) frameCounter);
+                            jitterX, jitterY, (int) frameCounter, projectionChanged);
                 }
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
                     try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
                         nrdCombinePipeline.dispatch(cmd, renderW, renderH, NRD_DENOISING_RANGE);
                     }
-                    // Temporal accumulation over the spatially denoised radiance — the real noise
-                    // killer. Reprojects with the renderer's own jitter-free MVs (the same vectors
-                    // FSR consumes successfully), neighborhood-clamped, capped window; restarted on
-                    // projection (FOV) changes and rebase/teleport jumps.
-                    RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
-                    RtImage outImg = taaWriteToPing ? taaPing : taaPong;
-                    taaPipeline.setImages(nrdCombined.view, historyImg.view, outImg.view,
-                            gMotion.view, gViewZ.view);
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the TAA
-                    try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.taa")) {
-                        taaPipeline.dispatch(cmd, renderW, renderH, 1.0f / renderW, 1.0f / renderH,
-                                projectionChanged || !taaHasPrev, TAA_MAX_FRAMES);
-                    }
-                    taaWriteToPing = !taaWriteToPing;
-                    taaHasPrev = true;
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // TAA output visible to the upscale
-                    denoisedSource = outImg;
+                    // REBLUR now runs its own temporal accumulation (verified matrix conventions),
+                    // which replaces the renderer's TAA pass here: stacking a second accumulator on
+                    // top smeared blocks while turning the camera and flickered wherever its reset
+                    // logic disagreed with the denoiser's. The combined denoised radiance goes
+                    // straight to the upscale stage.
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the upscale
+                    denoisedSource = nrdCombined;
                 }
                 frameProjection.get(prevProjection);
                 prevProjectionValid = true;

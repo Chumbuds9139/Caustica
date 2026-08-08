@@ -197,9 +197,12 @@ NRD_SHIM_EXPORT void nrdshim_new_frame() {
     }
 }
 
-// Per-frame common settings. Matrices are column-major float[16], non-jittered, matching the
-// renderer's own (rotation-only camera space + level projection). Jitter is in UV units; motion
-// vector scale converts the renderer's render-pixel MVs into the UV space NRD expects.
+// Per-frame common settings. Matrices are column-major float[16], non-jittered: the level
+// projection with Vulkan's NDC y-flip undone (NRD assumes y-up NDC) and the unmodified
+// rotation x translate worldToView (Minecraft's view space is already the +Z-forward LH space
+// NRD expects — it converts RH inputs itself). Jitter is in PIXEL units (NRD's [-0.5, 0.5]
+// contract); motion vector scale converts the renderer's render-pixel MVs into the UV space
+// NRD expects.
 NRD_SHIM_EXPORT int nrdshim_set_settings(const float* viewToClip, const float* viewToClipPrev,
                                          const float* worldToView, const float* worldToViewPrev,
                                          float jitterX, float jitterY,
