@@ -34,8 +34,16 @@ public final class RtNrdDenoiser {
         return CausticaConfig.Rt.Nrd.ENABLED.value() && NrdRuntime.platformSupported();
     }
 
+    // nrd::HitDistanceReconstructionMode::AREA_5X5. The tracer selects ONE lobe per pixel at SPP 1
+    // (specular with probability ps clamped to [0.1, 0.9]), so the other lobe's hit distance arrives
+    // as 0 = "no data" every frame; REBLUR must reconstruct it from neighbours or its history
+    // rejection misfires (the camera-move smearing). AREA_5X5 is the mode whose required probability
+    // range [1/16, 15/16] contains our [0.1, 0.9] clamp; AREA_3X3 would need [0.25, 0.75] + Bayer.
+    private static final int HIT_DIST_RECONSTRUCTION_AREA_5X5 = 2;
+
     private boolean failed;
     private boolean hasPrev;
+    private boolean reblurSettingsSent;
     private final float[] prevViewToClip = new float[16];
     private final float[] prevWorldToView = new float[16];
     private float prevJitterX;
@@ -65,6 +73,10 @@ public final class RtNrdDenoiser {
             return false;
         }
         try {
+            if (!reblurSettingsSent) {
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 0, 0);
+                reblurSettingsSent = true;
+            }
             lib.newFrame();
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment v2c = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
@@ -137,5 +149,7 @@ public final class RtNrdDenoiser {
         NrdRuntime.INSTANCE.shutdown();
         failed = false;
         hasPrev = false;
+        // The shim's static tuning state dies with the unloaded DLL; resend it on the next session.
+        reblurSettingsSent = false;
     }
 }

@@ -27,7 +27,12 @@ endif()
 # --- NRD (static, SPIR-V only) + its NRI dependency -------------------------------------------
 # NRD v4.17.3 fetches NRI v179 via FetchContent when NRD_NRI=ON. Fetch NRI up front instead so the
 # shim can include NRI headers directly: NRD sees the NRI target already exists and reuses it.
+#
+# Both are built STATIC so the shim is a single self-contained DLL: the shared-NRI build produces a
+# separate NRI.dll that the bundle step would have to ship (and silently lost — LoadLibrary failed
+# at runtime and the whole NRD path died without a visible error).
 include(FetchContent)
+set(NRI_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
 set(NRI_ENABLE_VK_SUPPORT ON CACHE BOOL "" FORCE)
 set(NRI_ENABLE_D3D11_SUPPORT OFF CACHE BOOL "" FORCE)
 set(NRI_ENABLE_D3D12_SUPPORT OFF CACHE BOOL "" FORCE)

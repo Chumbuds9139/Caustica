@@ -60,6 +60,31 @@ static int g_lastResult = 0;
 // One stable denoiser id for the single REBLUR_DIFFUSE_SPECULAR instance.
 static const nrd::Identifier DENOISER_ID = 0;
 
+// Last REBLUR tuning Java sent. RecreateVK (resize) rebuilds the instance with NRD defaults, so the
+// stored values are re-applied at the end of every nrdshim_init. Zeros mean "keep NRD's default".
+static int g_hitDistReconstructionMode = 0; // nrd::HitDistanceReconstructionMode
+static int g_maxAccumulatedFrameNum = 0;
+static int g_maxFastAccumulatedFrameNum = 0;
+
+static void applyStoredReblurSettings() {
+    if (!g_integration) {
+        return;
+    }
+    nrd::ReblurSettings settings = {}; // NRD defaults via member initializers
+    settings.hitDistanceReconstructionMode = (nrd::HitDistanceReconstructionMode) g_hitDistReconstructionMode;
+    if (g_maxAccumulatedFrameNum > 0) {
+        settings.maxAccumulatedFrameNum = (uint32_t) g_maxAccumulatedFrameNum;
+    }
+    if (g_maxFastAccumulatedFrameNum > 0) {
+        settings.maxFastAccumulatedFrameNum = (uint32_t) g_maxFastAccumulatedFrameNum;
+    }
+    nrd::Result result = g_integration->SetDenoiserSettings(DENOISER_ID, &settings);
+    if (result != nrd::Result::SUCCESS) {
+        std::fprintf(stderr, "[nrd_shim] SetDenoiserSettings failed: %d\n", (int) result);
+        std::fflush(stderr);
+    }
+}
+
 extern "C" {
 
 #if defined(_WIN32)
@@ -145,7 +170,23 @@ NRD_SHIM_EXPORT int nrdshim_init(unsigned long long vkInstance, unsigned long lo
 
     g_width = width;
     g_height = height;
+    // A resize rebuilds the instance with NRD defaults; re-apply whatever tuning Java last sent.
+    applyStoredReblurSettings();
     NRD_SHIM_LOG("init: OK (memory %.1f Mb)", g_integration->GetTotalMemoryUsageInMb());
+    return 0;
+}
+
+// Stores + applies REBLUR tuning (see applyStoredReblurSettings). Safe before init: the values are
+// remembered and applied when nrdshim_init creates the instance. hitDistReconstructionMode uses the
+// nrd::HitDistanceReconstructionMode values (0 OFF, 1 AREA_3X3, 2 AREA_5X5); the frame counts accept
+// 0 = keep NRD default.
+NRD_SHIM_EXPORT int nrdshim_set_reblur_settings(int hitDistReconstructionMode,
+                                                int maxAccumulatedFrameNum,
+                                                int maxFastAccumulatedFrameNum) {
+    g_hitDistReconstructionMode = hitDistReconstructionMode;
+    g_maxAccumulatedFrameNum = maxAccumulatedFrameNum;
+    g_maxFastAccumulatedFrameNum = maxFastAccumulatedFrameNum;
+    applyStoredReblurSettings();
     return 0;
 }
 

@@ -23,6 +23,7 @@ public final class NrdLibrary {
     private final MethodHandle init;
     private final MethodHandle newFrame;
     private final MethodHandle setSettings;
+    private final MethodHandle setReblurSettings;
     private final MethodHandle denoise;
     private final MethodHandle destroy;
     private final MethodHandle lastResult;
@@ -45,6 +46,10 @@ public final class NrdLibrary {
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+        // int nrdshim_set_reblur_settings(i32 hitDistReconMode, i32 maxAccum, i32 maxFastAccum)
+        this.setReblurSettings = handle(lookup, "nrdshim_set_reblur_settings",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
         // int nrdshim_denoise(u64 cmd, [image,fmt]x7: mv, normalRough, viewZ, diffIn, specIn, diffOut, specOut)
         this.denoise = handle(lookup, "nrdshim_denoise",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
@@ -99,6 +104,20 @@ public final class NrdLibrary {
                     mvScaleX, mvScaleY, frameIndex, reset);
         } catch (Throwable t) {
             throw new RuntimeException("nrdshim_set_settings failed", t);
+        }
+    }
+
+    /**
+     * REBLUR tuning. {@code hitDistReconstructionMode}: 0 OFF, 1 AREA_3X3, 2 AREA_5X5; the frame
+     * counts accept 0 = keep NRD's default. The shim remembers these across resize re-inits.
+     */
+    public int setReblurSettings(int hitDistReconstructionMode, int maxAccumulatedFrameNum,
+                                 int maxFastAccumulatedFrameNum) {
+        try {
+            return (int) this.setReblurSettings.invokeExact(
+                    hitDistReconstructionMode, maxAccumulatedFrameNum, maxFastAccumulatedFrameNum);
+        } catch (Throwable t) {
+            throw new RuntimeException("nrdshim_set_reblur_settings failed", t);
         }
     }
 
