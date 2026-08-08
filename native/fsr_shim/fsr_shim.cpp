@@ -227,18 +227,13 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
             renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
     dispatch.motionVectors = makeImageResource((VkImage) mvImage, (VkFormat) mvFormat,
             renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
-    // Optional inputs: the tracer's reactive mask (moving entities ONLY — transmissive surfaces
-    // are excluded, see guides.slang) tells FSR not to lock its temporal history on those pixels.
-    // transparencyAndComposition stays null: feeding the same mask there changed FSR's accumulation
-    // behavior globally and produced instability (shimmer/darkening) without reducing ghosting.
-    // Exposure stays on AUTO_EXPOSURE.
+    // Optional inputs: NONE bound. The reactive-mask experiment (feeding the tracer's moving-entity
+    // mask into dispatch.reactive / transparencyAndComposition) was reverted at the renderer level:
+    // it did not reduce ghosting and introduced shimmer regressions. reactiveImage is still accepted
+    // for ABI stability but ignored — FSR runs on color + depth + motion vectors only, which is the
+    // stable combination. Exposure stays on AUTO_EXPOSURE.
     dispatch.exposure = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
-    if (reactiveImage != 0) {
-        dispatch.reactive = makeImageResource((VkImage) reactiveImage, (VkFormat) reactiveFormat,
-                renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
-    } else {
-        dispatch.reactive = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
-    }
+    dispatch.reactive = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
     dispatch.transparencyAndComposition = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0,
             FFX_API_RESOURCE_STATE_COMMON);
     dispatch.output = makeImageResource((VkImage) outImage, (VkFormat) outFormat,

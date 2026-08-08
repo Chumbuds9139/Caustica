@@ -96,13 +96,17 @@ public final class RtNrdDenoiser {
         }
         try {
             if (!reblurSettingsSent) {
-                // REBLUR stays SPATIAL-ONLY (temporal accumulation = 1 frame). Its temporal stage
-                // still ghosted moving blocks and flashed the occasional reprojection "circle" even
-                // with the conventions verified against NRD sources — resolving that needs in-game
-                // debugging with NRD's validation overlay. Temporal accumulation is provided instead
-                // by the renderer's own TAA pass (its own option), which reprojects with the motion
-                // vectors FSR consumes successfully.
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 1, 1);
+                // REBLUR with its own temporal accumulation re-enabled: NRD's stock defaults for
+                // 60 FPS (30 accumulated frames, 6 fast). The earlier spatial-only fallback made
+                // every camera move dump raw SPP-1 noise back onto the screen (the "noise returns
+                // when I move, then stabilizes" complaint) because nothing accumulated radiance
+                // across frames before the renderer TAA; REBLUR's reprojection keeps accumulating
+                // through camera motion, which is also the strongest lever on the camera-turn
+                // ghosting (the previous ghost reports coincided with FSR's own temporal lock,
+                // since identified as FSR-native). The matrix conventions feeding it are the
+                // verified ones (class header). The renderer TAA still runs on top as an option —
+                // its motion-adaptive alpha keeps the stack from smearing.
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 30, 6);
                 reblurSettingsSent = true;
             }
             lib.newFrame();

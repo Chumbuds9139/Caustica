@@ -281,11 +281,11 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gMotion[pix] = motion;
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
     gSpecMotion[pix] = specMotion;
-    // FSR reactive mask: ONLY dynamic-object pixels (gv_motionObjDisp carries their per-frame
-    // displacement). Transmissive surfaces (water/glass) are deliberately EXCLUDED: marking them
-    // reactive made FSR stop accumulating their history, which read as visible shimmer on animated
-    // water — their own refracted motion vectors already handle them in the normal temporal path.
-    gReactive[pix] = dot(gv_motionObjDisp, gv_motionObjDisp) > 1.0e-8 ? 1.0 : 0.0;
+    // gReactive (binding 12) is deliberately NOT written: the FSR reactive-mask experiment
+    // (marking moving entities/transmission so FSR would not lock its history there) did not reduce
+    // the ghosting and introduced shimmer regressions, so it was reverted. The image stays allocated
+    // because removing the binding would re-shift the guide block and the celestials-atlas binding
+    // in world.rmiss again; nothing samples it.
 }
 
 // 48-byte queue record. float3 + uint intentionally share the first 16-byte lane; every remaining
