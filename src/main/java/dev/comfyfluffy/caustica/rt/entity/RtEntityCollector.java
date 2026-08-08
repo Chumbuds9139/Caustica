@@ -955,7 +955,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // body and looking down shows the mob through the ring.
         emitFlameFace(pose, cx, cy, cz, new int[]{0, 1, 2, 3}, 0f, 0f, -1f);  // north (z-)
         emitFlameFace(pose, cx, cy, cz, new int[]{5, 4, 6, 7}, 0f, 0f, 1f);   // south (z+)
-        emitFlameFace(pose, cx, cy, cz, new int[]{0, 3, 7, 5}, -1f, 0f, 0f);  // west (x-)
+        // Corner order walks the BOTTOM edge first (0 -> 5) so UV index i advances along it: the
+        // texture's v axis stays vertical (flames up). The old {0,3,7,5} climbed the z0 edge first,
+        // mapping the sprite's v axis onto world Z — flames lying on their side on this face
+        // (visible on the player's right when facing south).
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 5, 7, 3}, -1f, 0f, 0f);  // west (x-)
         emitFlameFace(pose, cx, cy, cz, new int[]{4, 1, 2, 6}, 1f, 0f, 0f);   // east (x+)
         // The flame's sprite-rect remap is only for its own quads; leave the capture clean so a
         // later submission (held item / armour layer) cannot sample through the fire sprite region.
