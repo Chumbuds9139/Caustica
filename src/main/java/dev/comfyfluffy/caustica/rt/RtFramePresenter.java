@@ -53,8 +53,6 @@ import java.nio.LongBuffer;
 public final class RtFramePresenter {
     public static final RtFramePresenter INSTANCE = new RtFramePresenter();
 
-    private static final long ACQUIRE_TIMEOUT_NS = 5_000_000_000L;
-
     private static final long LOG_INTERVAL_NS = 1_000_000_000L;
 
     private long[] acquireSemaphores = new long[0];
@@ -73,6 +71,7 @@ public final class RtFramePresenter {
     private int generatedFramesInWindow;
     private int interpOkInWindow;
     private int interpFallbackInWindow;
+    private int acquireSkippedInWindow;
 
     private RtFramePresenter() {
     }
@@ -113,8 +112,13 @@ public final class RtFramePresenter {
             return;
         }
         try {
-            ensureCapacity(device, swapchainImages.size() + 1, generatedCount);
-            for (int i = 0; i < generatedCount; i++) {
+            // Never ask for more extra images than the swapchain can lend: Minecraft needs one image
+            // for the real frame itself, so the pool caps the generated count. Requesting beyond it
+            // made vkAcquireNextImageKHR sit until timeout and froze the frame loop (the 0.2 FPS
+            // slideshow at high multipliers).
+            int want = Math.min(generatedCount, Math.max(0, swapchainImages.size() - 1));
+            ensureCapacity(device, swapchainImages.size() + 1, want);
+            for (int i = 0; i < want; i++) {
                 // null = no captured RT frame this tick (menu/loading/transition — routine, not a bug): fall
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
@@ -135,9 +139,13 @@ public final class RtFramePresenter {
                 int imageIndex;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     IntBuffer pIndex = stack.callocInt(1);
-                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, ACQUIRE_TIMEOUT_NS, acquireSem, 0L, pIndex);
+                    // NON-BLOCKING acquire (timeout 0): when the display still holds every free image
+                    // (pacing ahead of the pool), skip the remaining generated frames instead of
+                    // waiting — the frame loop must never stall on FG.
+                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, 0L, acquireSem, 0L, pIndex);
                     if (r != VK10.VK_SUCCESS && r != 1000001003 /* SUBOPTIMAL */) {
-                        return; // out-of-date/timeout: present what we have, let MC recover
+                        acquireSkippedInWindow++;
+                        break; // present what we already recorded this frame
                     }
                     imageIndex = pIndex.get(0);
                 }
@@ -209,15 +217,17 @@ public final class RtFramePresenter {
         double totalFps = (realFramesInWindow + generatedFramesInWindow) / seconds;
         CausticaMod.LOGGER.info(
                 "[FG present-rate] real={} gen={} realFps={} totalPresentFps={} configuredMultiFrameCount={} "
-                        + "interpOk={} interpFallbackDuplicate={}",
+                        + "interpOk={} interpFallbackDuplicate={} acquireSkipped={}",
                 realFramesInWindow, generatedFramesInWindow,
                 String.format("%.1f", realFps), String.format("%.1f", totalFps),
-                RtComposite.fgGeneratedCount(), interpOkInWindow, interpFallbackInWindow);
+                RtComposite.fgGeneratedCount(), interpOkInWindow, interpFallbackInWindow,
+                acquireSkippedInWindow);
         logWindowStartNs = now;
         realFramesInWindow = 0;
         generatedFramesInWindow = 0;
         interpOkInWindow = 0;
         interpFallbackInWindow = 0;
+        acquireSkippedInWindow = 0;
     }
 
     private void recordBlit(VulkanCommandEncoder enc, long srcImage, long dstImage, int copyW, int copyH,
