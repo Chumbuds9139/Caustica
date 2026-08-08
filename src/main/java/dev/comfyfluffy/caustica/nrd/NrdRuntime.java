@@ -11,6 +11,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkInstance;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -126,10 +127,15 @@ public final class NrdRuntime {
 
         VkInstance instance = device.vkDevice().getPhysicalDevice().getInstance();
         long gipa;
+        int apiVersion;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             gipa = VK10.vkGetInstanceProcAddr(instance, stack.ASCII("vkGetInstanceProcAddr"));
+            // LWJGL's VkPhysicalDevice carries no cached properties accessor (the Blaze3D wrapper
+            // does, but this path only has the LWJGL handle), so query the struct directly.
+            VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.calloc(stack);
+            VK10.vkGetPhysicalDeviceProperties(device.vkDevice().getPhysicalDevice(), props);
+            apiVersion = props.apiVersion();
         }
-        int apiVersion = device.vkDevice().getPhysicalDevice().vkPhysicalDeviceProperties().apiVersion();
         // VK_API_VERSION minor field (a Vulkan 1.x device; NRD needs x >= 2).
         int minor = (apiVersion >> 12) & 0x3FF;
         int rc = lib.init(instance.address(), device.vkDevice().getPhysicalDevice().address(),
