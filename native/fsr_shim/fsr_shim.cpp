@@ -229,7 +229,13 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
     dispatch.output = makeImageResource((VkImage) outImage, (VkFormat) outFormat,
             upscaleWidth, upscaleHeight, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dispatch.jitterOffset = { jitterX, jitterY };
-    dispatch.motionVectorScale = { (float) renderWidth, (float) renderHeight };
+    // FSR multiplies the raw MVs by this scale and adds the result straight to UV space
+    // (prepare_inputs: reprojectedUv = pixelUv + raw*scale), so the scale must convert raw -> UV.
+    // Caustica's gMotion is render-pixel deltas, hence 1/renderSize. NOTE: AMD's fsrapi sample
+    // passes renderSize here, but only because Cauldron pre-divides its MVs by the render size —
+    // copying that value with pixel-space MVs amplifies motion by renderSize^2, which invalidates
+    // the temporal reprojection every camera move (the "screen shakes and noise bursts" symptom).
+    dispatch.motionVectorScale = { 1.0f / renderWidth, 1.0f / renderHeight };
     dispatch.renderSize = { renderWidth, renderHeight };
     dispatch.upscaleSize = { upscaleWidth, upscaleHeight };
     dispatch.enableSharpening = false; // the display mapper owns the final look; no double sharpening
