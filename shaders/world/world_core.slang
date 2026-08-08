@@ -17,11 +17,12 @@ import world_common;
 [[vk::binding(6, 0)]] [format("rg16f")]   public RWTexture2D<float2> gMotion;     // screen-space motion (render px)
 [[vk::binding(7, 0)]] [format("rgba16f")] public RWTexture2D<float4> gSpecAlbedo; // exact-mirror reflected diffuse × reflectance; material reflectance otherwise
 [[vk::binding(8, 0)]] [format("rg16f")]   public RWTexture2D<float2> gSpecMotion; // reflection MVs for RR
-// NRD (REBLUR_DIFFUSE_SPECULAR) signals, written ONLY when nrdEnabled(): gViewZ in Pass A, the
-// YCoCg-packed per-lobe radiance + normalized hit distance in Pass B. Formats are the NRD front-end
-// contract (IN_VIEWZ = R16f+; IN_*_RADIANCE_HITDIST = RGBA16f with the REBLUR pack); the normal +
-// roughness input is gNormal itself (NRD is built with the RGBA16/SNORM normal encoding + LINEAR
-// roughness, whose unpack is exactly xyz + w — no repack needed).
+// NRD (REBLUR_DIFFUSE_SPECULAR) signals: gViewZ in Pass A (also consumed by the renderer's TAA as
+// its sky cutoff, so it is written when EITHER feature is on), the YCoCg-packed per-lobe radiance +
+// normalized hit distance in Pass B (NRD-only). Formats are the NRD front-end contract (IN_VIEWZ =
+// R16f+; IN_*_RADIANCE_HITDIST = RGBA16f with the REBLUR pack); the normal + roughness input is
+// gNormal itself (NRD is built with the RGBA16/SNORM normal encoding + LINEAR roughness, whose
+// unpack is exactly xyz + w — no repack needed).
 [[vk::binding(9, 0)]]  [format("r32f")]    public RWTexture2D<float>  gViewZ;    // linear view depth, primary hit (sky = large)
 [[vk::binding(10, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdDiff;  // YCoCg diffuse radiance, w = normalized hit distance
 [[vk::binding(11, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdSpec;  // YCoCg specular radiance, w = normalized hit distance
@@ -65,6 +66,7 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
 public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
 public bool nrdEnabled() { return worldFeature(worldPush, FEATURE_NRD); }
+public bool taaEnabled() { return worldFeature(worldPush, FEATURE_TAA); }
 public bool restirEnabled() {
     // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
     // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.

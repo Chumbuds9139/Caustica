@@ -943,6 +943,19 @@ public final class CausticaConfig {
         }
 
         /**
+         * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
+         * reprojected with the tracer's motion vectors). Independent of the NRD toggle: it is the
+         * temporal stage for non-DLSS paths — on top of NRD's spatial-only output when NRD runs,
+         * or over the raw trace otherwise. Default ON: without it SPP 1 frames stay visibly noisy.
+         */
+        public static final class Taa {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);
+
+            private Taa() {
+            }
+        }
+
+        /**
          * NVIDIA Reflex ({@code VK_NV_low_latency2}). Default off; gated additionally by device support.
          * Phase 0 (extension + capability probe only, see {@code RtDeviceBringup}/{@code RtReflex}) — the
          * per-frame sleep call + latency markers + the swapchain {@code VkSwapchainLatencyCreateInfoNV} the

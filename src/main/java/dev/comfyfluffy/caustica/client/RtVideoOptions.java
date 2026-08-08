@@ -108,6 +108,12 @@ public final class RtVideoOptions {
                 && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
             options.add(nrdDenoiser());
         }
+        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths: on top
+        // of NRD's spatial output when NRD runs, over the raw trace otherwise. No runtime gate — it
+        // is a plain compute shader, available everywhere.
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(temporalAccumulation());
+        }
         options.add(omm());
         return options.toArray(OptionInstance<?>[]::new);
     }
@@ -549,6 +555,15 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> nrdDenoiser() {
         return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
+    }
+
+    /**
+     * Renderer-owned temporal accumulation toggle. Live-safe like the other per-frame toggles:
+     * flipping it re-keys {@code RtComposite.ensureOutput} (the history images are allocated on the
+     * rebuild) and the tracer picks the feature flag up next frame.
+     */
+    private static OptionInstance<Boolean> temporalAccumulation() {
+        return bool("caustica.options.rt.temporalAccumulation", CausticaConfig.Rt.Taa.ENABLED);
     }
 
     /**

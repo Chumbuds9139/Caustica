@@ -96,11 +96,13 @@ public final class RtNrdDenoiser {
         }
         try {
             if (!reblurSettingsSent) {
-                // REBLUR with full temporal accumulation (NRD defaults for 60 FPS): the temporal
-                // stage is the actual noise killer and now runs with verified matrix conventions
-                // (class header). AREA_5X5 reconstructs the lobe whose hit distance arrived as 0
-                // from the tracer's probabilistic single-lobe sampling.
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 30, 6);
+                // REBLUR stays SPATIAL-ONLY (temporal accumulation = 1 frame). Its temporal stage
+                // still ghosted moving blocks and flashed the occasional reprojection "circle" even
+                // with the conventions verified against NRD sources — resolving that needs in-game
+                // debugging with NRD's validation overlay. Temporal accumulation is provided instead
+                // by the renderer's own TAA pass (its own option), which reprojects with the motion
+                // vectors FSR consumes successfully.
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 1, 1);
                 reblurSettingsSent = true;
             }
             lib.newFrame();

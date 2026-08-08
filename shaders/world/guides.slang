@@ -238,12 +238,12 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     float4 curClip = mul(worldPush.curViewProj, float4(gv_hitCamRel, 1.0));
     float depth = curClip.w > 0.0 ? curClip.z / curClip.w : 0.0;
 
-    // NRD IN_VIEWZ: linear view depth of the primary hit (positive, grows forward; the perspective
-    // divide's w is exactly that distance). Sky/miss pixels place gv_hitCamRel at 1e6 blocks, so their
-    // viewZ lands above CommonSettings::denoisingRange — how REBLUR recognizes INF pixels. Written
-    // here (Pass A) because the primary hit is owned here; Pass B only reads it for hit-distance
-    // normalization.
-    if (nrdEnabled()) {
+    // NRD IN_VIEWZ / TAA sky cutoff: linear view depth of the primary hit (positive, grows forward;
+    // the perspective divide's w is exactly that distance). Sky/miss pixels place gv_hitCamRel at
+    // 1e6 blocks, so their viewZ lands above CommonSettings::denoisingRange — how REBLUR recognizes
+    // INF pixels and the TAA recognizes "accumulate in place". Written here (Pass A) because the
+    // primary hit is owned here; Pass B only reads it for hit-distance normalization.
+    if (nrdEnabled() || taaEnabled()) {
         gViewZ[pix] = curClip.w > 0.0 ? min(curClip.w, 1.0e6) : 1.0e6;
     }
 

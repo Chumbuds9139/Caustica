@@ -154,6 +154,7 @@ public final class RtComposite {
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
     private static final int FEATURE_RESTIR = 32;
     private static final int FEATURE_NRD = 64;
+    private static final int FEATURE_TAA = 128;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -192,12 +193,19 @@ public final class RtComposite {
         // will be denoised rather than whether the player would like it to be.
         if (RtDlssRr.enabled() && debugView() == 0) {
             flags |= FEATURE_DENOISER;
-        } else if (RtNrdDenoiser.enabled() && debugView() == 0) {
-            // NRD signal capture (per-lobe radiance + hit distance + viewZ) only runs when RR is not
-            // already denoising: the two are mutually exclusive in the UI, and if a hand-edited config
-            // somehow enables both, RR wins — capturing the signals would burn ALU + bandwidth for
-            // buffers nothing consumes.
-            flags |= FEATURE_NRD;
+        } else {
+            if (RtNrdDenoiser.enabled() && debugView() == 0) {
+                // NRD signal capture (per-lobe radiance + hit distance + viewZ) only runs when RR is
+                // not already denoising: the two are mutually exclusive in the UI, and if a
+                // hand-edited config somehow enables both, RR wins — capturing the signals would burn
+                // ALU + bandwidth for buffers nothing consumes.
+                flags |= FEATURE_NRD;
+            }
+            if (CausticaConfig.Rt.Taa.ENABLED.value() && debugView() == 0) {
+                // The TAA only needs gViewZ (its sky cutoff); like NRD it is meaningless while RR is
+                // denoising, so it shares the same exclusion.
+                flags |= FEATURE_TAA;
+            }
         }
         return flags;
     }
@@ -447,6 +455,9 @@ public final class RtComposite {
     // so switching upscaler or FSR quality rebuilds the trace targets exactly like RR does.
     private boolean renderSizeFsrEnabled;
     private int renderSizeFsrQuality = Integer.MIN_VALUE;
+    // Temporal accumulation allocates its own history targets: its toggle joins the render-size key
+    // so flipping it at a fixed window size rebuilds exactly like the NRD/FSR toggles do.
+    private boolean renderSizeTaaEnabled;
 
     // Motion-vector reprojection state: the previous frame's camera-relative view-projection and
     // camera position, read into the push constant each frame then advanced at frame end.
@@ -1001,12 +1012,13 @@ public final class RtComposite {
         int fsrQuality = fsrEnabled ? RtFsrUpscaler.quality() : Integer.MIN_VALUE;
         // NRD's denoise slot has the same exclusivity: off whenever RR is denoising.
         boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
+        boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
                 && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
-                && renderSizeNrdEnabled == nrdEnabled) {
+                && renderSizeNrdEnabled == nrdEnabled && renderSizeTaaEnabled == taaEnabled) {
             syncRestirResources(ctx);
             return;
         }
@@ -1057,6 +1069,7 @@ public final class RtComposite {
         renderSizeFsrEnabled = fsrEnabled;
         renderSizeFsrQuality = fsrQuality;
         renderSizeNrdEnabled = nrdEnabled;
+        renderSizeTaaEnabled = taaEnabled;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
         // mapping seam. displayImage stays R8G8B8A8 to match the main target it is copied into
@@ -1092,18 +1105,22 @@ public final class RtComposite {
             nrdDiffOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised diffuse " + renderW + "x" + renderH);
             nrdSpecOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised specular " + renderW + "x" + renderH);
             nrdCombined = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd combined radiance " + renderW + "x" + renderH);
-            taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
-            taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
             if (nrdCombinePipeline == null) {
                 nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
             }
+            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view,
+                    gNrdDiff.view, gNrdSpec.view, gViewZ.view);
+        }
+        // Temporal accumulation history is independent of NRD: it accumulates whatever image feeds
+        // the upscale stage (NRD-combined radiance when NRD ran, the raw trace otherwise).
+        if (taaEnabled) {
+            taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
+            taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
             if (taaPipeline == null) {
                 taaPipeline = RtTaaPipeline.create(ctx);
             }
             // Fresh buffers: the accumulation history no longer corresponds to anything.
             taaHasPrev = false;
-            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view,
-                    gNrdDiff.view, gNrdSpec.view, gViewZ.view);
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
@@ -1167,6 +1184,10 @@ public final class RtComposite {
             // jitter reported in CommonSettings); when an upscaler shares the frame, both consumers
             // get the same jitter sequence.
             boolean nrdPath = !rrPath && RtNrdDenoiser.enabled() && debugView == 0;
+            // Temporal accumulation runs on any non-RR path (with or without NRD); it needs the
+            // jittered trace the same way the denoisers do — accumulation over sub-pixel offsets is
+            // what resolves geometry below the pixel grid.
+            boolean taaPath = !rrPath && CausticaConfig.Rt.Taa.ENABLED.value() && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
@@ -1180,6 +1201,10 @@ public final class RtComposite {
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             } else if (nrdPath) {
                 CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
+                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
+                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+            } else if (taaPath) {
+                CausticaJitter.INSTANCE.prepare(renderW, renderH, displayW);
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
@@ -1430,17 +1455,14 @@ public final class RtComposite {
                     try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
                         nrdCombinePipeline.dispatch(cmd, renderW, renderH, NRD_DENOISING_RANGE);
                     }
-                    // REBLUR now runs its own temporal accumulation (verified matrix conventions),
-                    // which replaces the renderer's TAA pass here: stacking a second accumulator on
-                    // top smeared blocks while turning the camera and flickered wherever its reset
-                    // logic disagreed with the denoiser's. The combined denoised radiance goes
-                    // straight to the upscale stage.
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the upscale
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the TAA/upscale
                     denoisedSource = nrdCombined;
                 }
-                frameProjection.get(prevProjection);
-                prevProjectionValid = true;
             }
+            // Updated on every path (not just NRD's): the projection-change detection also drives
+            // the TAA's history restart, and leaving it stale on other paths would restart forever.
+            frameProjection.get(prevProjection);
+            prevProjectionValid = true;
 
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
@@ -1458,11 +1480,31 @@ public final class RtComposite {
             // the frame (exposure metering, display mapping) is untouched.
             // The upscale stage consumes the DENOISED combined radiance when NRD ran, else the raw trace.
             RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
+            // Temporal accumulation (own option, independent of NRD): accumulates whichever image
+            // feeds the upscale stage — NRD-combined radiance when NRD ran, the raw trace otherwise.
+            if (taaPath && taaPipeline != null && taaPing != null && gViewZ != null) {
+                RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
+                RtImage outImg = taaWriteToPing ? taaPing : taaPong;
+                taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,
+                        gMotion.view, gViewZ.view);
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // source visible to the TAA
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "TAA accumulate");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.taa")) {
+                    taaPipeline.dispatch(cmd, renderW, renderH, 1.0f / renderW, 1.0f / renderH,
+                            projectionChanged || !taaHasPrev, TAA_MAX_FRAMES);
+                }
+                taaWriteToPing = !taaWriteToPing;
+                taaHasPrev = true;
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // TAA output visible to the upscale
+                upscaleSource = outImg;
+            }
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.fsr")) {
                     // Vertical FOV from the (unjittered) level projection, for FSR's depth heuristic.
-                    float fovY = (float) (2.0 * Math.atan(1.0 / frameProjection.m11()));
+                    // abs(): Minecraft's Vulkan projection carries the NDC y-flip (negative m11),
+                    // which would hand FSR a negative FOV.
+                    float fovY = (float) (2.0 * Math.atan(1.0 / Math.abs(frameProjection.m11())));
                     rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion, rrOutput,
                             renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
                 }
