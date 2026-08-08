@@ -115,8 +115,9 @@ public final class RtComposite {
     // Hot addresses/frameIndex and raygen's debugView avoid unnecessary global-memory dereferences;
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
     // RR guide buffers (bindings 3..8) + NRD signals (bindings 9..11: viewZ + per-lobe radiance/hit
-    // distance). The NRD images are only written when FEATURE_NRD is on, but the bindings always exist.
-    private static final int GUIDE_COUNT = 9;
+    // distance) + the FSR reactive mask (binding 12). The NRD images are only written when
+    // FEATURE_NRD is on, but the bindings always exist.
+    private static final int GUIDE_COUNT = 10;
     private static final long PATH_RECORD_BYTES = 48L;
     // Reflected from PackedRestirReservoir's std430 array stride (world_layout_probe.slang).
     private static final long RESTIR_RECORD_BYTES = RestirReservoirData.BYTE_SIZE;
@@ -422,6 +423,9 @@ public final class RtComposite {
     private RtImage gViewZ;
     private RtImage gNrdDiff;
     private RtImage gNrdSpec;
+    // FSR reactive mask (dynamic entities + transmissive surfaces) — written unconditionally by the
+    // tracer, consumed only by the FSR upscale path.
+    private RtImage gReactive;
     private RtImage nrdDiffOut;
     private RtImage nrdSpecOut;
     private RtImage nrdCombined;
@@ -870,6 +874,8 @@ public final class RtComposite {
         worldPipeline.setExtraStorageImage(6, gViewZ.view);
         worldPipeline.setExtraStorageImage(7, gNrdDiff.view);
         worldPipeline.setExtraStorageImage(8, gNrdSpec.view);
+        // FSR reactive mask: always written by the tracer, consumed by the FSR path.
+        worldPipeline.setExtraStorageImage(9, gReactive.view);
     }
 
     private void destroyGuideImages() {
@@ -908,6 +914,10 @@ public final class RtComposite {
         if (gNrdSpec != null) {
             gNrdSpec.destroy();
             gNrdSpec = null;
+        }
+        if (gReactive != null) {
+            gReactive.destroy();
+            gReactive = null;
         }
         if (nrdDiffOut != null) {
             nrdDiffOut.destroy();
@@ -1099,6 +1109,7 @@ public final class RtComposite {
         gViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "nrd viewZ " + renderW + "x" + renderH);
         gNrdDiff = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd diffuse radiance+hitdist " + renderW + "x" + renderH);
         gNrdSpec = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd specular radiance+hitdist " + renderW + "x" + renderH);
+        gReactive = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16_SFLOAT, "fsr reactive mask " + renderW + "x" + renderH);
         // Denoiser outputs + the decoded/summed image the upscale stage consumes exist only while NRD
         // actually runs; the combine pipeline is created lazily with them.
         if (nrdEnabled) {
@@ -1505,7 +1516,8 @@ public final class RtComposite {
                     // abs(): Minecraft's Vulkan projection carries the NDC y-flip (negative m11),
                     // which would hand FSR a negative FOV.
                     float fovY = (float) (2.0 * Math.atan(1.0 / Math.abs(frameProjection.m11())));
-                    rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion, rrOutput,
+                    rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
+                            gReactive, rrOutput,
                             renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
                 }
             }

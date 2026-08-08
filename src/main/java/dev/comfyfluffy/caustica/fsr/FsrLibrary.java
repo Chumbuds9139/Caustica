@@ -24,6 +24,7 @@ public final class FsrLibrary {
     private final MethodHandle createUpscaler;
     private final MethodHandle destroyUpscaler;
     private final MethodHandle dispatchUpscale;
+    private final MethodHandle configureUpscale;
     private final MethodHandle queryRenderSize;
     private final MethodHandle queryJitterPhaseCount;
     private final MethodHandle queryJitterOffset;
@@ -43,11 +44,12 @@ public final class FsrLibrary {
         // int fsrshim_destroy_upscaler(void* handle)
         this.destroyUpscaler = handle(lookup, "fsrshim_destroy_upscaler",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-        // int fsrshim_dispatch_upscale(handle, cmd, [color/depth/mv/out: image,fmt]*4, rw,rh,uw,uh,
-        //                              jx, jy, frameMs, reset, cameraNear, cameraFar, cameraFovY)
+        // int fsrshim_dispatch_upscale(handle, cmd, [color/depth/mv/reactive/out: image,fmt]*5,
+        //                              rw,rh,uw,uh, jx, jy, frameMs, reset, cameraNear, cameraFar, cameraFovY)
         this.dispatchUpscale = handle(lookup, "fsrshim_dispatch_upscale",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
@@ -56,6 +58,10 @@ public final class FsrLibrary {
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
+        // int fsrshim_configure_upscale(handle, u32 key, float value)
+        this.configureUpscale = handle(lookup, "fsrshim_configure_upscale",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT));
         // int fsrshim_query_render_size(u32 quality, u32 dispW, u32 dispH, u32* outRW, u32* outRH)
         this.queryRenderSize = handle(lookup, "fsrshim_query_render_size",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
@@ -113,6 +119,7 @@ public final class FsrLibrary {
                                long colorImage, int colorFormat,
                                long depthImage, int depthFormat,
                                long mvImage, int mvFormat,
+                               long reactiveImage, int reactiveFormat,
                                long outImage, int outFormat,
                                int renderWidth, int renderHeight, int upscaleWidth, int upscaleHeight,
                                float jitterX, float jitterY, float frameTimeMs, int reset,
@@ -120,12 +127,21 @@ public final class FsrLibrary {
         try {
             return (int) this.dispatchUpscale.invokeExact(handle, cmd,
                     colorImage, colorFormat, depthImage, depthFormat, mvImage, mvFormat,
-                    outImage, outFormat,
+                    reactiveImage, reactiveFormat, outImage, outFormat,
                     renderWidth, renderHeight, upscaleWidth, upscaleHeight,
                     jitterX, jitterY, frameTimeMs, reset,
                     cameraNear, cameraFar, cameraFovY);
         } catch (Throwable t) {
             throw new RuntimeException("fsrshim_dispatch_upscale failed", t);
+        }
+    }
+
+    /** FSR 3.1 anti-ghosting tuning knob on a live context (FfxApiConfigureUpscaleKey). */
+    public int configureUpscale(MemorySegment handle, int key, float value) {
+        try {
+            return (int) this.configureUpscale.invokeExact(handle, key, value);
+        } catch (Throwable t) {
+            throw new RuntimeException("fsrshim_configure_upscale failed", t);
         }
     }
 

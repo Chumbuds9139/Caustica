@@ -52,6 +52,7 @@ static PfnFfxCreateContext p_ffxCreateContext = nullptr;
 static PfnFfxDestroyContext p_ffxDestroyContext = nullptr;
 static PfnFfxQuery p_ffxQuery = nullptr;
 static PfnFfxDispatch p_ffxDispatch = nullptr;
+static PfnFfxConfigure p_ffxConfigure = nullptr;
 
 // Runtime messages (validation errors, warnings) straight to stderr — the ffx_api debug checker is
 // off by default, so anything that does arrive is worth seeing.
@@ -127,6 +128,8 @@ FSR_SHIM_EXPORT int fsrshim_init(unsigned long long vkDevice, unsigned long long
     p_ffxDestroyContext = (PfnFfxDestroyContext) GetProcAddress(g_ffxModule, "ffxDestroyContext");
     p_ffxQuery = (PfnFfxQuery) GetProcAddress(g_ffxModule, "ffxQuery");
     p_ffxDispatch = (PfnFfxDispatch) GetProcAddress(g_ffxModule, "ffxDispatch");
+    // Optional: FSR 3.1's anti-ghosting tuning knobs; an older runtime simply skips the configure.
+    p_ffxConfigure = (PfnFfxConfigure) GetProcAddress(g_ffxModule, "ffxConfigure");
     if (!p_ffxCreateContext || !p_ffxDestroyContext || !p_ffxQuery || !p_ffxDispatch) {
         std::fprintf(stderr, "[fsr_shim] ffx entry points missing (create=%p destroy=%p query=%p dispatch=%p)\n",
                 (void*) p_ffxCreateContext, (void*) p_ffxDestroyContext, (void*) p_ffxQuery, (void*) p_ffxDispatch);
@@ -191,15 +194,18 @@ FSR_SHIM_EXPORT int fsrshim_destroy_upscaler(void* handle) {
 }
 
 // Records one FSR 3 upscale dispatch: jittered render-res HDR color + reversed-Z depth + render-res
-// motion vectors -> display-res output. jitterX/jitterY are the sub-pixel offsets applied to the
-// camera this frame, in render pixels (negated per the FFX sample's convention); motion vectors are
-// render-res pixels, so motionVectorScale is the render dimensions (sample convention again).
-// cameraNear/cameraFar/cameraFovY follow the sample's reversed-Z mapping (near=FLT_MAX, far=the
-// real near plane) — FSR only uses them for the depth linearization heuristic.
+// motion vectors (+ optional reactive mask) -> display-res output. jitterX/jitterY are the sub-pixel
+// offsets applied to the camera this frame, in render pixels (negated per the FFX sample's
+// convention); motion vectors are render-res pixels, so motionVectorScale is the render dimensions
+// (sample convention again). cameraNear/cameraFar/cameraFovY follow the sample's reversed-Z mapping
+// (near=FLT_MAX, far=the real near plane) — FSR only uses them for the depth linearization
+// heuristic. The reactive mask marks pixels FSR must not lock its temporal history on (dynamic
+// entities + transmissive surfaces); pass 0 when unavailable.
 FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cmd,
                                              unsigned long long colorImage, unsigned int colorFormat,
                                              unsigned long long depthImage, unsigned int depthFormat,
                                              unsigned long long mvImage, unsigned int mvFormat,
+                                             unsigned long long reactiveImage, unsigned int reactiveFormat,
                                              unsigned long long outImage, unsigned int outFormat,
                                              unsigned int renderWidth, unsigned int renderHeight,
                                              unsigned int upscaleWidth, unsigned int upscaleHeight,
@@ -220,12 +226,21 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
             renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
     dispatch.motionVectors = makeImageResource((VkImage) mvImage, (VkFormat) mvFormat,
             renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
-    // Optional inputs (exposure / reactive / transparency-composition) are unused: the path tracer
-    // has no separate reactive pass yet and AUTO_EXPOSURE covers the 1x1 exposure resource.
+    // Optional inputs: the tracer's reactive mask (dynamic entities + transmissive surfaces) feeds
+    // BOTH special-content inputs — FSR must neither lock history on those pixels (reactive) nor
+    // treat them as fully settled content (transparencyAndComposition). Exposure stays on
+    // AUTO_EXPOSURE.
     dispatch.exposure = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
-    dispatch.reactive = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
-    dispatch.transparencyAndComposition = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0,
-            FFX_API_RESOURCE_STATE_COMMON);
+    if (reactiveImage != 0) {
+        dispatch.reactive = makeImageResource((VkImage) reactiveImage, (VkFormat) reactiveFormat,
+                renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
+        dispatch.transparencyAndComposition = makeImageResource((VkImage) reactiveImage, (VkFormat) reactiveFormat,
+                renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
+    } else {
+        dispatch.reactive = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, FFX_API_RESOURCE_STATE_COMMON);
+        dispatch.transparencyAndComposition = makeImageResource(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0,
+                FFX_API_RESOURCE_STATE_COMMON);
+    }
     dispatch.output = makeImageResource((VkImage) outImage, (VkFormat) outFormat,
             upscaleWidth, upscaleHeight, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dispatch.jitterOffset = { jitterX, jitterY };
@@ -262,9 +277,10 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
     VkCommandBuffer vkCmd = (VkCommandBuffer) cmd;
     PFN_vkCmdPipelineBarrier cmdPipelineBarrier =
             (PFN_vkCmdPipelineBarrier) g_deviceProcAddr(g_device, "vkCmdPipelineBarrier");
-    VkImage inputs[3] = { (VkImage) colorImage, (VkImage) depthImage, (VkImage) mvImage };
-    VkImageMemoryBarrier barriers[3];
-    for (int i = 0; i < 3; i++) {
+    VkImage inputs[4] = { (VkImage) colorImage, (VkImage) depthImage, (VkImage) mvImage, (VkImage) reactiveImage };
+    int inputCount = reactiveImage != 0 ? 4 : 3;
+    VkImageMemoryBarrier barriers[4];
+    for (int i = 0; i < inputCount; i++) {
         std::memset(&barriers[i], 0, sizeof(VkImageMemoryBarrier));
         barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -283,7 +299,25 @@ FSR_SHIM_EXPORT int fsrshim_dispatch_upscale(void* handle, unsigned long long cm
     }
     cmdPipelineBarrier(vkCmd,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-            0, 0, nullptr, 0, nullptr, 3, barriers);
+            0, 0, nullptr, 0, nullptr, (uint32_t) inputCount, barriers);
+    return (int) r;
+}
+
+// Override one of FSR 3.1's anti-ghosting constants on a live context (FfxApiConfigureUpscaleKey in
+// key, e.g. FSHADINGCHANGESCALE / FACCUMULATIONADDEDPERFRAME). Applied right after context creation.
+FSR_SHIM_EXPORT int fsrshim_configure_upscale(void* handle, unsigned int key, float value) {
+    FsrUpscaler* upscaler = (FsrUpscaler*) handle;
+    if (!upscaler || !p_ffxConfigure) {
+        return (int) FFX_API_RETURN_ERROR_PARAMETER;
+    }
+    ffxConfigureDescUpscaleKeyValue configure;
+    std::memset(&configure, 0, sizeof(configure));
+    configure.header.type = FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE;
+    configure.key = key;
+    configure.u64 = 0;
+    configure.ptr = &value;
+    ffxReturnCode_t r = p_ffxConfigure(&upscaler->context, &configure.header);
+    g_lastResult = (int) r;
     return (int) r;
 }
 

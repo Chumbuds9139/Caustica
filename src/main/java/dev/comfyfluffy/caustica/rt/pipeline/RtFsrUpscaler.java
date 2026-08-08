@@ -45,6 +45,10 @@ public final class RtFsrUpscaler {
     private static final int CONTEXT_FLAGS = FLAG_HIGH_DYNAMIC_RANGE | FLAG_DEPTH_INVERTED
             | FLAG_DEPTH_INFINITE | FLAG_AUTO_EXPOSURE;
 
+    // FfxApiConfigureUpscaleKey values (FSR 3.1 runtime tuning knobs, applied after creation).
+    private static final int CONFIG_KEY_SHADING_CHANGE_SCALE = 2;
+    private static final int CONFIG_KEY_ACCUMULATION_ADDED_PER_FRAME = 3;
+
     // Minecraft's fixed near plane (vanilla builds the level projection with it); FSR only uses it
     // for its depth-linearization heuristic, paired with the reversed-Z mapping below.
     private static final float CAMERA_NEAR = 0.05f;
@@ -141,6 +145,21 @@ public final class RtFsrUpscaler {
                 if (isNull(context)) {
                     throw new IllegalStateException("fsrshim_create_upscaler failed: last=" + lib.lastResult());
                 }
+                // FSR 3.1 anti-ghosting tuning (FfxApiConfigureUpscaleKey): slower accumulation at
+                // disocclusions/reactive pixels (default 0.333) cuts the trail behind moving content,
+                // and amplifying the shading-change signal (default 1.0) unlocks history faster when
+                // the camera turns — the two knobs target exactly the smear our tracer's clean MVs
+                // could not remove alone. Non-fatal: an older runtime just keeps its defaults.
+                int rcCfg = lib.configureUpscale(context, CONFIG_KEY_SHADING_CHANGE_SCALE, 2.0f);
+                if (rcCfg != 0) {
+                    CausticaMod.LOGGER.warn("fsrshim_configure_upscale(shadingChangeScale) = " + rcCfg
+                            + " last=" + lib.lastResult());
+                }
+                rcCfg = lib.configureUpscale(context, CONFIG_KEY_ACCUMULATION_ADDED_PER_FRAME, 0.2f);
+                if (rcCfg != 0) {
+                    CausticaMod.LOGGER.warn("fsrshim_configure_upscale(accumulationAddedPerFrame) = " + rcCfg
+                            + " last=" + lib.lastResult());
+                }
                 contextDisplayWidth = displayWidth;
                 contextDisplayHeight = displayHeight;
                 resetAccumulation = true; // fresh context has no temporal history
@@ -156,12 +175,14 @@ public final class RtFsrUpscaler {
 
     /**
      * Record one FSR 3 upscale dispatch into {@code cmd}: jittered render-res color + reversed-Z
-     * depth + render-res motion vectors -> display-res {@code out}. {@code jitterX/jitterY} are the
-     * sub-pixel camera offsets applied this frame in render pixels (already negated by the caller,
-     * matching how the RR path reports them), {@code fovY} the vertical field of view in radians.
-     * Returns false (disabling FSR) on failure.
+     * depth + render-res motion vectors + reactive mask -> display-res {@code out}. {@code reactive}
+     * marks pixels FSR must not lock its temporal history on (dynamic entities + transmissive
+     * surfaces) — the standard fix for the ghost trail behind moving content. {@code jitterX/
+     * jitterY} are the sub-pixel camera offsets applied this frame in render pixels (already negated
+     * by the caller, matching how the RR path reports them), {@code fovY} the vertical field of view
+     * in radians. Returns false (disabling FSR) on failure.
      */
-    public boolean evaluate(long cmd, RtImage color, RtImage depth, RtImage motion, RtImage out,
+    public boolean evaluate(long cmd, RtImage color, RtImage depth, RtImage motion, RtImage reactive, RtImage out,
                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
                             float jitterX, float jitterY, float fovY) {
         if (!isReady()) {
@@ -178,6 +199,7 @@ public final class RtFsrUpscaler {
                     color.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     depth.image, VK10.VK_FORMAT_R32_SFLOAT,
                     motion.image, VK10.VK_FORMAT_R16G16_SFLOAT,
+                    reactive == null ? 0L : reactive.image, VK10.VK_FORMAT_R16_SFLOAT,
                     out.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     renderWidth, renderHeight, displayWidth, displayHeight,
                     jitterX, jitterY, frameMs, resetAccumulation ? 1 : 0,

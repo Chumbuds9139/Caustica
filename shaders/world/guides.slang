@@ -281,6 +281,10 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gMotion[pix] = motion;
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
     gSpecMotion[pix] = specMotion;
+    // FSR reactive mask: dynamic-object pixels carry their per-frame displacement in
+    // gv_motionObjDisp; transmissive pixels (water/glass) reproject through their own refracted
+    // motion. Both must not be locked by FSR's temporal history, or they smear behind themselves.
+    gReactive[pix] = (dot(gv_motionObjDisp, gv_motionObjDisp) > 1.0e-8 || gv_motionUseRefracted) ? 1.0 : 0.0;
 }
 
 // 48-byte queue record. float3 + uint intentionally share the first 16-byte lane; every remaining
