@@ -90,7 +90,13 @@ void main() {
     // fixed 1/n blend smeared blocks the whole time the camera turned). Static scenes keep the
     // full 1/n window. No hard per-pixel restart: sudden history loss was a flicker source.
     float mvPixels = length(mv * vec2(pc.width, pc.height));
-    float n = min(nPrev + 1.0, pc.maxFrames);
+    // Luminance-adaptive window: dark regions (a torchlit cave's indirect light after a camera
+    // turn) converge from disocclusion with HALF the window, so the light "births" ~2x faster —
+    // the residual noise is invisible in the dark anyway; bright regions keep the full window for
+    // a calm steady state. As the pixel brightens the window grows back automatically.
+    float luma = dot(cur, vec3(0.2126, 0.7152, 0.0722));
+    float localMaxFrames = mix(pc.maxFrames * 0.5, pc.maxFrames, clamp(luma * 20.0, 0.0, 1.0));
+    float n = min(nPrev + 1.0, localMaxFrames);
     float alpha = max(1.0 / n, clamp(mvPixels * 0.2, 0.0, 0.7));
 
     vec3 acc = fromYCoCg(mix(histClipped, curY, alpha));
