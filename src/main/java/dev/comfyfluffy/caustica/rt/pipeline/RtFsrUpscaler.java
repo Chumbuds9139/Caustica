@@ -45,10 +45,6 @@ public final class RtFsrUpscaler {
     private static final int CONTEXT_FLAGS = FLAG_HIGH_DYNAMIC_RANGE | FLAG_DEPTH_INVERTED
             | FLAG_DEPTH_INFINITE | FLAG_AUTO_EXPOSURE;
 
-    // FfxApiConfigureUpscaleKey values (FSR 3.1 runtime tuning knobs, applied after creation).
-    private static final int CONFIG_KEY_SHADING_CHANGE_SCALE = 2;
-    private static final int CONFIG_KEY_ACCUMULATION_ADDED_PER_FRAME = 3;
-
     // Minecraft's fixed near plane (vanilla builds the level projection with it); FSR only uses it
     // for its depth-linearization heuristic, paired with the reversed-Z mapping below.
     private static final float CAMERA_NEAR = 0.05f;
@@ -145,21 +141,12 @@ public final class RtFsrUpscaler {
                 if (isNull(context)) {
                     throw new IllegalStateException("fsrshim_create_upscaler failed: last=" + lib.lastResult());
                 }
-                // FSR 3.1 anti-ghosting tuning (FfxApiConfigureUpscaleKey): slower accumulation at
-                // disocclusions/reactive pixels (default 0.333) cuts the trail behind moving content,
-                // and amplifying the shading-change signal (default 1.0) unlocks history faster when
-                // the camera turns — the two knobs target exactly the smear our tracer's clean MVs
-                // could not remove alone. Non-fatal: an older runtime just keeps its defaults.
-                int rcCfg = lib.configureUpscale(context, CONFIG_KEY_SHADING_CHANGE_SCALE, 2.0f);
-                if (rcCfg != 0) {
-                    CausticaMod.LOGGER.warn("fsrshim_configure_upscale(shadingChangeScale) = " + rcCfg
-                            + " last=" + lib.lastResult());
-                }
-                rcCfg = lib.configureUpscale(context, CONFIG_KEY_ACCUMULATION_ADDED_PER_FRAME, 0.2f);
-                if (rcCfg != 0) {
-                    CausticaMod.LOGGER.warn("fsrshim_configure_upscale(accumulationAddedPerFrame) = " + rcCfg
-                            + " last=" + lib.lastResult());
-                }
+                // NOTE: FSR 3.1's anti-ghosting tuning knobs (fShadingChangeScale,
+                // fAccumulationAddedPerFrame) were tried here and reverted: amplifying the
+                // shading-change signal made FSR reject history far too eagerly in bright scenes on
+                // camera motion (the temporary black edges the user reported), and the defaults
+                // strike the better stability/ghosting balance. The reactive mask (moving entities
+                // only) is the remaining anti-ghosting lever — see guides.slang / fsr_shim.
                 contextDisplayWidth = displayWidth;
                 contextDisplayHeight = displayHeight;
                 resetAccumulation = true; // fresh context has no temporal history
