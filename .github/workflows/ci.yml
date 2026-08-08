@@ -33,6 +33,10 @@ on:
 env:
   DLSS_SDK_REF: v310.7.0
   DLSS_SDK_PATH: third_party/DLSS
+  # FSR 3.1 lives in the AMD FidelityFX SDK; the shim links the signed prebuilt VK runtime, so
+  # only the prebuilt DLL + the ffx_api headers need checking out (sparse).
+  FFX_SDK_REF: v1.1.4
+  FFX_SDK_PATH: third_party/FidelityFX-SDK
   NGX_SHIM_CONFIG: release
   NGX_VENDOR_CONFIG: rel
   VULKAN_SDK_VERSION: 1.4.350.0
@@ -80,6 +84,38 @@ jobs:
         with:
           name: ngxshim-windows-x64
           path: build/native/ngx_shim/release/ngxshim.dll
+          if-no-files-found: error
+
+      - name: Checkout AMD FidelityFX SDK
+        uses: actions/checkout@v4
+        with:
+          repository: GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+          ref: ${{ env.FFX_SDK_REF }}
+          path: ${{ env.FFX_SDK_PATH }}
+          sparse-checkout: |
+            PrebuiltSignedDLL
+            ffx-api/include
+
+      - name: Configure FSR shim
+        shell: pwsh
+        env:
+          FFX_SDK: ${{ github.workspace }}/${{ env.FFX_SDK_PATH }}
+        run: >
+          cmake -S native/fsr_shim
+          -B build/cmake/fsr_shim
+          -G "Visual Studio 17 2022"
+          -A x64
+
+      - name: Build FSR shim
+        run: cmake --build build/cmake/fsr_shim --config Release
+
+      - name: Upload Windows FSR shim
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsrshim-windows-x64
+          path: |
+            build/native/fsr_shim/release/fsrshim.dll
+            build/native/fsr_shim/release/amd_fidelityfx_vk.dll
           if-no-files-found: error
 
   native-linux:
@@ -176,6 +212,13 @@ jobs:
         with:
           pattern: ngxshim-*
           path: build/native/ngx_shim/release
+          merge-multiple: true
+
+      - name: Download FSR shims
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fsrshim-*
+          path: build/native/fsr_shim/release
           merge-multiple: true
 
       - name: Grant execute permission for gradlew
