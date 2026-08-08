@@ -73,6 +73,16 @@ public final class RtFsrUpscaler {
     private boolean resetAccumulation;
     private long lastFrameNanos;
 
+    /**
+     * Discard FSR's internal temporal history on the next dispatch. Called by the composite on
+     * camera discontinuities (teleport / respawn / world change): the reprojection history is
+     * meaningless across a jump and smears until it decays on its own otherwise — the NRD and TAA
+     * stages already reset on the same events, FSR was the only temporal stage that didn't.
+     */
+    public void requestReset() {
+        resetAccumulation = true;
+    }
+
     private int contextDisplayWidth = -1;
     private int contextDisplayHeight = -1;
 
@@ -162,12 +172,10 @@ public final class RtFsrUpscaler {
 
     /**
      * Record one FSR 3 upscale dispatch into {@code cmd}: jittered render-res color + reversed-Z
-     * depth + render-res motion vectors + reactive mask -> display-res {@code out}. {@code reactive}
-     * marks pixels FSR must not lock its temporal history on (dynamic entities + transmissive
-     * surfaces) — the standard fix for the ghost trail behind moving content. {@code jitterX/
-     * jitterY} are the sub-pixel camera offsets applied this frame in render pixels (already negated
-     * by the caller, matching how the RR path reports them), {@code fovY} the vertical field of view
-     * in radians. Returns false (disabling FSR) on failure.
+     * depth + render-res motion vectors -> display-res {@code out}. {@code jitterX/jitterY} are the
+     * sub-pixel camera offsets applied this frame in render pixels (already negated by the caller,
+     * matching how the RR path reports them), {@code fovY} the vertical field of view in radians.
+     * Returns false (disabling FSR) on failure.
      */
     public boolean evaluate(long cmd, RtImage color, RtImage depth, RtImage motion, RtImage reactive, RtImage out,
                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,

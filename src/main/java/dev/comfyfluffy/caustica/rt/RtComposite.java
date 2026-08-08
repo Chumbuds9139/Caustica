@@ -581,6 +581,13 @@ public final class RtComposite {
         }
     }
 
+    // Previous captured camera position, for the FSR discontinuity reset (teleport / respawn /
+    // world change jumps FSR's reprojection history cannot survive).
+    private double prevFsrCamX;
+    private double prevFsrCamY;
+    private double prevFsrCamZ;
+    private boolean fsrCamValid;
+
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
         frameProjection.set(projection);
@@ -1520,12 +1527,30 @@ public final class RtComposite {
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.fsr")) {
+                    // Camera discontinuity (teleport / respawn / world change): FSR is a temporal
+                    // upscaler like the others — a jump bigger than the NRD rebase threshold leaves
+                    // its reprojection history pointing at a world that no longer matches, reading
+                    // as smear until it decays. Drop the history on the jump frame.
+                    if (fsrCamValid) {
+                        double fdx = camX - prevFsrCamX;
+                        double fdy = camY - prevFsrCamY;
+                        double fdz = camZ - prevFsrCamZ;
+                        if (fdx * fdx + fdy * fdy + fdz * fdz > 32.0 * 32.0) {
+                            RtFsrUpscaler.INSTANCE.requestReset();
+                        }
+                    }
+                    prevFsrCamX = camX;
+                    prevFsrCamY = camY;
+                    prevFsrCamZ = camZ;
+                    fsrCamValid = true;
                     // Vertical FOV from the (unjittered) level projection, for FSR's depth heuristic.
                     // abs(): Minecraft's Vulkan projection carries the NDC y-flip (negative m11),
                     // which would hand FSR a negative FOV.
                     float fovY = (float) (2.0 * Math.atan(1.0 / Math.abs(frameProjection.m11())));
+                    // reactive parameter: unused since the reactive-mask experiment was reverted
+                    // (the shim ignores it); null keeps the call honest.
                     rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
-                            gReactive, rrOutput,
+                            null, rrOutput,
                             renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
                 }
             }
