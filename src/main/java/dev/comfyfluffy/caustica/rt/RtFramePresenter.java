@@ -4,8 +4,10 @@ import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.client.RtUpscalerSupport;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 
 import it.unimi.dsi.fastutil.longs.LongList;
 
@@ -75,10 +77,20 @@ public final class RtFramePresenter {
     private RtFramePresenter() {
     }
 
-    /** Whether FG extra-present should run this frame (enabled, available, in a world). */
+    /**
+     * Whether FG extra-present should run this frame (enabled, available, in a world). Backend
+     * follows the selected upscaler: DLSS-G under DLSS, FSR 3.1 FG under FSR 3 — FSR FG has no
+     * hardware gate beyond the FSR runtime being bundled for this platform.
+     */
     public boolean isActive() {
-        return !failed && RtDlssFg.enabled() && RtDlssFg.INSTANCE.isAvailable()
-                && Minecraft.getInstance().level != null;
+        if (failed || Minecraft.getInstance().level == null) {
+            return false;
+        }
+        if (RtUpscalerSupport.MODE_FSR3.equals(RtUpscalerSupport.currentUpscalerMode())) {
+            return RtFsrFrameGen.enabled()
+                    && dev.comfyfluffy.caustica.fsr.FsrRuntime.platformSupported();
+        }
+        return RtDlssFg.enabled() && RtDlssFg.INSTANCE.isAvailable();
     }
 
     /**
@@ -169,7 +181,7 @@ public final class RtFramePresenter {
                 pendingCount = 0;
             }
         }
-        if (RtDlssFg.enabled()) {
+        if (RtDlssFg.enabled() || RtFsrFrameGen.enabled()) {
             logPresentRate(presentedThisFrame);
         }
     }
@@ -200,7 +212,7 @@ public final class RtFramePresenter {
                         + "interpOk={} interpFallbackDuplicate={}",
                 realFramesInWindow, generatedFramesInWindow,
                 String.format("%.1f", realFps), String.format("%.1f", totalFps),
-                RtDlssFg.INSTANCE.effectiveMultiFrameCount(), interpOkInWindow, interpFallbackInWindow);
+                RtComposite.fgGeneratedCount(), interpOkInWindow, interpFallbackInWindow);
         logWindowStartNs = now;
         realFramesInWindow = 0;
         generatedFramesInWindow = 0;

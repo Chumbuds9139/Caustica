@@ -82,6 +82,10 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         if (frameGeneration != null) {
             list.addBig(frameGeneration);
         }
+        net.minecraft.client.gui.components.Button fgMultiplier = RtVideoOptions.fgMultiplierButton();
+        if (fgMultiplier != null) {
+            list.addBig(fgMultiplier);
+        }
 
         // --- General ---
         list.addHeader(GENERAL_HEADER);

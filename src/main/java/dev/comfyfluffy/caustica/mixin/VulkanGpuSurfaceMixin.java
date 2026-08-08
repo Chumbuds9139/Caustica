@@ -292,7 +292,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (srcImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+		int generatedCount = dev.comfyfluffy.caustica.rt.RtComposite.fgGeneratedCount();
 		RtFramePresenter.INSTANCE.prepareExtraFrames((VulkanCommandEncoder) commandEncoder, this.device,
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
@@ -316,7 +316,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (hdrImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+		int generatedCount = dev.comfyfluffy.caustica.rt.RtComposite.fgGeneratedCount();
 		RtFramePresenter.INSTANCE.prepareExtraFrames(enc, this.device, this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true);

@@ -567,14 +567,24 @@ public final class RtVideoOptions {
     }
 
     /**
-     * The DLSS Frame Generation toggle (EXPERIMENTAL). Rides on the selected upscaler: returns null
-     * unless DLSS is active — with no upscaler there is no FG to toggle, and FSR 3 will bring its own
-     * toggle with its backend. Unsupported hardware (per the NGX capability query, or the RTX 40/50
-     * device-name fallback before NGX is up) gets a greyed-out button that stays visible so its tooltip
-     * can explain the requirement — it is not hidden.
+     * The Frame Generation toggle (EXPERIMENTAL). Rides on the selected upscaler: DLSS mode toggles
+     * DLSS-G (hardware-gated: unsupported GPUs get a greyed-out button that stays visible so its
+     * tooltip can explain the requirement), FSR 3 mode toggles FSR 3.1 FG (no hardware gate beyond
+     * the bundled FSR runtime). Returns null on every other path — no FG without one of the two.
      */
     public static Button frameGenerationButton() {
-        if (!RtUpscalerSupport.MODE_DLSS.equals(RtUpscalerSupport.currentUpscalerMode())) {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+            CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
+            Button button = Button.builder(frameGenerationLabel(), clicked -> {
+                setting.set(!setting.value());
+                clicked.setMessage(frameGenerationLabel());
+            }).width(310).build();
+            button.setTooltip(Tooltip.create(
+                    Component.translatable("caustica.options.rt.frameGeneration.fsr.tooltip")));
+            return button;
+        }
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             return null;
         }
         CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
@@ -596,6 +606,43 @@ public final class RtVideoOptions {
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.frameGeneration"),
                 Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
+    // Multiplier options as configured generated-frame counts: 2x=1, 4x=3, 6x=5. Each backend clamps
+    // to what it can actually produce (FSR: the FFX API's 4 generated frames per dispatch = 5x; DLSS:
+    // the driver-reported MFG maximum) — the tooltip says so, the presenter applies the clamp.
+    private static final int[] FG_MULTIPLIER_OPTIONS = { 1, 3, 5 };
+
+    /**
+     * The FG multiplier selector (2x/4x/6x): how many frames the display receives per rendered frame.
+     * Visible alongside {@link #frameGenerationButton()} on the DLSS and FSR 3 paths.
+     */
+    public static Button fgMultiplierButton() {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode) && !RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+            return null;
+        }
+        CausticaConfig.IntSetting setting = CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT;
+        Button button = Button.builder(fgMultiplierLabel(), clicked -> {
+            int current = setting.value();
+            int idx = 0;
+            for (int i = 0; i < FG_MULTIPLIER_OPTIONS.length; i++) {
+                if (FG_MULTIPLIER_OPTIONS[i] == current) {
+                    idx = i;
+                    break;
+                }
+            }
+            setting.set(FG_MULTIPLIER_OPTIONS[(idx + 1) % FG_MULTIPLIER_OPTIONS.length]);
+            clicked.setMessage(fgMultiplierLabel());
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.fgMultiplier.tooltip")));
+        return button;
+    }
+
+    private static Component fgMultiplierLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.fgMultiplier"),
+                Component.literal((CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value() + 1) + "x"));
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {

@@ -18,6 +18,7 @@
 
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_api_types.h>
+#include <ffx_api/ffx_framegeneration.h>
 #include <ffx_api/ffx_upscale.h>
 #include <ffx_api/vk/ffx_api_vk.h>
 
@@ -374,6 +375,173 @@ FSR_SHIM_EXPORT int fsrshim_query_jitter_offset(int index, int phaseCount, float
     query.pOutY = outY;
     ffxReturnCode_t r = p_ffxQuery(nullptr, &query.header);
     g_lastResult = (int) r;
+    return (int) r;
+}
+
+// ======================================================================================================================================
+// Frame Generation (manual/swapchain-less integration)
+//
+// FSR 3.1 FG without the FFX swapchain wrapper: Caustica owns Minecraft's swapchain and presents the
+// generated frames itself (RtFramePresenter), so the FG context is created WITHOUT a swapchain and only
+// the two compute dispatches are used — PREPARE once per rendered frame (depth + dilated-MV inputs +
+// camera info), then GENERATE producing numGeneratedFrames interpolated frames into outputs[4] in a
+// single dispatch (multiplier = numGeneratedFrames + 1, capped at 4 generated / 5x by the API).
+// ======================================================================================================================================
+
+struct FsrFrameGen {
+    ffxContext context;
+    ffxCreateContextDescFrameGeneration createDesc;
+    ffxCreateBackendVKDesc backendDesc;
+};
+
+// Creates an FSR 3.1 frame-generation context (manual mode: no swapchain configured). backBufferFormat
+// is the VkFormat of the frames fed to generate (RGBA8 SDR / RGBA16f PQ HDR). flags is the
+// FFX_FRAMEGENERATION_ENABLE_* set.
+FSR_SHIM_EXPORT void* fsrshim_create_fg(unsigned int maxRenderWidth, unsigned int maxRenderHeight,
+                                        unsigned int displayWidth, unsigned int displayHeight,
+                                        unsigned int backBufferFormat, unsigned int flags) {
+    FSR_LOG("create_fg: maxRender=%ux%u display=%ux%u bbFormat=%u flags=0x%x",
+            maxRenderWidth, maxRenderHeight, displayWidth, displayHeight, backBufferFormat, flags);
+    if (!p_ffxCreateContext) {
+        return nullptr;
+    }
+    FsrFrameGen* fg = (FsrFrameGen*) std::calloc(1, sizeof(FsrFrameGen));
+    if (!fg) {
+        return nullptr;
+    }
+    fg->backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
+    fg->backendDesc.header.pNext = nullptr;
+    fg->backendDesc.vkDevice = g_device;
+    fg->backendDesc.vkPhysicalDevice = g_physicalDevice;
+    fg->backendDesc.vkDeviceProcAddr = g_deviceProcAddr;
+
+    fg->createDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    fg->createDesc.header.pNext = &fg->backendDesc.header;
+    fg->createDesc.flags = flags;
+    fg->createDesc.displaySize = { displayWidth, displayHeight };
+    fg->createDesc.maxRenderSize = { maxRenderWidth, maxRenderHeight };
+    fg->createDesc.backBufferFormat = ffxApiGetSurfaceFormatVK((VkFormat) backBufferFormat);
+
+    ffxReturnCode_t r = p_ffxCreateContext(&fg->context, &fg->createDesc.header, nullptr);
+    g_lastResult = (int) r;
+    FSR_LOG("create_fg: ffxCreateContext r=%u", (unsigned) r);
+    if (r != FFX_API_RETURN_OK) {
+        std::free(fg);
+        return nullptr;
+    }
+    return fg;
+}
+
+FSR_SHIM_EXPORT int fsrshim_destroy_fg(void* handle) {
+    FsrFrameGen* fg = (FsrFrameGen*) handle;
+    if (!fg) {
+        return 0;
+    }
+    ffxReturnCode_t r = p_ffxDestroyContext ? p_ffxDestroyContext(&fg->context, nullptr)
+                                            : FFX_API_RETURN_OK;
+    g_lastResult = (int) r;
+    std::free(fg);
+    return (int) r;
+}
+
+// Per-rendered-frame FG prepare: dilated depth + motion vectors + camera info at render resolution.
+// camera vectors/position are world-space (MC blocks). frameID must increment by exactly one per
+// rendered frame across prepare+generate.
+FSR_SHIM_EXPORT int fsrshim_fg_prepare(void* handle, unsigned long long cmd,
+                                       unsigned long long depthImage, unsigned int depthFormat,
+                                       unsigned long long mvImage, unsigned int mvFormat,
+                                       unsigned int renderWidth, unsigned int renderHeight,
+                                       float jitterX, float jitterY, float frameTimeMs,
+                                       float cameraNear, float cameraFar, float cameraFovY,
+                                       unsigned long long frameId,
+                                       const float* camPos3, const float* camUp3,
+                                       const float* camRight3, const float* camForward3) {
+    FsrFrameGen* fg = (FsrFrameGen*) handle;
+    if (!fg || !p_ffxDispatch) {
+        return (int) FFX_API_RETURN_ERROR_PARAMETER;
+    }
+    ffxDispatchDescFrameGenerationPrepare prepare;
+    std::memset(&prepare, 0, sizeof(prepare));
+    prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE;
+    prepare.frameID = frameId;
+    prepare.flags = 0;
+    prepare.commandList = (void*) cmd;
+    prepare.renderSize = { renderWidth, renderHeight };
+    prepare.jitterOffset = { jitterX, jitterY };
+    // Same raw->UV convention as the upscale dispatch: gMotion is render-pixel deltas.
+    prepare.motionVectorScale = { 1.0f / renderWidth, 1.0f / renderHeight };
+    prepare.frameTimeDelta = frameTimeMs;
+    prepare.unused_reset = false;
+    prepare.cameraNear = cameraNear;
+    prepare.cameraFar = cameraFar;
+    prepare.cameraFovAngleVertical = cameraFovY;
+    prepare.viewSpaceToMetersFactor = 1.0f;
+    prepare.depth = makeImageResource((VkImage) depthImage, (VkFormat) depthFormat,
+            renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
+    prepare.motionVectors = makeImageResource((VkImage) mvImage, (VkFormat) mvFormat,
+            renderWidth, renderHeight, FFX_API_RESOURCE_STATE_COMMON);
+
+    // CameraInfo chain (required input from FSR 3.1.4 on "for best quality").
+    ffxDispatchDescFrameGenerationPrepareCameraInfo cameraInfo;
+    std::memset(&cameraInfo, 0, sizeof(cameraInfo));
+    cameraInfo.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_CAMERAINFO;
+    for (int i = 0; i < 3; i++) {
+        cameraInfo.cameraPosition[i] = camPos3[i];
+        cameraInfo.cameraUp[i] = camUp3[i];
+        cameraInfo.cameraRight[i] = camRight3[i];
+        cameraInfo.cameraForward[i] = camForward3[i];
+    }
+    prepare.header.pNext = &cameraInfo.header;
+
+    ffxReturnCode_t r = p_ffxDispatch(&fg->context, &prepare.header);
+    g_lastResult = (int) r;
+    if (r != FFX_API_RETURN_OK) {
+        FSR_LOG("fg_prepare: FAILED r=%u", (unsigned) r);
+    }
+    return (int) r;
+}
+
+// Generates numGeneratedFrames (1..4) interpolated frames from presentImage into outImages in one
+// dispatch. transferFunction is an FfxApiBackbufferTransferFunction (SRGB for the RGBA8 path, PQ for
+// the HDR path). frameID must match the prepare call for this rendered frame.
+FSR_SHIM_EXPORT int fsrshim_fg_generate(void* handle, unsigned long long cmd,
+                                        unsigned long long presentImage, unsigned int presentFormat,
+                                        const unsigned long long* outImages, unsigned int outFormat,
+                                        unsigned int numGeneratedFrames,
+                                        unsigned int width, unsigned int height,
+                                        unsigned long long frameId,
+                                        unsigned int transferFunction, int reset) {
+    FsrFrameGen* fg = (FsrFrameGen*) handle;
+    if (!fg || !p_ffxDispatch || numGeneratedFrames < 1 || numGeneratedFrames > 4) {
+        return (int) FFX_API_RETURN_ERROR_PARAMETER;
+    }
+    ffxDispatchDescFrameGeneration generate;
+    std::memset(&generate, 0, sizeof(generate));
+    generate.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
+    generate.commandList = (void*) cmd;
+    generate.presentColor = makeImageResource((VkImage) presentImage, (VkFormat) presentFormat,
+            width, height, FFX_API_RESOURCE_STATE_COMMON);
+    for (unsigned int i = 0; i < numGeneratedFrames; i++) {
+        generate.outputs[i] = makeImageResource((VkImage) outImages[i], (VkFormat) outFormat,
+                width, height, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    generate.numGeneratedFrames = numGeneratedFrames;
+    generate.reset = reset != 0;
+    generate.backbufferTransferFunction = transferFunction;
+    // PQ linearization range (HDR10-style); ignored on the SRGB transfer function.
+    generate.minMaxLuminance[0] = 0.0f;
+    generate.minMaxLuminance[1] = 10000.0f;
+    generate.generationRect.left = 0;
+    generate.generationRect.top = 0;
+    generate.generationRect.width = width;
+    generate.generationRect.height = height;
+    generate.frameID = frameId;
+
+    ffxReturnCode_t r = p_ffxDispatch(&fg->context, &generate.header);
+    g_lastResult = (int) r;
+    if (r != FFX_API_RETURN_OK) {
+        FSR_LOG("fg_generate: FAILED r=%u", (unsigned) r);
+    }
     return (int) r;
 }
 

@@ -1,0 +1,242 @@
+package dev.comfyfluffy.caustica.rt.pipeline;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vulkan.VulkanDevice;
+
+import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.client.RtUpscalerSupport;
+import dev.comfyfluffy.caustica.fsr.FsrLibrary;
+import dev.comfyfluffy.caustica.fsr.FsrRuntime;
+import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
+
+import org.lwjgl.vulkan.VK10;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
+/**
+ * AMD FSR 3.1 Frame Generation backend (EXPERIMENTAL). Manual/swapchain-less integration: Caustica
+ * owns Minecraft's swapchain and presents the generated frames itself ({@code RtFramePresenter}), so
+ * the FFX FG context is created WITHOUT a swapchain — only the two compute dispatches run here:
+ * PREPARE once per rendered frame (dilated depth + MVs + camera info at render resolution), then one
+ * GENERATE dispatch producing {@code numGeneratedFrames} interpolated frames into the presenter's
+ * targets (multiplier = numGeneratedFrames + 1; the FFX API caps it at 4 generated / 5x).
+ *
+ * <p>Inputs mirror the FSR upscale conventions already validated in {@code RtFsrUpscaler}:
+ * reversed-Z infinite depth (DEPTH_INVERTED | DEPTH_INFINITE), render-pixel motion vectors scaled to
+ * UV by the shim, jitter negated, vertical FOV positive.
+ */
+public final class RtFsrFrameGen {
+    public static final RtFsrFrameGen INSTANCE = new RtFsrFrameGen();
+
+    /** The FFX API generates at most 4 frames per dispatch (ffxDispatchDescUpscale::outputs[4]). */
+    public static final int MAX_GENERATED_FRAMES = 4;
+
+    /**
+     * FG is opted into through the shared {@code caustica.rt.fg} toggle, but only rides when FSR 3 is
+     * the selected upscaler — same "FG rides on the selected upscaler" contract as the DLSS path.
+     */
+    public static boolean enabled() {
+        return CausticaConfig.Rt.Fg.ENABLED.value()
+                && RtUpscalerSupport.MODE_FSR3.equals(RtUpscalerSupport.currentUpscalerMode());
+    }
+
+    // FfxApiCreateContextFramegenerationFlags for this renderer: reversed-Z (infinite far) depth and
+    // HDR-capable inputs (the PQ path feeds HDR10-encoded frames; SDR ignores the HDR flag).
+    private static final int FLAG_DEPTH_INVERTED = 1 << 3;
+    private static final int FLAG_DEPTH_INFINITE = 1 << 4;
+    private static final int FLAG_HIGH_DYNAMIC_RANGE = 1 << 5;
+    private static final int CONTEXT_FLAGS = FLAG_DEPTH_INVERTED | FLAG_DEPTH_INFINITE | FLAG_HIGH_DYNAMIC_RANGE;
+
+    // FfxApiBackbufferTransferFunction values.
+    private static final int TRANSFER_SRGB = 0;
+    private static final int TRANSFER_PQ = 1;
+
+    // Same near-plane heuristic as the FSR upscale path.
+    private static final float CAMERA_NEAR = 0.05f;
+
+    private FsrLibrary lib;
+    private MemorySegment context = MemorySegment.NULL;
+    private boolean initialized;
+    private boolean failed;
+    private boolean resetRequested = true;
+    private long frameId;
+    private long lastFrameNanos;
+
+    private int contextDisplayWidth = -1;
+    private int contextDisplayHeight = -1;
+    private int contextRenderWidth = -1;
+    private int contextRenderHeight = -1;
+    private int contextFormat = Integer.MIN_VALUE;
+
+    private RtFsrFrameGen() {
+    }
+
+    /** Generated-frame count the player asked for, clamped to the FFX API cap (>=1 once clamped). */
+    public int effectiveGeneratedCount() {
+        return Math.clamp(CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value(), 1, MAX_GENERATED_FRAMES);
+    }
+
+    public boolean isReady() {
+        return initialized && !failed && !isNull(context);
+    }
+
+    public boolean featureReadyFor(int displayWidth, int displayHeight, int renderWidth, int renderHeight, int format) {
+        return isReady() && contextDisplayWidth == displayWidth && contextDisplayHeight == displayHeight
+                && contextRenderWidth == renderWidth && contextRenderHeight == renderHeight
+                && contextFormat == format;
+    }
+
+    /**
+     * Ensure an FG context exists for these dimensions/backbuffer format. Context creation is plain
+     * device allocation (records nothing). Returns false (and latches off) on failure.
+     */
+    public boolean ensureFeature(int displayWidth, int displayHeight,
+                                 int renderWidth, int renderHeight, int backbufferFormat) {
+        if (!enabled() || failed) {
+            return false;
+        }
+        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+            return false;
+        }
+        try {
+            if (!initialized) {
+                lib = FsrRuntime.INSTANCE.acquire(device);
+                if (lib == null) {
+                    throw new IllegalStateException("FSR runtime unavailable; FSR FG cannot initialize");
+                }
+                initialized = true;
+            }
+            if (!featureReadyFor(displayWidth, displayHeight, renderWidth, renderHeight, backbufferFormat)) {
+                releaseContext(device);
+                context = lib.createFg(renderWidth, renderHeight, displayWidth, displayHeight,
+                        backbufferFormat, CONTEXT_FLAGS);
+                if (isNull(context)) {
+                    throw new IllegalStateException("fsrshim_create_fg failed: last=" + lib.lastResult());
+                }
+                contextDisplayWidth = displayWidth;
+                contextDisplayHeight = displayHeight;
+                contextRenderWidth = renderWidth;
+                contextRenderHeight = renderHeight;
+                contextFormat = backbufferFormat;
+                resetRequested = true; // fresh context has no temporal history
+                frameId = 0;
+                CausticaMod.LOGGER.info("FSR FG context created: {}x{} (render {}x{}, backbuffer format {})",
+                        displayWidth, displayHeight, renderWidth, renderHeight, backbufferFormat);
+            }
+            return true;
+        } catch (Throwable t) {
+            failed = true;
+            CausticaMod.LOGGER.error("FSR FG setup failed; frame generation disabled", t);
+            return false;
+        }
+    }
+
+    /**
+     * Record PREPARE + GENERATE into {@code cmd} in one shot: prepares the temporal state from the
+     * render-res guides, then generates {@code numGenerated} interpolated frames from {@code present}
+     * into {@code outputs}. Camera arrays are world-space 3-vectors (position, up, right, forward).
+     * Returns false on failure (caller treats FG as fatal for the session).
+     */
+    public boolean prepareAndGenerate(long cmd,
+                                      long depthImage, long mvImage,
+                                      int renderWidth, int renderHeight,
+                                      float jitterX, float jitterY, float fovY,
+                                      float[] camPos, float[] camUp, float[] camRight, float[] camForward,
+                                      long presentImage, int presentFormat,
+                                      long[] outputs, int numGenerated,
+                                      int width, int height, boolean hdr) {
+        if (!isReady() || numGenerated < 1 || numGenerated > MAX_GENERATED_FRAMES) {
+            return false;
+        }
+        try {
+            long now = System.nanoTime();
+            float frameMs = lastFrameNanos == 0 ? 16.6f
+                    : Math.clamp((now - lastFrameNanos) / 1_000_000.0f, 0.1f, 200.0f);
+            lastFrameNanos = now;
+            frameId++;
+
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment pos = vec3(arena, camPos);
+                MemorySegment up = vec3(arena, camUp);
+                MemorySegment right = vec3(arena, camRight);
+                MemorySegment forward = vec3(arena, camForward);
+                int rc = lib.fgPrepare(context, cmd,
+                        depthImage, VK10.VK_FORMAT_R32_SFLOAT,
+                        mvImage, VK10.VK_FORMAT_R16G16_SFLOAT,
+                        renderWidth, renderHeight, jitterX, jitterY,
+                        frameMs, Float.MAX_VALUE, CAMERA_NEAR, fovY,
+                        frameId, pos, up, right, forward);
+                if (rc != 0) {
+                    throw new IllegalStateException("fsrshim_fg_prepare failed: " + rc + " last=" + lib.lastResult());
+                }
+
+                MemorySegment outArray = arena.allocate(ValueLayout.JAVA_LONG, numGenerated);
+                for (int i = 0; i < numGenerated; i++) {
+                    outArray.setAtIndex(ValueLayout.JAVA_LONG, i, outputs[i]);
+                }
+                rc = lib.fgGenerate(context, cmd,
+                        presentImage, presentFormat,
+                        outArray, presentFormat, numGenerated,
+                        width, height, frameId,
+                        hdr ? TRANSFER_PQ : TRANSFER_SRGB, resetRequested ? 1 : 0);
+                if (rc != 0) {
+                    throw new IllegalStateException("fsrshim_fg_generate failed: " + rc + " last=" + lib.lastResult());
+                }
+            }
+            resetRequested = false;
+            return true;
+        } catch (Throwable t) {
+            failed = true;
+            CausticaMod.LOGGER.error("FSR FG dispatch failed; frame generation disabled", t);
+            return false;
+        }
+    }
+
+    private static MemorySegment vec3(Arena arena, float[] v) {
+        MemorySegment seg = arena.allocate(ValueLayout.JAVA_FLOAT, 3);
+        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 0, v[0]);
+        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 1, v[1]);
+        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 2, v[2]);
+        return seg;
+    }
+
+    /** Request a temporal reset on the next generate (e.g. after a teleport/rebase jump). */
+    public void requestReset() {
+        resetRequested = true;
+    }
+
+    public void destroy() {
+        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
+            releaseContext(device);
+        }
+        initialized = false;
+        lib = null;
+    }
+
+    private void releaseContext(VulkanDevice device) {
+        if (!isNull(context)) {
+            RtContext ctx = RtContext.currentOrNull();
+            if (ctx != null && ctx.device() == device) {
+                ctx.waitIdle();
+            } else {
+                VK10.vkDeviceWaitIdle(device.vkDevice());
+            }
+            lib.destroyFg(context);
+            context = MemorySegment.NULL;
+        }
+        contextDisplayWidth = -1;
+        contextDisplayHeight = -1;
+        contextRenderWidth = -1;
+        contextRenderHeight = -1;
+        contextFormat = Integer.MIN_VALUE;
+        lastFrameNanos = 0;
+    }
+
+    private static boolean isNull(MemorySegment segment) {
+        return segment == null || segment.equals(MemorySegment.NULL);
+    }
+}

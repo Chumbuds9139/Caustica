@@ -116,6 +116,9 @@
 	"caustica.options.rt.frameGeneration": "Frame Generation (Experimental)",
 	"caustica.options.rt.frameGeneration.tooltip": "DLSS Frame Generation synthesizes intermediate frames to multiply the perceived frame rate. EXPERIMENTAL: may increase latency or cause artifacts. Requires the DLSS upscaler and an NVIDIA GeForce RTX 40 or 50 series GPU.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Unavailable on this GPU: DLSS Frame Generation requires an NVIDIA GeForce RTX 40 or 50 series card. Support comes from the driver's NGX capability query once active, and from the GPU name otherwise.",
+	"caustica.options.rt.frameGeneration.fsr.tooltip": "Frame Generation via AMD FSR 3.1 (Experimental): synthesizes intermediate frames between the actually rendered frames, multiplying the perceived frame rate on your display. Works on any GPU, at the cost of extra GPU work and a little added latency. Pair it with the multiplier selector below.",
+	"caustica.options.rt.fgMultiplier": "FG Multiplier",
+	"caustica.options.rt.fgMultiplier.tooltip": "How many frames your display receives per rendered frame (2x/4x/6x). Higher = smoother motion at the cost of more GPU work and latency. Each backend caps at what it can actually produce: FSR at 5x (FFX API limit), DLSS at the driver-reported maximum.",
 
 	"caustica.options.rt.debugView": "Debug View",
 	"caustica.options.rt.debugView.tooltip": "Visualize an intermediate ray-tracing buffer instead of the final image.",

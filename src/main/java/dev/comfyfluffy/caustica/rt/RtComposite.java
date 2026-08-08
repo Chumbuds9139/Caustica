@@ -409,6 +409,10 @@ public final class RtComposite {
     private final Matrix4f fgClipToPrev = new Matrix4f();
     private final Matrix4f fgPrevToClip = new Matrix4f();
     private final Matrix4f fgMatTmp = new Matrix4f();
+    // Jitter applied to this frame's trace (signed, render pixels) — the FG PREPARE input wants the
+    // same sub-pixel offset the camera rays used; captured in recordFrame, read at present time.
+    private float fgJitterX;
+    private float fgJitterY;
     // Guide buffers (first-hit attributes for DLSS-RR): normal+roughness, albedo, depth, motion,
     // specular albedo, and reflection motion.
     private RtImage gNormal;
@@ -1219,6 +1223,9 @@ public final class RtComposite {
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
+            // FG reads the frame's jitter at present time (PREPARE wants the offset the rays used).
+            fgJitterX = jitterX;
+            fgJitterY = jitterY;
 
             boolean rrDone = false;
             // Optional coarse LOD proxy (Distant Horizons / Voxy). A no-op when neither mod is present.
@@ -2620,6 +2627,18 @@ public final class RtComposite {
      * same combined {@link RtUiOverlay} texture used by both present paths (only the *compositing* math that
      * consumes it differs, done separately by {@code presentHdr}/{@code RtUiOverlay}, not here).
      */
+    /**
+     * Generated-frame count the active FG backend will actually produce this frame: DLSS clamps to
+     * the driver-reported MFG maximum, FSR to the FFX API's 4-outputs-per-dispatch cap. Called by
+     * the present hooks ({@code VulkanGpuSurfaceMixin}) instead of the DLSS-only getter.
+     */
+    public static int fgGeneratedCount() {
+        if (RtFsrFrameGen.enabled()) {
+            return RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
+        }
+        return RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+    }
+
     public RtImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
         if (failed || gDepth == null || gMotion == null || !frameCaptured) {
@@ -2630,6 +2649,9 @@ public final class RtComposite {
             return null;
         }
         final int fmt = hdrBackbuffer ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
+        if (RtFsrFrameGen.enabled()) {
+            return fgInterpolateFsr(ctx, enc, backbufferImage, swapW, swapH, index, count, hdrBackbuffer, fmt);
+        }
         if (index == 1) {
             if (!ensureFgFeature(ctx, swapW, swapH, renderW, renderH, fmt)) {
                 throw new IllegalStateException("DLSSG feature not ready (ensureFgFeature failed)");
@@ -2680,6 +2702,69 @@ public final class RtComposite {
         }
         enc.execute(cmd);
         return out;
+    }
+
+    /**
+     * FSR 3.1 branch of {@link #fgInterpolate}: one PREPARE + one GENERATE dispatch produce ALL
+     * requested interpolated frames at {@code index == 1} (the FFX API generates them in a single
+     * dispatch into {@code outputs[1..4]}); later indices just hand back the already-generated image.
+     * Same fatal-on-failure / null-on-no-captured-frame contract as the DLSS branch. Camera position
+     * and the three view-space axes come straight from the captured camera (rotation matrix rows:
+     * Minecraft's +Z-forward view space makes row0/row1/row2 = right/up/forward in world space).
+     */
+    private RtImage fgInterpolateFsr(RtContext ctx, VulkanCommandEncoder enc, long backbufferImage,
+            int swapW, int swapH, int index, int count, boolean hdrBackbuffer, int fmt) {
+        if (index == 1) {
+            if (!RtFsrFrameGen.INSTANCE.ensureFeature(swapW, swapH, renderW, renderH, fmt)) {
+                throw new IllegalStateException("FSR FG feature not ready (ensureFeature failed)");
+            }
+            ensureFgInterp(ctx, count, swapW, swapH, fmt);
+            if (fgInterp.length != count) {
+                throw new IllegalStateException("FSR FG interp targets mismatch: " + fgInterp.length + " != " + count);
+            }
+            float fovY = (float) (2.0 * Math.atan(1.0 / Math.abs(frameProjection.m11())));
+            long[] outputs = new long[count];
+            for (int i = 0; i < count; i++) {
+                outputs[i] = fgInterp[i].image;
+            }
+            // Rotation-only view matrix rows = the view-space axes in world coordinates
+            // (Minecraft's +Z-forward view space: row0 right, row1 up, row2 forward).
+            setVec3(camPosF, camX, camY, camZ);
+            setVec3(camRightF, frameViewRotation.m00(), frameViewRotation.m01(), frameViewRotation.m02());
+            setVec3(camUpF, frameViewRotation.m10(), frameViewRotation.m11(), frameViewRotation.m12());
+            setVec3(camForwardF, frameViewRotation.m20(), frameViewRotation.m21(), frameViewRotation.m22());
+            VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+            // Same jitter sign convention as the FSR upscale dispatch (negated).
+            boolean ok = RtFsrFrameGen.INSTANCE.prepareAndGenerate(cmd.address(),
+                    gDepth.image, gMotion.image, renderW, renderH,
+                    -fgJitterX, -fgJitterY, fovY,
+                    camPosF, camUpF, camRightF, camForwardF,
+                    backbufferImage, fmt, outputs, count, swapW, swapH, hdrBackbuffer);
+            if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
+                throw new IllegalStateException("vkEndCommandBuffer(fsr fg) failed");
+            }
+            if (!ok) {
+                throw new IllegalStateException("fsrshim FG prepare/generate failed");
+            }
+            enc.execute(cmd);
+        }
+        if (index < 1 || index > fgInterp.length || fgInterp[index - 1] == null) {
+            throw new IllegalStateException(
+                    "FSR fgInterpolate index " + index + " out of range for fgInterp[" + fgInterp.length + "]");
+        }
+        return fgInterp[index - 1];
+    }
+
+    private final float[] camPosF = new float[3];
+    private final float[] camRightF = new float[3];
+    private final float[] camUpF = new float[3];
+    private final float[] camForwardF = new float[3];
+
+    /** Fill a scratch float[3] (avoids per-frame allocation at present time). */
+    private static void setVec3(float[] dst, double x, double y, double z) {
+        dst[0] = (float) x;
+        dst[1] = (float) y;
+        dst[2] = (float) z;
     }
 
     private boolean ensureFgFeature(RtContext ctx, int w, int h, int rw, int rh, int fmt) {

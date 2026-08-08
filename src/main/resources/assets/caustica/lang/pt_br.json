@@ -90,6 +90,9 @@
 	"caustica.options.rt.frameGeneration": "Geração de Quadros (Experimental)",
 	"caustica.options.rt.frameGeneration.tooltip": "O DLSS Frame Generation sintetiza quadros intermediários para multiplicar a taxa de quadros percebida. EXPERIMENTAL: pode aumentar a latência ou causar artefatos. Requer o upscaler DLSS e uma GPU NVIDIA GeForce RTX das séries 40 ou 50.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Indisponível nesta GPU: o DLSS Frame Generation requer uma placa NVIDIA GeForce RTX das séries 40 ou 50. O suporte vem da consulta de capacidade NGX do driver quando ativa e, caso contrário, do nome da GPU.",
+	"caustica.options.rt.frameGeneration.fsr.tooltip": "Frame Generation via AMD FSR 3.1 (Experimental): sintetiza quadros intermediários entre os quadros realmente renderizados, multiplicando a taxa de quadros percebida no display. Funciona em qualquer GPU, ao custo de trabalho extra de GPU e um pouco mais de latência. Combine com o seletor de multiplicador abaixo.",
+	"caustica.options.rt.fgMultiplier": "Multiplicador de FG",
+	"caustica.options.rt.fgMultiplier.tooltip": "Quantos quadros o display recebe por quadro renderizado (2x/4x/6x). Mais alto = movimento mais fluido ao custo de mais GPU e latência. Cada backend é limitado ao máximo que consegue produzir: FSR até 5x (limite da API FFX), DLSS até o máximo reportado pelo driver.",
 
 	"caustica.options.rt.debugView": "Visualização de depuração",
 	"caustica.options.rt.debugView.tooltip": "Visualiza um buffer intermediário do traçado de raios em vez da imagem final.",
