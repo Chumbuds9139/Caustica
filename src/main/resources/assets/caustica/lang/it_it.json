@@ -56,6 +56,8 @@
 	"caustica.options.rt.fsrQuality.tooltip": "Modalità qualità dell'upscaler AMD FSR 3. Le modalità di qualità inferiore renderizzano meno pixel e fanno un upscaling più aggressivo per aumentare il framerate; le modalità di qualità superiore renderizzano più pixel per un'immagine più nitida.",
 	"caustica.options.rt.nrd": "Denoiser NRD (Sperimentale)",
 	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers (REBLUR): rimuove il rumore dell'immagine con ray tracing alla risoluzione di rendering sulle GPU senza DLSS Ray Reconstruction. Abbinalo all'upscaler FSR 3 per un percorso completo denoise+upscale, oppure a Disattivato per la risoluzione nativa senza rumore. Sperimentale: la calibrazione dell'immagine è in corso.",
+	"caustica.options.rt.nrdValidation": "Overlay di validazione NRD",
+	"caustica.options.rt.nrdValidation.tooltip": "Overlay diagnostico di REBLUR (debug): sostituisce l'immagine con la griglia a 16 viewport di NRD — input, conteggio dei frame accumulati per pixel, stato di disocclusione/occlusione. Per il debug degli artefatti temporali; imposta l'upscaler su Off per una lettura nitida.",
 	"caustica.options.rt.temporalAccumulation": "Accumulo temporale",
 	"caustica.options.rt.temporalAccumulation.tooltip": "Accumula i fotogrammi precedenti sull'immagine attuale usando i vettori di movimento del tracer: l'alternativa più semplice allo stadio temporale di NRD. Riduce molto il rumore a 1 SPP da fermi, con una leggera sfocatura durante i movimenti rapidi. Funziona con o senza il denoiser NRD.",
 	"caustica.options.rt.frameGeneration": "Generazione dei Fotogrammi (Sperimentale)",

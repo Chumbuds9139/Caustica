@@ -434,6 +434,8 @@ public final class RtComposite {
     private RtImage nrdDiffOut;
     private RtImage nrdSpecOut;
     private RtImage nrdCombined;
+    // REBLUR validation overlay target (OUT_VALIDATION), written only when nrdValidation is on.
+    private RtImage nrdValidation;
     private RtNrdCombinePipeline nrdCombinePipeline;
     // Temporal accumulation ping-pong over the (spatially) denoised radiance; alpha channel carries
     // the per-pixel frame count. Swapped every frame.
@@ -943,6 +945,10 @@ public final class RtComposite {
             nrdCombined.destroy();
             nrdCombined = null;
         }
+        if (nrdValidation != null) {
+            nrdValidation.destroy();
+            nrdValidation = null;
+        }
         if (taaPing != null) {
             taaPing.destroy();
             taaPing = null;
@@ -1128,6 +1134,9 @@ public final class RtComposite {
             nrdDiffOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised diffuse " + renderW + "x" + renderH);
             nrdSpecOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised specular " + renderW + "x" + renderH);
             nrdCombined = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd combined radiance " + renderW + "x" + renderH);
+            // Allocated unconditionally (cheap RGBA8) so toggling nrdValidation live needs no rebuild;
+            // REBLUR only writes it when the validation flag is set.
+            nrdValidation = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R8G8B8A8_UNORM, "nrd validation overlay " + renderW + "x" + renderH);
             if (nrdCombinePipeline == null) {
                 nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
             }
@@ -1471,6 +1480,7 @@ public final class RtComposite {
                     // the FOV lerps (sprint/fly), same trigger the old TAA used.
                     nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
                             gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
+                            nrdValidation,
                             frameProjection, frameViewRotation,
                             (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
                             (float) (camZ - terrain.blockZ),
@@ -1490,6 +1500,14 @@ public final class RtComposite {
             frameProjection.get(prevProjection);
             prevProjectionValid = true;
 
+            // Validation mode: REBLUR's 16-viewport diagnostic overlay replaces the normal image
+            // (set the upscaler to Off for a crisp readout — FSR's own temporal pass blurs the
+            // grid/text). The TAA must not accumulate the overlay, so it is gated off below.
+            boolean nrdValidationOn = nrdDone && CausticaConfig.Rt.Nrd.VALIDATION.value();
+            if (nrdValidationOn) {
+                denoisedSource = nrdValidation;
+            }
+
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
             if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
@@ -1508,7 +1526,7 @@ public final class RtComposite {
             RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
             // Temporal accumulation (own option, independent of NRD): accumulates whichever image
             // feeds the upscale stage — NRD-combined radiance when NRD ran, the raw trace otherwise.
-            if (taaPath && taaPipeline != null && taaPing != null && gViewZ != null) {
+            if (taaPath && !nrdValidationOn && taaPipeline != null && taaPing != null && gViewZ != null) {
                 RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
                 RtImage outImg = taaWriteToPing ? taaPing : taaPong;
                 taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,

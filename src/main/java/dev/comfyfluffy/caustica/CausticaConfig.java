@@ -937,6 +937,13 @@ public final class CausticaConfig {
          */
         public static final class Nrd {
             public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);
+            /**
+             * REBLUR's 16-viewport validation overlay (OUT_VALIDATION): diagnostics for inputs,
+             * accumulation frame counts, disocclusion/occlusion state — the tool for debugging
+             * temporal artifacts in-game. When on, the overlay replaces the normal image and the
+             * TAA steps aside (the overlay must not be accumulated).
+             */
+            public static final BooleanSetting VALIDATION = bool("caustica.rt.nrdValidation", "nrd.validation", false);
 
             private Nrd() {
             }

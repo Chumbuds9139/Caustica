@@ -38,22 +38,25 @@ public final class NrdLibrary {
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
         this.newFrame = handle(lookup, "nrdshim_new_frame", FunctionDescriptor.ofVoid());
         // int nrdshim_set_settings(f32[16] v2c, f32[16] v2cPrev, f32[16] w2v, f32[16] w2vPrev,
-        //                          jx, jy, jpx, jpy, mvScaleX, mvScaleY, u32 frameIndex, i32 reset)
+        //                          jx, jy, jpx, jpy, mvScaleX, mvScaleY, u32 frameIndex, i32 reset,
+        //                          i32 enableValidation)
         this.setSettings = handle(lookup, "nrdshim_set_settings",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
-                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
         // int nrdshim_set_reblur_settings(i32 hitDistReconMode, i32 maxAccum, i32 maxFastAccum)
         this.setReblurSettings = handle(lookup, "nrdshim_set_reblur_settings",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-        // int nrdshim_denoise(u64 cmd, [image,fmt]x7: mv, normalRough, viewZ, diffIn, specIn, diffOut, specOut)
+        // int nrdshim_denoise(u64 cmd, [image,fmt]x7: mv, normalRough, viewZ, diffIn, specIn, diffOut,
+        //                     specOut, [validationImage, validationFmt])
         this.denoise = handle(lookup, "nrdshim_denoise",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
@@ -97,11 +100,12 @@ public final class NrdLibrary {
     public int setSettings(MemorySegment viewToClip, MemorySegment viewToClipPrev,
                            MemorySegment worldToView, MemorySegment worldToViewPrev,
                            float jitterX, float jitterY, float jitterPrevX, float jitterPrevY,
-                           float mvScaleX, float mvScaleY, int frameIndex, int reset) {
+                           float mvScaleX, float mvScaleY, int frameIndex, int reset,
+                           int enableValidation) {
         try {
             return (int) this.setSettings.invokeExact(viewToClip, viewToClipPrev, worldToView, worldToViewPrev,
                     jitterX, jitterY, jitterPrevX, jitterPrevY,
-                    mvScaleX, mvScaleY, frameIndex, reset);
+                    mvScaleX, mvScaleY, frameIndex, reset, enableValidation);
         } catch (Throwable t) {
             throw new RuntimeException("nrdshim_set_settings failed", t);
         }
@@ -128,13 +132,14 @@ public final class NrdLibrary {
                        long diffInImage, int diffInFormat,
                        long specInImage, int specInFormat,
                        long diffOutImage, int diffOutFormat,
-                       long specOutImage, int specOutFormat) {
+                       long specOutImage, int specOutFormat,
+                       long validationImage, int validationFormat) {
         try {
             return (int) this.denoise.invokeExact(cmd,
                     mvImage, mvFormat, normalRoughnessImage, normalRoughnessFormat,
                     viewZImage, viewZFormat, diffInImage, diffInFormat,
                     specInImage, specInFormat, diffOutImage, diffOutFormat,
-                    specOutImage, specOutFormat);
+                    specOutImage, specOutFormat, validationImage, validationFormat);
         } catch (Throwable t) {
             throw new RuntimeException("nrdshim_denoise failed", t);
         }

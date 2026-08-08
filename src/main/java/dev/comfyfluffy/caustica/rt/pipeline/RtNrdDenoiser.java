@@ -84,6 +84,7 @@ public final class RtNrdDenoiser {
     public boolean denoise(long cmd, int renderWidth, int renderHeight,
                            RtImage motion, RtImage normalRoughness, RtImage viewZ,
                            RtImage diffIn, RtImage specIn, RtImage diffOut, RtImage specOut,
+                           RtImage validation,
                            Matrix4fc viewToClip, Matrix4fc viewRotation,
                            float cameraOffsetX, float cameraOffsetY, float cameraOffsetZ,
                            float jitterPixelsX, float jitterPixelsY, int frameIndex,
@@ -91,6 +92,7 @@ public final class RtNrdDenoiser {
         if (failed || !enabled()) {
             return false;
         }
+        boolean validationOn = validation != null && CausticaConfig.Rt.Nrd.VALIDATION.value();
         if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
             return false;
         }
@@ -179,7 +181,7 @@ public final class RtNrdDenoiser {
                 int rc = lib.setSettings(v2c, v2cPrev, w2v, w2vPrev,
                         jitterPixelsX, jitterPixelsY, jitterPixelsX, jitterPixelsY,
                         1.0f / renderWidth, 1.0f / renderHeight,
-                        frameIndex, (hasPrev && !jumped) ? 0 : 1);
+                        frameIndex, (hasPrev && !jumped) ? 0 : 1, validationOn ? 1 : 0);
                 if (rc != 0) {
                     throw new IllegalStateException("nrdshim_set_settings failed: " + rc + " last=" + lib.lastResult());
                 }
@@ -200,7 +202,8 @@ public final class RtNrdDenoiser {
                     diffIn.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     specIn.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     diffOut.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                    specOut.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT);
+                    specOut.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    validationOn ? validation.image : 0L, VK10.VK_FORMAT_R8G8B8A8_UNORM);
             if (rc != 0) {
                 throw new IllegalStateException("nrdshim_denoise failed: " + rc + " last=" + lib.lastResult());
             }

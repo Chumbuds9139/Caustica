@@ -208,7 +208,7 @@ NRD_SHIM_EXPORT int nrdshim_set_settings(const float* viewToClip, const float* v
                                          float jitterX, float jitterY,
                                          float jitterPrevX, float jitterPrevY,
                                          float mvScaleX, float mvScaleY,
-                                         unsigned int frameIndex, int reset) {
+                                         unsigned int frameIndex, int reset, int enableValidation) {
     if (!g_integration) {
         return -1;
     }
@@ -239,6 +239,7 @@ NRD_SHIM_EXPORT int nrdshim_set_settings(const float* viewToClip, const float* v
     settings.accumulationMode = reset ? nrd::AccumulationMode::CLEAR_AND_RESTART
                                       : nrd::AccumulationMode::CONTINUE;
     settings.isMotionVectorInWorldSpace = false;
+    settings.enableValidation = enableValidation != 0;
     nrd::Result result = g_integration->SetCommonSettings(settings);
     g_lastResult = (int) result;
     return (int) result;
@@ -258,7 +259,9 @@ static nrd::Resource makeResource(unsigned long long image, int vkFormat) {
 }
 
 // Records the REBLUR_DIFFUSE_SPECULAR denoise into the renderer's (currently recording) command
-// buffer. All seven textures are render-resolution; formats are the raw VkFormat enums.
+// buffer. All seven textures are render-resolution; formats are the raw VkFormat enums. When
+// validationImage != 0 it is bound as OUT_VALIDATION and REBLUR renders its 16-viewport diagnostic
+// overlay into it (requires enableValidation in the common settings).
 NRD_SHIM_EXPORT int nrdshim_denoise(unsigned long long cmd,
                                     unsigned long long mvImage, int mvFormat,
                                     unsigned long long normalRoughnessImage, int normalRoughnessFormat,
@@ -266,7 +269,8 @@ NRD_SHIM_EXPORT int nrdshim_denoise(unsigned long long cmd,
                                     unsigned long long diffInImage, int diffInFormat,
                                     unsigned long long specInImage, int specInFormat,
                                     unsigned long long diffOutImage, int diffOutFormat,
-                                    unsigned long long specOutImage, int specOutFormat) {
+                                    unsigned long long specOutImage, int specOutFormat,
+                                    unsigned long long validationImage, int validationFormat) {
     if (!g_integration) {
         return -1;
     }
@@ -288,6 +292,10 @@ NRD_SHIM_EXPORT int nrdshim_denoise(unsigned long long cmd,
     snapshot.SetResource(nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST, specInResource);
     snapshot.SetResource(nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST, diffOutResource);
     snapshot.SetResource(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, specOutResource);
+    if (validationImage != 0) {
+        nrd::Resource validationResource = makeResource(validationImage, validationFormat);
+        snapshot.SetResource(nrd::ResourceType::OUT_VALIDATION, validationResource);
+    }
 
     nri::CommandBufferVKDesc cmdDesc = {};
     cmdDesc.vkCommandBuffer = (VKHandle) cmd;

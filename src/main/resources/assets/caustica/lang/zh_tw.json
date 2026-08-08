@@ -56,6 +56,8 @@
 	"caustica.options.rt.fsrQuality.tooltip": "AMD FSR 3 超解析度的品質模式。較低品質模式會算繪較少像素並進行更積極的升頻，以獲得更高幀率；較高品質模式會算繪更多像素，以獲得更清晰的影像。",
 	"caustica.options.rt.nrd": "NRD 降噪器（實驗性）",
 	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers（REBLUR）：在沒有 DLSS 光線重建的 GPU 上，以算繪解析度對光追影像降噪。與 FSR 3 升頻器搭配可獲得完整的降噪+升頻路徑，與關閉搭配則得到降噪後的原生解析度。實驗性：畫質調校仍在進行中。",
+	"caustica.options.rt.nrdValidation": "NRD 驗證疊加層",
+	"caustica.options.rt.nrdValidation.tooltip": "REBLUR 診斷疊加層（除錯）：用 NRD 的 16 視埠網格取代畫面——輸入、每像素累積幀數、去遮擋/遮擋狀態。用於除錯時間偽影；要清晰檢視請將升頻器設為關閉。",
 	"caustica.options.rt.temporalAccumulation": "時間累積",
 	"caustica.options.rt.temporalAccumulation.tooltip": "利用追蹤器的運動向量將先前的畫面累積到目前的影像上——比 NRD 時間階段更簡單的替代方案。靜止時即使 1 SPP 也能大幅降低噪點，快速移動時會有輕微的動態模糊。無論是否啟用 NRD 降噪器都可使用。",
 	"caustica.options.rt.frameGeneration": "幀生成（實驗性）",

@@ -56,6 +56,8 @@
 	"caustica.options.rt.fsrQuality.tooltip": "AMD FSR 3 업스케일러의 품질 모드입니다. 낮은 품질 모드는 더 적은 픽셀을 렌더링하고 더 강하게 업스케일하여 프레임레이트를 높입니다. 높은 품질 모드는 더 많은 픽셀을 렌더링하여 더 선명한 이미지를 만듭니다.",
 	"caustica.options.rt.nrd": "NRD 노이즈 제거기 (실험적)",
 	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers(REBLUR): DLSS Ray Reconstruction이 없는 GPU에서 레이 트레이싱 이미지를 렌더링 해상도로 노이즈 제거합니다. FSR 3 업스케일러와 함께 사용하면 노이즈 제거+업스케일 전체 경로를, 끔과 함께 사용하면 노이즈 제거된 기본 해상도를 얻습니다. 실험적: 화질 조정이 진행 중입니다.",
+	"caustica.options.rt.nrdValidation": "NRD 검증 오버레이",
+	"caustica.options.rt.nrdValidation.tooltip": "REBLUR 진단 오버레이 (디버그): 이미지를 NRD의 16뷰포트 그리드로 교체합니다 — 입력, 픽셀당 누적 프레임 수, 디스오클루전/오클루전 상태. 시간적 아티팩트 디버깅용. 선명하게 보려면 업스케일러를 끄세요.",
 	"caustica.options.rt.temporalAccumulation": "시간적 축적",
 	"caustica.options.rt.temporalAccumulation.tooltip": "트레이서의 모션 벡터를 사용해 이전 프레임들을 현재 이미지에 누적합니다. NRD의 시간적 단계보다 단순한 대안입니다. 정지 상태에서는 1 SPP에서도 노이즈를 크게 줄여 주며, 빠르게 움직일 때는 약간의 모션 블러가 생깁니다. NRD 디노이저와 함께 쓰거나 없이 쓸 수 있습니다.",
 	"caustica.options.rt.frameGeneration": "프레임 생성 (실험적)",

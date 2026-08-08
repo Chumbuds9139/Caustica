@@ -107,6 +107,7 @@ public final class RtVideoOptions {
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)
                 && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
             options.add(nrdDenoiser());
+            options.add(nrdValidation());
         }
         // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths: on top
         // of NRD's spatial output when NRD runs, over the raw trace otherwise. No runtime gate — it
@@ -555,6 +556,11 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> nrdDenoiser() {
         return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
+    }
+
+    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
+    private static OptionInstance<Boolean> nrdValidation() {
+        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
     }
 
     /**
