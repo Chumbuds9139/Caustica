@@ -40,6 +40,10 @@ env:
   # NRD (NVIDIA Real-time Denoisers) source; its CMake fetches the matching NRI itself.
   NRD_SDK_REF: v4.17.3
   NRD_SDK_PATH: third_party/NRD
+  # XeSS lives in Intel's xess repo; the shim loads the prebuilt libxess.dll at run time, so only
+  # the prebuilt DLL + headers need checking out (sparse).
+  XESS_SDK_REF: v2.1.1
+  XESS_SDK_PATH: third_party/xess
   NGX_SHIM_CONFIG: release
   NGX_VENDOR_CONFIG: rel
   VULKAN_SDK_VERSION: 1.4.350.0
@@ -146,6 +150,38 @@ jobs:
         with:
           name: nrdshim-windows-x64
           path: build/native/nrd_shim/release/nrdshim.dll
+          if-no-files-found: error
+
+      - name: Checkout Intel XeSS SDK
+        uses: actions/checkout@v4
+        with:
+          repository: intel/xess
+          ref: ${{ env.XESS_SDK_REF }}
+          path: ${{ env.XESS_SDK_PATH }}
+          sparse-checkout: |
+            bin
+            inc
+
+      - name: Configure XeSS shim
+        shell: pwsh
+        env:
+          XESS_SDK: ${{ github.workspace }}/${{ env.XESS_SDK_PATH }}
+        run: >
+          cmake -S native/xess_shim
+          -B build/cmake/xess_shim
+          -G "Visual Studio 17 2022"
+          -A x64
+
+      - name: Build XeSS shim
+        run: cmake --build build/cmake/xess_shim --config Release
+
+      - name: Upload Windows XeSS shim
+        uses: actions/upload-artifact@v4
+        with:
+          name: xessshim-windows-x64
+          path: |
+            build/native/xess_shim/release/xessshim.dll
+            build/native/xess_shim/release/libxess.dll
           if-no-files-found: error
 
   native-linux:
@@ -256,6 +292,13 @@ jobs:
         with:
           pattern: nrdshim-*
           path: build/native/nrd_shim/release
+          merge-multiple: true
+
+      - name: Download XeSS shims
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xessshim-*
+          path: build/native/xess_shim/release
           merge-multiple: true
 
       - name: Grant execute permission for gradlew
