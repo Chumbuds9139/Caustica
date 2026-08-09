@@ -1526,7 +1526,14 @@ public final class RtComposite {
             RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
             // Temporal accumulation (own option, independent of NRD): accumulates whichever image
             // feeds the upscale stage — NRD-combined radiance when NRD ran, the raw trace otherwise.
-            if (taaPath && !nrdValidationOn && taaPipeline != null && taaPing != null && gViewZ != null) {
+            // Temporal accumulation (own option) — runs ONLY when NRD did NOT denoise this frame.
+            // When NRD is active, REBLUR's own temporal accumulation already converges the radiance
+            // across frames; stacking this second accumulator on top was a ghosting source (two
+            // motion-compensated histories fighting). This mirrors the DLSS-RR architecture, which is
+            // stable precisely because it denoises in a single coherent pass instead of layering
+            // temporal stages. So: NRD path -> REBLUR temporal then FSR; non-NRD path -> this TAA
+            // then FSR. Never both.
+            if (taaPath && !nrdDone && !nrdValidationOn && taaPipeline != null && taaPing != null && gViewZ != null) {
                 RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
                 RtImage outImg = taaWriteToPing ? taaPing : taaPong;
                 taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,
