@@ -194,10 +194,10 @@ public abstract class VulkanGpuSurfaceMixin {
 		// flicker-with-zero-FPS-gain. FIFO (spec-mandated on every surface) gives every queued
 		// present its own vblank, which is what frame generation needs to actually reach the
 		// display. Forcing it here means FG works regardless of the in-game V-Sync setting.
-		if (pCreateInfo.presentMode() != VK10.VK_PRESENT_MODE_FIFO_KHR) {
+		if (pCreateInfo.presentMode() != KHRSurface.VK_PRESENT_MODE_FIFO_KHR) {
 			CausticaMod.LOGGER.info("FG: forcing FIFO present mode (was {}) so generated frames are "
 					+ "paced on vblanks instead of overwriting each other", pCreateInfo.presentMode());
-			pCreateInfo.presentMode(VK10.VK_PRESENT_MODE_FIFO_KHR);
+			pCreateInfo.presentMode(KHRSurface.VK_PRESENT_MODE_FIFO_KHR);
 		}
 		// Deepen the image pool: each generated frame needs its own swapchain image on top of the
 		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-capped FG
