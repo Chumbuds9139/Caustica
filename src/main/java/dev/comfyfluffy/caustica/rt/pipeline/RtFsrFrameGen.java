@@ -36,12 +36,19 @@ public final class RtFsrFrameGen {
     public static final int MAX_GENERATED_FRAMES = 4;
 
     /**
-     * FG is opted into through the shared {@code caustica.rt.fg} toggle, but only rides when FSR 3 is
-     * the selected upscaler — same "FG rides on the selected upscaler" contract as the DLSS path.
+     * FG is opted into through the shared {@code caustica.rt.fg} toggle, and rides when FSR 3 OR
+     * XeSS is the selected upscaler — same "FG rides on the selected upscaler" contract as the
+     * DLSS path. XeSS has no Frame Generation of its own on Vulkan (Intel's XeSS-FG/XeLL are
+     * D3D12-only in every SDK release to date), so the FFX API's FG engine rides on top of the
+     * XeSS-upscaled frame instead: it only consumes depth + motion vectors + the presented frame,
+     * which are upscaler-agnostic by design.
      */
     public static boolean enabled() {
-        return CausticaConfig.Rt.Fg.ENABLED.value()
-                && RtUpscalerSupport.MODE_FSR3.equals(RtUpscalerSupport.currentUpscalerMode());
+        if (!CausticaConfig.Rt.Fg.ENABLED.value()) {
+            return false;
+        }
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        return RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode);
     }
 
     // FfxApiCreateContextFramegenerationFlags for this renderer: reversed-Z (infinite far) depth and

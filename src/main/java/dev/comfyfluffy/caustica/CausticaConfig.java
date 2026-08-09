@@ -60,7 +60,7 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Nrd.ENABLED,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -947,32 +947,11 @@ public final class CausticaConfig {
         }
 
         /**
-         * NRD (NVIDIA Real-time Denoisers) REBLUR denoising (EXPERIMENTAL): the denoiser alternative
-         * for GPUs without DLSS Ray Reconstruction. Consumes the per-lobe radiance + hit-distance
-         * signals the tracer captures under {@code FEATURE_NRD} and denoises them at render resolution;
-         * the upscale stage (FSR 3, or none) then brings the result to display resolution. Mutually
-         * exclusive with DLSS-RR in the UI (RR already denoises + upscales in one pass); when both
-         * are somehow on, RR wins.
-         */
-        public static final class Nrd {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);
-            /**
-             * REBLUR's 16-viewport validation overlay (OUT_VALIDATION): diagnostics for inputs,
-             * accumulation frame counts, disocclusion/occlusion state — the tool for debugging
-             * temporal artifacts in-game. When on, the overlay replaces the normal image and the
-             * TAA steps aside (the overlay must not be accumulated).
-             */
-            public static final BooleanSetting VALIDATION = bool("caustica.rt.nrdValidation", "nrd.validation", false);
-
-            private Nrd() {
-            }
-        }
-
-        /**
          * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
-         * reprojected with the tracer's motion vectors). Independent of the NRD toggle: it is the
-         * temporal stage for non-DLSS paths — on top of NRD's spatial-only output when NRD runs,
-         * or over the raw trace otherwise. Default ON: without it SPP 1 frames stay visibly noisy.
+         * reprojected with the tracer's motion vectors). THE noise-convergence stage of the non-DLSS
+         * paths (the NRD denoiser it used to pair with was retired: XeSS/FSR + this accumulator
+         * replaced it — cheaper and stabler on camera motion). Default ON: without it SPP 1 frames
+         * stay visibly noisy.
          */
         public static final class Taa {
             public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);

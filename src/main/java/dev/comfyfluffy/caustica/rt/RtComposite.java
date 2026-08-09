@@ -65,8 +65,6 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
-import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
@@ -156,6 +154,8 @@ public final class RtComposite {
     private static final int FEATURE_CLOUDS = 8;
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
     private static final int FEATURE_RESTIR = 32;
+    // Retired with the NRD denoiser: the bit stays reserved so the other flag values never shift;
+    // it is simply never set anymore (the shader's nrdEnabled() is always false).
     private static final int FEATURE_NRD = 64;
     private static final int FEATURE_TAA = 128;
 
@@ -197,16 +197,9 @@ public final class RtComposite {
         if (RtDlssRr.enabled() && debugView() == 0) {
             flags |= FEATURE_DENOISER;
         } else {
-            if (RtNrdDenoiser.enabled() && debugView() == 0) {
-                // NRD signal capture (per-lobe radiance + hit distance + viewZ) only runs when RR is
-                // not already denoising: the two are mutually exclusive in the UI, and if a
-                // hand-edited config somehow enables both, RR wins — capturing the signals would burn
-                // ALU + bandwidth for buffers nothing consumes.
-                flags |= FEATURE_NRD;
-            }
             if (CausticaConfig.Rt.Taa.ENABLED.value() && debugView() == 0) {
-                // The TAA only needs gViewZ (its sky cutoff); like NRD it is meaningless while RR is
-                // denoising, so it shares the same exclusion.
+                // The TAA needs gViewZ (its sky cutoff); meaningless while RR is denoising, so it
+                // shares the same exclusion.
                 flags |= FEATURE_TAA;
             }
         }
@@ -216,9 +209,7 @@ public final class RtComposite {
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
     // penumbrae). Radii in degrees; the real sun/moon are ~0.27°, but a touch larger reads pleasantly.
     private static final int WATER_ANCHOR_MASK = 4095;
-    // Matches the viewZ cap the tracer writes for sky/miss pixels: everything beyond is passed
-    // through the denoise chain raw (the sky never accumulates history).
-    private static final float NRD_DENOISING_RANGE = 500000.0f;
+
     // Temporal accumulation window: long enough to converge static noise at SPP 1, short enough
     // that ghosting after a reset decays quickly.
     private static final float TAA_MAX_FRAMES = 32.0f;
@@ -423,23 +414,17 @@ public final class RtComposite {
     private RtImage gMotion;
     private RtImage gSpecAlbedo;
     private RtImage gSpecMotion;
-    // NRD signals (only written when FEATURE_NRD is on): primary-hit linear view depth + per-lobe
-    // YCoCg radiance with REBLUR-normalized hit distance, and the denoiser's own input/output pair +
-    // the combined (decoded + summed) radiance the upscale stage consumes.
+    // Primary-hit linear view depth (the TAA's sky cutoff). gNrdDiff/gNrdSpec are retired NRD
+    // signal targets: the descriptor layout still carries their bindings, so they stay allocated,
+    // but FEATURE_NRD is never set and nothing writes them anymore.
     private RtImage gViewZ;
     private RtImage gNrdDiff;
     private RtImage gNrdSpec;
     // FSR reactive mask (dynamic entities + transmissive surfaces) — written unconditionally by the
     // tracer, consumed only by the FSR upscale path.
     private RtImage gReactive;
-    private RtImage nrdDiffOut;
-    private RtImage nrdSpecOut;
-    private RtImage nrdCombined;
-    // REBLUR validation overlay target (OUT_VALIDATION), written only when nrdValidation is on.
-    private RtImage nrdValidation;
-    private RtNrdCombinePipeline nrdCombinePipeline;
-    // Temporal accumulation ping-pong over the (spatially) denoised radiance; alpha channel carries
-    // the per-pixel frame count. Swapped every frame.
+    // Temporal accumulation ping-pong over the trace radiance; alpha channel carries the per-pixel
+    // frame count. Swapped every frame.
     private RtImage taaPing;
     private RtImage taaPong;
     private boolean taaWriteToPing;
@@ -448,7 +433,6 @@ public final class RtComposite {
     private final float[] prevProjection = new float[16];
     private final float[] curProjection = new float[16];
     private boolean prevProjectionValid;
-    private boolean renderSizeNrdEnabled;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -943,22 +927,6 @@ public final class RtComposite {
             gReactive.destroy();
             gReactive = null;
         }
-        if (nrdDiffOut != null) {
-            nrdDiffOut.destroy();
-            nrdDiffOut = null;
-        }
-        if (nrdSpecOut != null) {
-            nrdSpecOut.destroy();
-            nrdSpecOut = null;
-        }
-        if (nrdCombined != null) {
-            nrdCombined.destroy();
-            nrdCombined = null;
-        }
-        if (nrdValidation != null) {
-            nrdValidation.destroy();
-            nrdValidation = null;
-        }
         if (taaPing != null) {
             taaPing.destroy();
             taaPing = null;
@@ -1051,8 +1019,6 @@ public final class RtComposite {
         // XeSS shares the slot under the same rules; if a hand-edit stacks them, RR > FSR > XeSS.
         boolean xessEnabled = !rrEnabled && !fsrEnabled && RtXessUpscaler.enabled();
         int xessQuality = xessEnabled ? RtXessUpscaler.quality() : Integer.MIN_VALUE;
-        // NRD's denoise slot has the same exclusivity: off whenever RR is denoising.
-        boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
         boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
@@ -1060,7 +1026,7 @@ public final class RtComposite {
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
                 && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
                 && renderSizeXessEnabled == xessEnabled && renderSizeXessQuality == xessQuality
-                && renderSizeNrdEnabled == nrdEnabled && renderSizeTaaEnabled == taaEnabled) {
+                && renderSizeTaaEnabled == taaEnabled) {
             syncRestirResources(ctx);
             return;
         }
@@ -1116,7 +1082,6 @@ public final class RtComposite {
         renderSizeFsrQuality = fsrQuality;
         renderSizeXessEnabled = xessEnabled;
         renderSizeXessQuality = xessQuality;
-        renderSizeNrdEnabled = nrdEnabled;
         renderSizeTaaEnabled = taaEnabled;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
@@ -1140,31 +1105,14 @@ public final class RtComposite {
         gMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderW + "x" + renderH);
         gSpecAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderW + "x" + renderH);
         gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
-        // NRD signal inputs are bound into the world pipeline every frame (the descriptor layout always
-        // carries them), so they are allocated even while the NRD toggle is off; the tracer only WRITES
-        // them under FEATURE_NRD. Their formats are the NRD front-end contract: viewZ linear depth
-        // (R32f), per-lobe YCoCg radiance + normalized hit distance (RGBA16f).
+        // gViewZ is live (the TAA's sky cutoff). gNrdDiff/gNrdSpec are retired NRD targets kept only
+        // because the world pipeline's descriptor layout still carries their bindings — allocated,
+        // bound, never written (FEATURE_NRD is never set).
         gViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "nrd viewZ " + renderW + "x" + renderH);
         gNrdDiff = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd diffuse radiance+hitdist " + renderW + "x" + renderH);
         gNrdSpec = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd specular radiance+hitdist " + renderW + "x" + renderH);
         gReactive = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16_SFLOAT, "fsr reactive mask " + renderW + "x" + renderH);
-        // Denoiser outputs + the decoded/summed image the upscale stage consumes exist only while NRD
-        // actually runs; the combine pipeline is created lazily with them.
-        if (nrdEnabled) {
-            nrdDiffOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised diffuse " + renderW + "x" + renderH);
-            nrdSpecOut = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd denoised specular " + renderW + "x" + renderH);
-            nrdCombined = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd combined radiance " + renderW + "x" + renderH);
-            // Allocated unconditionally (cheap RGBA8) so toggling nrdValidation live needs no rebuild;
-            // REBLUR only writes it when the validation flag is set.
-            nrdValidation = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R8G8B8A8_UNORM, "nrd validation overlay " + renderW + "x" + renderH);
-            if (nrdCombinePipeline == null) {
-                nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
-            }
-            nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view,
-                    gNrdDiff.view, gNrdSpec.view, gViewZ.view);
-        }
-        // Temporal accumulation history is independent of NRD: it accumulates whatever image feeds
-        // the upscale stage (NRD-combined radiance when NRD ran, the raw trace otherwise).
+        // Temporal accumulation history over the trace radiance.
         if (taaEnabled) {
             taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
             taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
@@ -1233,13 +1181,8 @@ public final class RtComposite {
             boolean rrPath = RtDlssRr.enabled() && debugView == 0;
             boolean fsrPath = !rrPath && RtFsrUpscaler.enabled() && debugView == 0;
             boolean xessPath = !rrPath && !fsrPath && RtXessUpscaler.enabled() && debugView == 0;
-            // NRD needs a jittered trace to accumulate (its history reprojection compensates using the
-            // jitter reported in CommonSettings); when an upscaler shares the frame, both consumers
-            // get the same jitter sequence.
-            boolean nrdPath = !rrPath && RtNrdDenoiser.enabled() && debugView == 0;
-            // Temporal accumulation runs on any non-RR path (with or without NRD); it needs the
-            // jittered trace the same way the denoisers do — accumulation over sub-pixel offsets is
-            // what resolves geometry below the pixel grid.
+            // Temporal accumulation runs on any non-RR path: accumulation over sub-pixel jitter
+            // offsets is what resolves geometry below the pixel grid.
             boolean taaPath = !rrPath && CausticaConfig.Rt.Taa.ENABLED.value() && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;
@@ -1255,10 +1198,6 @@ public final class RtComposite {
             } else if (xessPath) {
                 // Same Halton(2,3) sequence, Intel's fixed 32-phase cycle (see CausticaJitter).
                 CausticaJitter.INSTANCE.prepareXess();
-                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
-                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
-            } else if (nrdPath) {
-                CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             } else if (taaPath) {
@@ -1479,15 +1418,7 @@ public final class RtComposite {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
-            // NRD denoise (the non-DLSS path): consumes the tracer's per-lobe signals + guides at
-            // render res, writes denoised YCoCg outputs, and the combine pass decodes + sums them
-            // into nrdCombined — the radiance the upscale stage below consumes instead of the raw
-            // trace. NRD inserts its own barriers around the denoise (resources are declared in the
-            // GENERAL state the renderer keeps them in); the barrier after the combine covers its
-            // writes for the upscale reads.
-            boolean nrdDone = false;
-            RtImage denoisedSource = null;
+            VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to the temporal/upscale reads
             // FOV changes (sprint/fly) warp the reprojection space the temporal stages live in;
             // detected from the projection matrix itself and used to restart accumulation.
             frameProjection.get(curProjection);
@@ -1497,42 +1428,8 @@ public final class RtComposite {
                     projectionChanged = Math.abs(prevProjection[i] - curProjection[i]) > 1.0e-5f;
                 }
             }
-            if (nrdPath && gViewZ != null && nrdDiffOut != null) {
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
-                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
-                    // Camera position in the rebased terrain coordinates the signals live in (same
-                    // offset pushed to the shaders): NRD derives camera motion from the worldToView
-                    // translation built from it. projectionChanged restarts REBLUR's history when
-                    // the FOV lerps (sprint/fly), same trigger the old TAA used.
-                    nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
-                            gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
-                            nrdValidation,
-                            frameProjection, frameViewRotation,
-                            (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
-                            (float) (camZ - terrain.blockZ),
-                            jitterX, jitterY, (int) frameCounter, projectionChanged);
-                }
-                if (nrdDone) {
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
-                    try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
-                        nrdCombinePipeline.dispatch(cmd, renderW, renderH, NRD_DENOISING_RANGE);
-                    }
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the TAA/upscale
-                    denoisedSource = nrdCombined;
-                }
-            }
-            // Updated on every path (not just NRD's): the projection-change detection also drives
-            // the TAA's history restart, and leaving it stale on other paths would restart forever.
             frameProjection.get(prevProjection);
             prevProjectionValid = true;
-
-            // Validation mode: REBLUR's 16-viewport diagnostic overlay replaces the normal image
-            // (set the upscaler to Off for a crisp readout — FSR's own temporal pass blurs the
-            // grid/text). The TAA must not accumulate the overlay, so it is gated off below.
-            boolean nrdValidationOn = nrdDone && CausticaConfig.Rt.Nrd.VALIDATION.value();
-            if (nrdValidationOn) {
-                denoisedSource = nrdValidation;
-            }
 
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
@@ -1547,19 +1444,12 @@ public final class RtComposite {
 
             // FSR 3 occupies the same slot when RR is not running: same inputs minus the RR guide
             // buffers (color + depth + motion vectors), output straight into rrOutput so the rest of
-            // the frame (exposure metering, display mapping) is untouched.
-            // The upscale stage consumes the DENOISED combined radiance when NRD ran, else the raw trace.
-            RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
-            // Temporal accumulation (own option, independent of NRD): accumulates whichever image
-            // feeds the upscale stage — NRD-combined radiance when NRD ran, the raw trace otherwise.
-            // Temporal accumulation (own option) — runs ONLY when NRD did NOT denoise this frame.
-            // When NRD is active, REBLUR's own temporal accumulation already converges the radiance
-            // across frames; stacking this second accumulator on top was a ghosting source (two
-            // motion-compensated histories fighting). This mirrors the DLSS-RR architecture, which is
-            // stable precisely because it denoises in a single coherent pass instead of layering
-            // temporal stages. So: NRD path -> REBLUR temporal then FSR; non-NRD path -> this TAA
-            // then FSR. Never both.
-            if (taaPath && !nrdDone && !nrdValidationOn && taaPipeline != null && taaPing != null && gViewZ != null) {
+            // the frame (exposure metering, display mapping) is untouched. The temporal accumulation
+            // below may replace `output` as the source when it ran.
+            RtImage upscaleSource = output;
+            // Temporal accumulation (own option): converges the Monte-Carlo noise at render res
+            // before the upscale stage reads it — the single temporal stage of the non-DLSS paths.
+            if (taaPath && taaPipeline != null && taaPing != null && gViewZ != null) {
                 RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
                 RtImage outImg = taaWriteToPing ? taaPing : taaPong;
                 taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,
@@ -2233,13 +2123,6 @@ public final class RtComposite {
         RtFsrUpscaler.INSTANCE.destroy();
         // And the XeSS upscaler (no-op when it was never initialized).
         RtXessUpscaler.INSTANCE.destroy();
-        // Tear down the NRD integration (wraps the Vulkan device via NRI) only after its images are
-        // released below; destroyGuideImages runs after this in the teardown sequence.
-        RtNrdDenoiser.INSTANCE.destroy();
-        if (nrdCombinePipeline != null) {
-            nrdCombinePipeline.destroy();
-            nrdCombinePipeline = null;
-        }
         if (taaPipeline != null) {
             taaPipeline.destroy();
             taaPipeline = null;

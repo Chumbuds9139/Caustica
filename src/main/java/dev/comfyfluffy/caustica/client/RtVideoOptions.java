@@ -104,16 +104,9 @@ public final class RtVideoOptions {
         } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
             options.add(xessQuality());
         }
-        // NRD is the denoiser alternative for the non-DLSS paths: hidden while DLSS is active (RR
-        // already denoises + upscales in one pass) and where the NRD runtime is not bundled.
-        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)
-                && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
-            options.add(nrdDenoiser());
-            options.add(nrdValidation());
-        }
-        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths: on top
-        // of NRD's spatial output when NRD runs, over the raw trace otherwise. No runtime gate — it
-        // is a plain compute shader, available everywhere.
+        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — the
+        // noise convergence step the ML/analytic upscalers rely on. No runtime gate: it is a plain
+        // compute shader, available everywhere.
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             options.add(temporalAccumulation());
         }
@@ -571,20 +564,6 @@ public final class RtVideoOptions {
     }
 
     /**
-     * NRD (REBLUR) denoiser toggle for the non-DLSS paths. Live-safe like the other per-frame
-     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
-     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
-     */
-    private static OptionInstance<Boolean> nrdDenoiser() {
-        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
-    }
-
-    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
-    private static OptionInstance<Boolean> nrdValidation() {
-        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
-    }
-
-    /**
      * Renderer-owned temporal accumulation toggle. Live-safe like the other per-frame toggles:
      * flipping it re-keys {@code RtComposite.ensureOutput} (the history images are allocated on the
      * rebuild) and the tracer picks the feature flag up next frame.
@@ -596,12 +575,13 @@ public final class RtVideoOptions {
     /**
      * The Frame Generation toggle (EXPERIMENTAL). Rides on the selected upscaler: DLSS mode toggles
      * DLSS-G (hardware-gated: unsupported GPUs get a greyed-out button that stays visible so its
-     * tooltip can explain the requirement), FSR 3 mode toggles FSR 3.1 FG (no hardware gate beyond
-     * the bundled FSR runtime). Returns null on every other path — no FG without one of the two.
+     * tooltip can explain the requirement), FSR 3 AND XeSS modes toggle FSR 3.1 FG (no hardware
+     * gate beyond the bundled FSR runtime — Intel's own XeSS-FG is D3D12-only, so the FFX engine
+     * is the frame-gen for the XeSS path too). Returns null on every other path.
      */
     public static Button frameGenerationButton() {
         String mode = RtUpscalerSupport.currentUpscalerMode();
-        if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
             CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
             Button button = Button.builder(frameGenerationLabel(), clicked -> {
                 setting.set(!setting.value());
@@ -642,11 +622,12 @@ public final class RtVideoOptions {
 
     /**
      * The FG multiplier selector (2x/4x/6x): how many frames the display receives per rendered frame.
-     * Visible alongside {@link #frameGenerationButton()} on the DLSS and FSR 3 paths.
+     * Visible alongside {@link #frameGenerationButton()} on the DLSS, FSR 3 and XeSS paths.
      */
     public static Button fgMultiplierButton() {
         String mode = RtUpscalerSupport.currentUpscalerMode();
-        if (!RtUpscalerSupport.MODE_DLSS.equals(mode) && !RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode) && !RtUpscalerSupport.MODE_FSR3.equals(mode)
+                && !RtUpscalerSupport.MODE_XESS.equals(mode)) {
             return null;
         }
         CausticaConfig.IntSetting setting = CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT;

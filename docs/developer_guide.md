@@ -47,23 +47,25 @@ cmake --build build/cmake/ngx_shim/release --config Release
    Without the shim the mod still builds and runs; the upscaler selector just
    does not offer FSR 3.
 
-5. (Optional, NRD denoiser) Clone NVIDIA NRD and point `NRD_SDK` at it. The
-   shim builds NRD (and its NRI dependency, fetched automatically) as a static
-   library with embedded SPIR-V, then wraps it behind the flat C ABI:
+5. (Optional, XeSS upscaler) Clone Intel's XeSS SDK (only `bin/` + `inc/` are
+   used) and point `XESS_SDK` at it. The shim loads Intel's prebuilt
+   `libxess.dll` at run time and copies it next to the shim; both are bundled
+   by gradle afterwards. Windows only:
 
    ```powershell
-   git clone --branch v4.17.3 https://github.com/NVIDIA-RTX/NRD C:\path\to\NRD
-   [Environment]::SetEnvironmentVariable("NRD_SDK", "C:\path\to\NRD", "User")
+   git clone --branch v2.1.1 https://github.com/intel/xess C:\path\to\xess
+   [Environment]::SetEnvironmentVariable("XESS_SDK", "C:\path\to\xess", "User")
    ```
 
-   Then configure and build (Windows only for now):
+   Then configure and build:
 
    ```powershell
-   cmake -S native/nrd_shim -B build/cmake/nrd_shim/release -DCMAKE_BUILD_TYPE=Release
-   cmake --build build/cmake/nrd_shim/release --config Release
+   cmake -S native/xess_shim -B build/cmake/xess_shim/release -DCMAKE_BUILD_TYPE=Release
+   cmake --build build/cmake/xess_shim/release --config Release
    ```
 
-   Without the shim the NRD toggle simply stays hidden.
+   Without the shim the mod still builds and runs; the upscaler selector just
+   does not offer XeSS.
 
 6. Run the client:
 

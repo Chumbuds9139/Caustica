@@ -12,27 +12,20 @@
 	"caustica.options.rt.debugHeader": "Depuração",
 	"caustica.options.rt.dhHeader": "Distant Horizons",
 	"caustica.options.rt.exposureHeader": "Exposição",
-
 	"caustica.options.rt.exposureMode": "Exposição",
 	"caustica.options.rt.exposureMode.tooltip": "Como a imagem com traçado de raios é mapeada para o brilho da tela. Automático se adapta à luminância da cena; Manual usa diretamente o valor de exposição.",
 	"caustica.options.rt.exposureMode.auto": "Automático",
 	"caustica.options.rt.exposureMode.manual": "Manual",
-
 	"caustica.options.rt.manualEv": "Exposição EV",
 	"caustica.options.rt.manualEv.tooltip": "Compensação de exposição em pontos. No Manual, esta é a exposição fixa. No Automático, ela desloca a exposição automática para mais clara ou mais escura.",
-
 	"caustica.options.rt.spp": "Amostras por pixel",
 	"caustica.options.rt.spp.tooltip": "Amostras de path tracing tomadas por pixel em cada quadro. Valores maiores são mais limpos, mas exigem mais desempenho.",
-
 	"caustica.options.rt.maxBounces": "Rebatimentos de caminho",
 	"caustica.options.rt.maxBounces.tooltip": "Número máximo de rebatimentos secundários de path tracing após o primeiro acerto. Valores maiores capturam mais luz indireta, mas custam mais.",
-
 	"caustica.options.rt.sunSize": "Tamanho do sol",
 	"caustica.options.rt.sunSize.tooltip": "Raio angular do disco do sol e da lua. Discos maiores projetam penumbras mais suaves.",
-
 	"caustica.options.rt.entities": "Entidades com traçado de raios",
 	"caustica.options.rt.entities.tooltip": "Inclui entidades e entidades de bloco na cena com traçado de raios.",
-
 	"caustica.options.rt.particles": "Partículas com traçado de raios",
 	"caustica.options.rt.particles.tooltip": "Desenha partículas como billboards de raio da câmera dentro da cena traçada.",
 	"caustica.options.rt.weatherParticles": "Clima com traçado de raios",
@@ -41,34 +34,24 @@
 	"caustica.options.rt.omm.tooltip": "Acelera grama, folhas e outros blocos com recorte pulando o teste any-hit nas regiões comprovadamente opacas. Se você ver corrupção visual ou travamentos perto de terreno com recorte (raro, depende do driver), desative aqui — o terreno é reconstruído sem elas. Nota: se estavam desativadas ao abrir o jogo, o recurso Vulkan só ativa ao entrar num mundo de novo.",
 	"caustica.options.rt.rainDensity": "Densidade da Chuva",
 	"caustica.options.rt.rainDensity.tooltip": "O quão densa a chuva e a neve com traçado de raios aparecem. 100% é o temporal completo da vanilla; valores menores raleiam os riscos até uma garoa leve. 0% esconde a precipitação, mas o céu nublado, a névoa e o escurecimento continuam seguindo o clima.",
-
 	"caustica.options.rt.glow": "Contorno brilhante de entidades",
 	"caustica.options.rt.glow.tooltip": "Desenha o contorno vanilla do efeito Brilhante (através de paredes) ao redor de entidades brilhantes.",
-
 	"caustica.options.rt.waterWaves": "Água animada",
 	"caustica.options.rt.waterWaves.tooltip": "Anima as normais da superfície da água para brilhos de ondas em movimento.",
-
 	"caustica.options.rt.sss": "Espalhamento subsuperficial",
 	"caustica.options.rt.sss.tooltip": "Permite que a luz se espalhe através de superfícies finas, como folhas e grama, fazendo a folhagem brilhar quando você olha através dela na direção do sol. Só afeta materiais que fornecem dados de subsuperfície; custa um raio de sombra adicional onde é aplicado.",
-
 	"caustica.options.rt.weatherLighting": "Iluminação do clima",
 	"caustica.options.rt.weatherLighting.tooltip": "Reduz a luz do sol e da lua e escurece o céu durante chuvas e tempestades, além de ocultar o sol, a lua e as estrelas atrás das nuvens. Desativado, mantém a iluminação de céu limpo em qualquer clima.",
-
 	"caustica.options.rt.denoiser": "Filtro de redução de ruído",
 	"caustica.options.rt.denoiser.tooltip": "Aplica o filtro de redução de ruído do DLSS Ray Reconstruction à imagem com path tracing. Desativado, mostra o traçado bruto e ruidoso em resolução total — útil como referência, mas bem mais granulado com poucas amostras. Requer suporte a DLSS Ray Reconstruction.",
-
 	"caustica.options.rt.handFov": "FOV da mão",
 	"caustica.options.rt.handFov.tooltip": "Faz a mão e o item em primeira pessoa seguirem o FOV do jogo. Ativado, um FOV maior afasta o braço e um FOV menor o aproxima. Desativado, retorna ao FOV fixo da mão do Minecraft original.",
-
 	"caustica.options.rt.hdr": "Saída HDR",
 	"caustica.options.rt.hdr.tooltip": "Apresenta em HDR (ST.2084/PQ) em vez de SDR quando a tela oferece suporte. Entra em vigor após reiniciar o jogo.",
-
 	"caustica.options.rt.hdrPaperWhite": "Branco de papel HDR",
 	"caustica.options.rt.hdrPaperWhite.tooltip": "Brilho absoluto (em nits) ao qual o brilho da cena equivalente a SDR é mapeado em uma tela HDR.",
-
 	"caustica.options.rt.hdrPeak": "Brilho máximo HDR",
 	"caustica.options.rt.hdrPeak.tooltip": "Brilho absoluto (em nits) para o qual os realces fazem roll-off. Defina para o brilho HDR máximo da sua tela.",
-
 	"caustica.options.rt.dlssQuality": "Qualidade DLSS",
 	"caustica.options.rt.dlssQuality.tooltip": "Modo de qualidade do DLSS Ray Reconstruction. Modos de menor qualidade renderizam menos pixels e fazem upscaling mais agressivo para obter taxas de quadros maiores; modos de maior qualidade renderizam mais pixels para uma imagem mais nítida. Só afeta a imagem quando o DLSS Ray Reconstruction está ativado.",
 	"caustica.options.rt.dlssQuality.3": "Ultra desempenho",
@@ -77,7 +60,7 @@
 	"caustica.options.rt.dlssQuality.2": "Qualidade",
 	"caustica.options.rt.dlssQuality.5": "DLAA",
 	"caustica.options.rt.upscaler": "Upscaler",
-	"caustica.options.rt.upscaler.tooltip": "Como a imagem com ray tracing chega à resolução do monitor. Desligado traça na resolução nativa, sem upscaling. DLSS usa o NVIDIA DLSS Ray Reconstruction, que remove o ruído e amplia a imagem em uma única etapa (requer GPU compatível). O FSR 3 é o AMD FidelityFX Super Resolution: experimental, amplia sem remover ruído (o ruído da imagem acompanha a contagem de amostras até o denoiser NRD chegar) O XeSS é o Intel XeSS Super Resolution: um upscaler experimental de machine learning (uma rede neural treinada sobre o traçado, os vetores de movimento e a profundidade) e está incluído apenas para Windows.",
+	"caustica.options.rt.upscaler.tooltip": "Como a imagem com ray tracing chega à resolução do monitor. Desligado traça na resolução nativa, sem upscaling. DLSS usa o NVIDIA DLSS Ray Reconstruction, que remove o ruído e amplia a imagem em uma única etapa (requer GPU compatível). O FSR 3 é o AMD FidelityFX Super Resolution: experimental, amplia sem remover ruído. O XeSS é o Intel XeSS Super Resolution: um upscaler experimental de machine learning (uma rede neural treinada sobre o traçado, os vetores de movimento e a profundidade) e está incluído apenas para Windows.",
 	"caustica.options.rt.upscaler.none": "Desligado",
 	"caustica.options.rt.upscaler.dlss": "DLSS",
 	"caustica.options.rt.upscaler.fsr3": "FSR 3 (Experimental)",
@@ -86,19 +69,14 @@
 	"caustica.options.rt.upscaler.xess": "XeSS (Experimental)",
 	"caustica.options.rt.xessQuality": "Qualidade XeSS",
 	"caustica.options.rt.xessQuality.tooltip": "Modo de qualidade do upscaler Intel XeSS. Modos de menor qualidade renderizam menos pixels e fazem upscaling mais agressivo para obter taxas de quadros maiores; modos de maior qualidade renderizam mais pixels para uma imagem mais nítida.",
-	"caustica.options.rt.nrd": "Denoiser NRD (Experimental)",
-	"caustica.options.rt.nrd.tooltip": "NVIDIA Real-time Denoisers (REBLUR): remove o ruído da imagem com ray tracing na resolução de render em GPUs sem DLSS Ray Reconstruction. Combine com o upscaler FSR 3 para um caminho completo de denoise+upscale, ou com Desligado para resolução nativa sem ruído. Experimental: ajustes de imagem em andamento.",
-	"caustica.options.rt.nrdValidation": "Overlay de Validação do NRD",
-	"caustica.options.rt.nrdValidation.tooltip": "Overlay de diagnóstico do REBLUR (debug): substitui a imagem pela grade de 16 janelas do NRD — entradas, contagem de frames acumulados por pixel, estado de desoclusão/oclusão. Para depurar artefatos temporais; coloque o upscaler em Desligado pra ler direito.",
 	"caustica.options.rt.temporalAccumulation": "Acúmulo Temporal",
-	"caustica.options.rt.temporalAccumulation.tooltip": "Acumula quadros anteriores sobre a imagem atual usando os vetores de movimento do traçador — a alternativa mais simples ao estágio temporal do NRD. Reduz muito o ruído com 1 SPP parado, com leve borrado durante movimento rápido. Funciona com ou sem o denoiser NRD.",
+	"caustica.options.rt.temporalAccumulation.tooltip": "Acumula quadros anteriores sobre a imagem atual usando os vetores de movimento do traçador. Reduz muito o ruído com 1 SPP parado, com leve borrado durante movimento rápido.",
 	"caustica.options.rt.frameGeneration": "Geração de Quadros (Experimental)",
 	"caustica.options.rt.frameGeneration.tooltip": "O DLSS Frame Generation sintetiza quadros intermediários para multiplicar a taxa de quadros percebida. EXPERIMENTAL: pode aumentar a latência ou causar artefatos. Requer o upscaler DLSS e uma GPU NVIDIA GeForce RTX das séries 40 ou 50.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Indisponível nesta GPU: o DLSS Frame Generation requer uma placa NVIDIA GeForce RTX das séries 40 ou 50. O suporte vem da consulta de capacidade NGX do driver quando ativa e, caso contrário, do nome da GPU.",
 	"caustica.options.rt.frameGeneration.fsr.tooltip": "Frame Generation via AMD FSR 3.1 (Experimental): sintetiza quadros intermediários entre os quadros realmente renderizados, multiplicando a taxa de quadros percebida no display. Funciona em qualquer GPU, ao custo de trabalho extra de GPU e um pouco mais de latência. Combine com o seletor de multiplicador abaixo.",
 	"caustica.options.rt.fgMultiplier": "Multiplicador de FG",
 	"caustica.options.rt.fgMultiplier.tooltip": "Quantos quadros o display recebe por quadro renderizado (2x/4x/6x). Mais alto = movimento mais fluido ao custo de mais GPU e latência. Cada backend é limitado ao máximo que consegue produzir: FSR até 5x (limite da API FFX), DLSS até o máximo reportado pelo driver.",
-
 	"caustica.options.rt.debugView": "Visualização de depuração",
 	"caustica.options.rt.debugView.tooltip": "Visualiza um buffer intermediário do traçado de raios em vez da imagem final.",
 	"caustica.options.rt.debugView.0": "Desativado",
@@ -111,7 +89,6 @@
 	"caustica.options.rt.debugView.7": "Movimento especular",
 	"caustica.options.rt.debugView.8": "Máscara de emissão",
 	"caustica.options.rt.debugView.9": "Fonte de emissão",
-
 	"caustica.options.rt.lightsHeader": "Iluminação RT",
 	"caustica.options.rt.tonemapHeader": "Tonemapping RT",
 	"caustica.options.rt.blockEmissiveIntensity": "Intensidade de blocos emissivos",
@@ -142,11 +119,9 @@
 	"caustica.options.rt.parallaxSmoothing.tooltip": "Alterna a amostragem de altura, normal e superfície LabPBR entre bilinear suave e alinhada ao pixel.",
 	"caustica.options.rt.parallaxDistance": "Distância do Parallax",
 	"caustica.options.rt.parallaxDistance.tooltip": "Distância em blocos na qual o parallax desaparece suavemente. O relevo permanece completo em 80% do alcance selecionado.",
-
 	"caustica.options.rt.dhRefresh": "Recarregar Chunks do Distant Horizons",
 	"caustica.options.rt.dhRefresh.queued": "Recarga do Distant Horizons na fila",
 	"caustica.options.rt.dhRefresh.rtOnly": "Recarga do proxy RT do Caustica na fila",
-
 	"caustica.options.voxy.header": "LODs do Voxy",
 	"caustica.options.voxy.enabled": "LODs do Voxy",
 	"caustica.options.voxy.enabled.tooltip": "Ativa o terreno distante do Voxy no path tracer do Caustica. Tem efeito imediato.",

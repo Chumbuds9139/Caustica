@@ -78,14 +78,16 @@ public final class RtFramePresenter {
 
     /**
      * Whether FG extra-present should run this frame (enabled, available, in a world). Backend
-     * follows the selected upscaler: DLSS-G under DLSS, FSR 3.1 FG under FSR 3 — FSR FG has no
-     * hardware gate beyond the FSR runtime being bundled for this platform.
+     * follows the selected upscaler: DLSS-G under DLSS, FSR 3.1 FG under FSR 3 AND under XeSS
+     * (Intel's own FG is D3D12-only, so the FFX engine doubles as XeSS's frame-gen) — FSR FG has
+     * no hardware gate beyond the FSR runtime being bundled for this platform.
      */
     public boolean isActive() {
         if (failed || Minecraft.getInstance().level == null) {
             return false;
         }
-        if (RtUpscalerSupport.MODE_FSR3.equals(RtUpscalerSupport.currentUpscalerMode())) {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
             return RtFsrFrameGen.enabled()
                     && dev.comfyfluffy.caustica.fsr.FsrRuntime.platformSupported();
         }
