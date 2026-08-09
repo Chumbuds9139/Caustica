@@ -64,6 +64,8 @@ public final class RtNrdDenoiser {
     private float prevOffsetX;
     private float prevOffsetY;
     private float prevOffsetZ;
+    private float prevJitterX;
+    private float prevJitterY;
     private int lastWidth;
     private int lastHeight;
 
@@ -188,8 +190,15 @@ public final class RtNrdDenoiser {
                 // cameraJitter is the raw sub-pixel jitter in PIXEL units (NRD's [-0.5, 0.5]
                 // contract); NRD itself converts it when de-jittering the input samples. The MV scale
                 // converts the renderer's render-pixel MVs to the UV space NRD reprojects with.
+                // cameraJitterPrev must be LAST frame's jitter (the history was captured with it) —
+                // feeding the current jitter there made NRD de-jitter the history by the wrong
+                // offset every frame: a different sub-pixel error each Halton phase = the visible
+                // camera tremble + broken motion compensation (ghosting). After a reset there is no
+                // history, so both report the same value (no de-jittering happens anyway).
+                float jitterPrevX = (hasPrev && !jumped) ? prevJitterX : jitterPixelsX;
+                float jitterPrevY = (hasPrev && !jumped) ? prevJitterY : jitterPixelsY;
                 int rc = lib.setSettings(v2c, v2cPrev, w2v, w2vPrev,
-                        jitterPixelsX, jitterPixelsY, jitterPixelsX, jitterPixelsY,
+                        jitterPixelsX, jitterPixelsY, jitterPrevX, jitterPrevY,
                         1.0f / renderWidth, 1.0f / renderHeight,
                         frameIndex, (hasPrev && !jumped) ? 0 : 1, validationOn ? 1 : 0);
                 if (rc != 0) {
@@ -199,6 +208,8 @@ public final class RtNrdDenoiser {
             prevOffsetX = cameraOffsetX;
             prevOffsetY = cameraOffsetY;
             prevOffsetZ = cameraOffsetZ;
+            prevJitterX = jitterPixelsX;
+            prevJitterY = jitterPixelsY;
             nrdViewToClip.get(prevViewToClip);
             worldToView.get(prevWorldToView);
             lastWidth = renderWidth;
