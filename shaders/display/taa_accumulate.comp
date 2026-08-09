@@ -83,17 +83,7 @@ void main() {
     vec3 mu = sum / 9.0;
     vec3 sigma = sqrt(max(sumSq / 9.0 - mu * mu, vec3(0.0)));
     vec3 histY = toYCoCg(hist);
-    vec3 clipLo = mu - 1.25 * sigma;
-    vec3 clipHi = mu + 1.25 * sigma;
-    // Bright-feature anchor (the torch / emissive-block flicker fix): a small intense pixel sits
-    // FAR above its dark 3x3 neighbourhood's mu+1.25sigma, so the plain variance clip pulled its
-    // accumulated history down toward the dark mean every frame — dimming the light and flickering
-    // it as the noisy 1-SPP brightness wobbled the clip bound. Expanding the box to always contain
-    // the CURRENT sample keeps matching history for intense features while the sigma bounds still
-    // cut genuine disocclusion ghosts (their value lies outside both the sigma box and the anchor).
-    clipLo = min(clipLo, curY);
-    clipHi = max(clipHi, curY);
-    vec3 histClipped = clamp(histY, clipLo, clipHi);
+    vec3 histClipped = clamp(histY, mu - 1.25 * sigma, mu + 1.25 * sigma);
 
     // Motion-adaptive blend: while the camera moves, shrink the effective window proportionally to
     // the motion magnitude so reprojected history cannot trail behind moving edges (the old
