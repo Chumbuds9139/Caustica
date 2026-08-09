@@ -32,7 +32,8 @@ void main() {
     if (pix.x >= pc.width || pix.y >= pc.height) {
         return;
     }
-    vec3 cc = loadSanitized(pix);
+    vec4 ccFull = imageLoad(current, pix);
+    vec3 cc = clamp(ccFull.rgb, vec3(0.0), vec3(65504.0));
     float lc = dot(cc, LUMA);
     float zc = imageLoad(depth, pix).r;
     vec3 nc = imageLoad(normal, pix).rgb;
@@ -60,5 +61,5 @@ void main() {
             csum += w * ct;
         }
     }
-    imageStore(outImg, pix, vec4(csum / max(wsum, 1.0e-5), cc.a));
+    imageStore(outImg, pix, vec4(csum / max(wsum, 1.0e-5), ccFull.a));
 }
