@@ -154,19 +154,20 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * though {@code pCreateInfo} isn't touched again after this point in {@code configure()}. No-op (calls
 	 * through unchanged) when Reflex isn't enabled + device-supported.
 	 *
-	 * <p>Also bumps {@code minImageCount} while Frame Generation is enabled: every generated frame needs
-	 * its own swapchain image, on top of the real frame's image and the one the display is scanning out —
-	 * vanilla's pool (typically 3 images) hard-caps FG at ~2x no matter the configured multiplier (the
-	 * {@code acquireSkipped} ceiling in the present-rate log). Target covers the max multiplier
-	 * (5 generated = 6x) + real + display + one spare. Read once per swapchain creation: toggling FG or
-	 * changing the multiplier takes effect on the next window resize / restart.
+	 * <p>Also tunes the swapchain for Frame Generation while it is enabled: (1) forces FIFO present
+	 * mode — with IMMEDIATE/MAILBOX the end-of-frame burst of generated-frame presents overwrites
+	 * itself before scanout (flicker, zero FPS gain); (2) bumps {@code minImageCount} — every
+	 * generated frame needs its own image on top of the real frame's and the one on display, and
+	 * vanilla's pool (~3) hard-capped FG at ~2x regardless of multiplier. Target covers the max
+	 * multiplier (5 generated = 6x) + real + display + one spare. Both are read once per swapchain
+	 * creation: toggling FG or changing the multiplier takes effect on the next resize / restart.
 	 */
 	@Redirect(method = "configure",
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkCreateSwapchainKHR(Lorg/lwjgl/vulkan/VkDevice;Lorg/lwjgl/vulkan/VkSwapchainCreateInfoKHR;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Ljava/nio/LongBuffer;)I"))
 	private int caustica$createSwapchainWithReflex(VkDevice device, VkSwapchainCreateInfoKHR pCreateInfo,
 			VkAllocationCallbacks pAllocator, LongBuffer pSwapchain) {
-		caustica$bumpSwapchainImagesForFg(pCreateInfo);
+		caustica$configureSwapchainForFg(pCreateInfo);
 		if (!RtDeviceBringup.reflexEnabled()) {
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 		}
@@ -184,25 +185,40 @@ public abstract class VulkanGpuSurfaceMixin {
 	private static final int caustica$FG_SWAPCHAIN_IMAGES = 8;
 
 	@Unique
-	private void caustica$bumpSwapchainImagesForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
-		if (!CausticaConfig.Rt.Fg.ENABLED.value() || pCreateInfo.minImageCount() >= caustica$FG_SWAPCHAIN_IMAGES) {
+	private void caustica$configureSwapchainForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
+		if (!CausticaConfig.Rt.Fg.ENABLED.value()) {
 			return;
 		}
-		int target = caustica$FG_SWAPCHAIN_IMAGES;
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR caps =
-					org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR.calloc(stack);
-			if (KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-					this.device.vkDevice().getPhysicalDevice(), this.surface, caps) == VK10.VK_SUCCESS
-					&& caps.maxImageCount() > 0) {
-				// maxImageCount == 0 means "no limit"; otherwise the driver's ceiling wins.
-				target = Math.min(target, caps.maxImageCount());
-			}
+		// FIFO pacing: with IMMEDIATE/MAILBOX the end-of-frame BURST of generated-frame presents
+		// overwrites each other before the display ever scans them out — exactly the observed
+		// flicker-with-zero-FPS-gain. FIFO (spec-mandated on every surface) gives every queued
+		// present its own vblank, which is what frame generation needs to actually reach the
+		// display. Forcing it here means FG works regardless of the in-game V-Sync setting.
+		if (pCreateInfo.presentMode() != VK10.VK_PRESENT_MODE_FIFO_KHR) {
+			CausticaMod.LOGGER.info("FG: forcing FIFO present mode (was {}) so generated frames are "
+					+ "paced on vblanks instead of overwriting each other", pCreateInfo.presentMode());
+			pCreateInfo.presentMode(VK10.VK_PRESENT_MODE_FIFO_KHR);
 		}
-		if (target > pCreateInfo.minImageCount()) {
-			pCreateInfo.minImageCount(target);
-			CausticaMod.LOGGER.info("FG: swapchain minImageCount raised to {} (generated frames need a "
-					+ "deeper image pool than vanilla's default)", target);
+		// Deepen the image pool: each generated frame needs its own swapchain image on top of the
+		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-capped FG
+		// at ~2x no matter the multiplier.
+		if (pCreateInfo.minImageCount() < caustica$FG_SWAPCHAIN_IMAGES) {
+			int target = caustica$FG_SWAPCHAIN_IMAGES;
+			try (MemoryStack stack = MemoryStack.stackPush()) {
+				org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR caps =
+						org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR.calloc(stack);
+				if (KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+						this.device.vkDevice().getPhysicalDevice(), this.surface, caps) == VK10.VK_SUCCESS
+						&& caps.maxImageCount() > 0) {
+					// maxImageCount == 0 means "no limit"; otherwise the driver's ceiling wins.
+					target = Math.min(target, caps.maxImageCount());
+				}
+			}
+			if (target > pCreateInfo.minImageCount()) {
+				pCreateInfo.minImageCount(target);
+				CausticaMod.LOGGER.info("FG: swapchain minImageCount raised to {} (generated frames need a "
+						+ "deeper image pool than vanilla's default)", target);
+			}
 		}
 	}
 

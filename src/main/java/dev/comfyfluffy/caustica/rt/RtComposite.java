@@ -1019,7 +1019,9 @@ public final class RtComposite {
         // XeSS shares the slot under the same rules; if a hand-edit stacks them, RR > FSR > XeSS.
         boolean xessEnabled = !rrEnabled && !fsrEnabled && RtXessUpscaler.enabled();
         int xessQuality = xessEnabled ? RtXessUpscaler.quality() : Integer.MIN_VALUE;
-        boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
+        // XeSS's network accumulates temporally on its own, so the TAA stage (and its history
+        // images) steps aside under it — same slot logic as RR.
+        boolean taaEnabled = !rrEnabled && !xessEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
@@ -1448,8 +1450,11 @@ public final class RtComposite {
             // below may replace `output` as the source when it ran.
             RtImage upscaleSource = output;
             // Temporal accumulation (own option): converges the Monte-Carlo noise at render res
-            // before the upscale stage reads it — the single temporal stage of the non-DLSS paths.
-            if (taaPath && taaPipeline != null && taaPing != null && gViewZ != null) {
+            // before the upscale stage reads it — EXCEPT under XeSS: the XeSS network carries its
+            // own temporal accumulation, and stacking this one underneath was invisible in A/B
+            // testing (XeSS re-converges within a few frames either way) while costing GPU + a
+            // frame of latency. There XeSS itself is the temporal stage.
+            if (taaPath && !xessPath && taaPipeline != null && taaPing != null && gViewZ != null) {
                 RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
                 RtImage outImg = taaWriteToPing ? taaPing : taaPong;
                 taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,

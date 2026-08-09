@@ -948,10 +948,12 @@ public final class CausticaConfig {
 
         /**
          * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
-         * reprojected with the tracer's motion vectors). THE noise-convergence stage of the non-DLSS
-         * paths (the NRD denoiser it used to pair with was retired: XeSS/FSR + this accumulator
-         * replaced it — cheaper and stabler on camera motion). Default ON: without it SPP 1 frames
-         * stay visibly noisy.
+         * reprojected with the tracer's motion vectors). The noise-convergence stage for FSR 3 and
+         * the no-upscaler paths (the NRD denoiser it used to pair with was retired — this accumulator
+         * replaced it: cheaper and stabler on camera motion). Default ON: without it SPP 1 frames
+         * stay visibly noisy. Steps aside under DLSS-RR and under XeSS — both carry their own
+         * temporal stage (XeSS's is the network itself; stacking this underneath it was invisible
+         * in A/B testing), so there the toggle is hidden and does nothing.
          */
         public static final class Taa {
             public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);
