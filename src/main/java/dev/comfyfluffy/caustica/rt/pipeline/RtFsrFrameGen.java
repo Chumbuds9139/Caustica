@@ -72,6 +72,7 @@ public final class RtFsrFrameGen {
     private boolean resetRequested = true;
     private long frameId;
     private long lastFrameNanos;
+    private float smoothedFrameMs;
 
     private int contextDisplayWidth = -1;
     private int contextDisplayHeight = -1;
@@ -161,9 +162,17 @@ public final class RtFsrFrameGen {
         }
         try {
             long now = System.nanoTime();
-            float frameMs = lastFrameNanos == 0 ? 16.6f
+            float rawFrameMs = lastFrameNanos == 0 ? 16.6f
                     : Math.clamp((now - lastFrameNanos) / 1_000_000.0f, 0.1f, 200.0f);
             lastFrameNanos = now;
+            // EMA-smooth the frame interval before handing it to FG: at the low/variable real
+            // framerates this renderer runs at, the raw delta wobbles frame-to-frame, and FSR FG
+            // times its interpolation from it — a jittery delta makes the generated frames' positions
+            // wobble too (a flicker source that bites hardest at high multipliers). A light EMA
+            // stabilises the timing signal while still tracking genuine pace changes.
+            smoothedFrameMs = smoothedFrameMs <= 0.0f ? rawFrameMs
+                    : 0.75f * smoothedFrameMs + 0.25f * rawFrameMs;
+            float frameMs = smoothedFrameMs;
             frameId++;
 
             try (Arena arena = Arena.ofConfined()) {
@@ -241,6 +250,7 @@ public final class RtFsrFrameGen {
         contextRenderHeight = -1;
         contextFormat = Integer.MIN_VALUE;
         lastFrameNanos = 0;
+        smoothedFrameMs = 0.0f;
     }
 
     private static boolean isNull(MemorySegment segment) {
