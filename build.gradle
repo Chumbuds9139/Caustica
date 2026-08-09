@@ -449,6 +449,54 @@ def bundleNrdNatives = tasks.register("bundleNrdNatives") {
 
 sourceSets.main.resources.srcDir(files(nrdNativeGenRoot).builtBy(bundleNrdNatives))
 
+// ===== XeSS natives (optional) =====
+// Same opt-in pattern: CI builds native/xess_shim (loads Intel's prebuilt libxess.dll at run time)
+// and drops xessshim.dll + libxess.dll into build/native/xess_shim/release; local checkouts without
+// them still build, and the XeSS upscaler option simply stays hidden (XessRuntime.platformSupported
+// probes the bundled resource).
+def xessNativeGenRoot = layout.buildDirectory.dir("generated/xess-natives")
+def xessShimOutDir = new File(layout.buildDirectory.dir("native/xess_shim").get().asFile, "release")
+
+def bundleXessNatives = tasks.register("bundleXessNatives") {
+	group = "build"
+	description = "Bundles the XeSS shim and Intel XeSS runtime into the mod resources (when built)."
+
+	inputs.files(fileTree(xessShimOutDir) {
+		include "xessshim.dll"
+		include "libxess.dll"
+	}).withPropertyName("xessNatives.windows-x64")
+	outputs.dir(xessNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(xessNativeGenRoot)
+		def shimFiles = fileTree(xessShimOutDir) {
+			include "xessshim.dll", "libxess.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("XeSS natives not found in ${xessShimOutDir}; bundling without XeSS support.")
+			return
+		}
+		def missing = ["xessshim.dll", "libxess.dll"].findAll { name ->
+			shimFiles.every { it.name != name }
+		}
+		if (!missing.empty) {
+			logger.warn("Incomplete XeSS natives in ${xessShimOutDir} (missing ${missing.join(', ')}); " +
+					"bundling without XeSS support.")
+			return
+		}
+		copy {
+			from(xessShimOutDir) {
+				include "xessshim.dll", "libxess.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into xessNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(xessNativeGenRoot).builtBy(bundleXessNatives))
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
