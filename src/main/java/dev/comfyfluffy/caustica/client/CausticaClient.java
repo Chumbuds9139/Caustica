@@ -119,6 +119,8 @@ public final class CausticaClient implements ClientModInitializer {
 		// Same ordering for the XeSS runtime: the upscaler is already released by
 		// RtComposite.destroy() above; this clears the shared runtime state for the next device.
 		dev.comfyfluffy.caustica.xess.XessRuntime.INSTANCE.shutdown();
+		// Same ordering for the NRD runtime (NRI device wrapper).
+		dev.comfyfluffy.caustica.nrd.NrdRuntime.INSTANCE.shutdown();
 		if (ctx != null) {
 			ctx.destroy();
 		}

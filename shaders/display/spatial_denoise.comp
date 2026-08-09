@@ -27,6 +27,17 @@ vec3 loadSanitized(ivec2 p) {
 // ~5px at render res. Weights: binomial kernel x luminance similarity x depth proximity x normal
 // alignment. A firefly guard scales lone bright samples down toward the center luminance before
 // blending so one hot Monte-Carlo sample cannot bleed a star into its neighbourhood.
+//
+// SKY RULES (the black-sky fix): miss pixels carry reversed-Z depth ~0 and/or a degenerate
+// normal, which used to collapse every weight — including the center tap — to ~0 and divide by
+// nothing (black sky). Sky/miss pixels now skip the geometry edge-stops and the firefly guard
+// entirely (the sun and bright clouds are legitimately small, intense features — the guard was
+// eating them), and sky taps never blend with geometry taps (and vice-versa) so horizons stay
+// crisp.
+bool isSkyPixel(float z, vec3 n) {
+    return z < 0.001 || dot(n, n) < 0.25;
+}
+
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     if (pix.x >= pc.width || pix.y >= pc.height) {
@@ -37,6 +48,7 @@ void main() {
     float lc = dot(cc, LUMA);
     float zc = imageLoad(depth, pix).r;
     vec3 nc = imageLoad(normal, pix).rgb;
+    bool centerSky = isSkyPixel(zc, nc);
 
     float sigmaL = 0.08 + 0.35 * lc; // HDR-adaptive: bright regions tolerate brighter taps
     float wsum = 0.0;
@@ -44,22 +56,38 @@ void main() {
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             ivec2 q = pix + ivec2(dx, dy) * pc.step;
+            ivec2 qc = clamp(q, ivec2(0), ivec2(pc.width - 1, pc.height - 1));
             vec3 ct = loadSanitized(q);
             float lt = dot(ct, LUMA);
-            // Firefly guard: cap a tap's contribution at ~4x the center luminance.
-            ct *= min(1.0, (4.0 * lc + 0.2) / max(lt, 1.0e-4));
-            float ltClamped = dot(ct, LUMA);
-            vec3 nt = imageLoad(normal, clamp(q, ivec2(0), ivec2(pc.width - 1, pc.height - 1))).rgb;
-            float zt = imageLoad(depth, clamp(q, ivec2(0), ivec2(pc.width - 1, pc.height - 1))).r;
-            float wl = exp(-abs(ltClamped - lc) / sigmaL);
-            float dd = abs(zt - zc) / max(zc, 0.02); // reversed-Z: relative difference, guarded near far
-            float wd = exp(-dd * dd * 24.0);
-            float dn = 1.0 - clamp(dot(nt, nc), 0.0, 1.0);
-            float wn = exp(-dn * dn * 64.0);
+            float zt = imageLoad(depth, qc).r;
+            vec3 nt = imageLoad(normal, qc).rgb;
+            // Never blur sky into geometry or geometry into sky.
+            if (isSkyPixel(zt, nt) != centerSky) {
+                continue;
+            }
+            if (!centerSky) {
+                // Firefly guard (geometry only): cap a tap's contribution at ~4x the center luminance.
+                ct *= min(1.0, (4.0 * lc + 0.2) / max(lt, 1.0e-4));
+                lt = dot(ct, LUMA);
+            }
+            float wl = exp(-abs(lt - lc) / sigmaL);
+            float wd = 1.0;
+            float wn = 1.0;
+            if (!centerSky) {
+                float dd = abs(zt - zc) / max(zc, 0.02); // reversed-Z: relative difference, guarded near far
+                wd = exp(-dd * dd * 24.0);
+                float dn = 1.0 - clamp(dot(nt, nc), 0.0, 1.0);
+                wn = exp(-dn * dn * 64.0);
+            }
             float w = KERNEL[dy + 2] * KERNEL[dx + 2] * wl * wd * wn;
             wsum += w;
             csum += w * ct;
         }
     }
-    imageStore(outImg, pix, vec4(csum / max(wsum, 1.0e-5), ccFull.a));
+    // Degenerate weight sum (shouldn't happen anymore, but never divide into garbage): pass through.
+    if (wsum < 1.0e-3) {
+        imageStore(outImg, pix, ccFull);
+        return;
+    }
+    imageStore(outImg, pix, vec4(csum / wsum, ccFull.a));
 }

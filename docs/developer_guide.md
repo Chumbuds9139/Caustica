@@ -47,7 +47,25 @@ cmake --build build/cmake/ngx_shim/release --config Release
    Without the shim the mod still builds and runs; the upscaler selector just
    does not offer FSR 3.
 
-5. (Optional, XeSS upscaler) Clone Intel's XeSS SDK (only `bin/` + `inc/` are
+5. (Optional, NRD denoiser) Clone NVIDIA NRD and point `NRD_SDK` at it. The
+   shim builds NRD (and its NRI dependency, fetched automatically) as a static
+   library with embedded SPIR-V, then wraps it behind the flat C ABI:
+
+   ```powershell
+   git clone --branch v4.17.3 https://github.com/NVIDIA-RTX/NRD C:\path\to\NRD
+   [Environment]::SetEnvironmentVariable("NRD_SDK", "C:\path\to\NRD", "User")
+   ```
+
+   Then configure and build (Windows only for now):
+
+   ```powershell
+   cmake -S native/nrd_shim -B build/cmake/nrd_shim/release -DCMAKE_BUILD_TYPE=Release
+   cmake --build build/cmake/nrd_shim/release --config Release
+   ```
+
+   Without the shim the NRD toggle simply stays hidden.
+
+6. (Optional, XeSS upscaler) Clone Intel's XeSS SDK (only `bin/` + `inc/` are
    used) and point `XESS_SDK` at it. The shim loads Intel's prebuilt
    `libxess.dll` at run time and copies it next to the shim; both are bundled
    by gradle afterwards. Windows only:
@@ -67,7 +85,7 @@ cmake --build build/cmake/ngx_shim/release --config Release
    Without the shim the mod still builds and runs; the upscaler selector just
    does not offer XeSS.
 
-6. Run the client:
+7. Run the client:
 
 ```powershell
 $env:JAVA_TOOL_OPTIONS = "-Xmx8G -XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -XX:+UseZGC"

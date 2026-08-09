@@ -109,6 +109,13 @@ public final class RtVideoOptions {
         // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
         // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
         // denoises internally.
+        // NRD is the STRONG temporal denoiser option for the non-DLSS paths (and where its runtime
+        // is bundled); when on it owns the denoise slot and the spatial/TAA pair steps aside.
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)
+                && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
+            options.add(nrdDenoiser());
+            options.add(nrdValidation());
+        }
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             options.add(spatialDenoiser());
             options.add(temporalAccumulation());
@@ -578,6 +585,20 @@ public final class RtVideoOptions {
     /** Edge-avoiding spatial denoise — history-less, so live-safe like the other per-frame toggles. */
     private static OptionInstance<Boolean> spatialDenoiser() {
         return bool("caustica.options.rt.spatialDenoise", CausticaConfig.Rt.Spatial.ENABLED);
+    }
+
+    /**
+     * NRD (REBLUR) denoiser toggle: the strong temporal option. Live-safe like the other per-frame
+     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
+     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
+     */
+    private static OptionInstance<Boolean> nrdDenoiser() {
+        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
+    }
+
+    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
+    private static OptionInstance<Boolean> nrdValidation() {
+        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
     }
 
     /**

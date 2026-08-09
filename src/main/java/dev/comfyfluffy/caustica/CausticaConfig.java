@@ -61,6 +61,7 @@ public final class CausticaConfig {
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
+            Rt.Nrd.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -973,6 +974,27 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.spatialDenoise", "spatial.enabled", true);
 
             private Spatial() {
+            }
+        }
+
+        /**
+         * NRD (NVIDIA Real-time Denoisers) REBLUR denoising — the STRONG temporal option: a trained
+         * spatio-temporal filter over the per-lobe radiance signals, better than the spatial pass at
+         * holding noise down WHILE MOVING (the spatial filter restarts on motion by design). Costs
+         * more GPU and can trade stability for strength on fast camera motion. Mutually exclusive
+         * with the spatial/TAA stack in the renderer: when NRD is on it owns the denoise slot (RR
+         * still wins over everything when DLSS-RR is active).
+         */
+        public static final class Nrd {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);
+            /**
+             * REBLUR's 16-viewport validation overlay (OUT_VALIDATION): diagnostics for inputs,
+             * accumulation frame counts, disocclusion/occlusion state — the tool for debugging
+             * temporal artifacts in-game. When on, the overlay replaces the normal image.
+             */
+            public static final BooleanSetting VALIDATION = bool("caustica.rt.nrdValidation", "nrd.validation", false);
+
+            private Nrd() {
             }
         }
 
