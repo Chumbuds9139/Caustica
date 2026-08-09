@@ -116,7 +116,12 @@ public final class RtNrdDenoiser {
                 //    disease. Defaults are the better balance for this SPP-1 signal.
                 //  - flicker in bright/dark: fireflySuppressorMinRelativeScale 2.0 (default) -> 1.75,
                 //    a slightly stronger suppression of sporadic fireflies (the cost is a little bias).
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 60, 6,
+                //  - CAMERA-MOVE GHOSTING (the one complaint about REBLUR + XeSS; the noise itself
+                //    was well controlled): the 60-frame history kept a ~2s tail that smeared long
+                //    after the motion-compensation lost the pixel. Shorter window = the smear decays
+                //    ~2.5x faster; the small stationary-noise cost is acceptable because XeSS's own
+                //    temporal layer re-converges the residual on top.
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 24, 4,
                         0.0f, 0.0f, 1.75f);
                 reblurSettingsSent = true;
             }

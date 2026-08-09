@@ -619,6 +619,13 @@ public final class RtComposite {
     private double prevXessCamZ;
     private boolean xessCamValid;
 
+    // ...and for REBLUR: a teleport/respawn jump leaves its history pointing at a world that no
+    // longer matches; drop it on the jump frame instead of smearing until it decays.
+    private double prevNrdCamX;
+    private double prevNrdCamY;
+    private double prevNrdCamZ;
+    private boolean nrdCamValid;
+
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
         frameProjection.set(projection);
@@ -1545,6 +1552,19 @@ public final class RtComposite {
             boolean nrdDone = false;
             RtImage denoisedSource = null;
             if (nrdPath && gViewZ != null && nrdDiffOut != null) {
+                // Camera discontinuity reset (teleport / respawn / world change), same 32-block
+                // rule as the FSR/XeSS paths.
+                boolean nrdJumped = false;
+                if (nrdCamValid) {
+                    double ndx = camX - prevNrdCamX;
+                    double ndy = camY - prevNrdCamY;
+                    double ndz = camZ - prevNrdCamZ;
+                    nrdJumped = ndx * ndx + ndy * ndy + ndz * ndz > 32.0 * 32.0;
+                }
+                prevNrdCamX = camX;
+                prevNrdCamY = camY;
+                prevNrdCamZ = camZ;
+                nrdCamValid = true;
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
                     // Camera position in the rebased terrain coordinates the signals live in (same
@@ -1557,7 +1577,7 @@ public final class RtComposite {
                             frameProjection, frameViewRotation,
                             (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
                             (float) (camZ - terrain.blockZ),
-                            jitterX, jitterY, (int) frameCounter, projectionChanged);
+                            jitterX, jitterY, (int) frameCounter, projectionChanged || nrdJumped);
                 }
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
