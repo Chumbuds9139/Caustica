@@ -948,12 +948,12 @@ public final class CausticaConfig {
 
         /**
          * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
-         * reprojected with the tracer's motion vectors). The noise-convergence stage for FSR 3 and
-         * the no-upscaler paths (the NRD denoiser it used to pair with was retired — this accumulator
-         * replaced it: cheaper and stabler on camera motion). Default ON: without it SPP 1 frames
-         * stay visibly noisy. Steps aside under DLSS-RR and under XeSS — both carry their own
-         * temporal stage (XeSS's is the network itself; stacking this underneath it was invisible
-         * in A/B testing), so there the toggle is hidden and does nothing.
+         * reprojected with the tracer's motion vectors). The noise-convergence stage of every
+         * non-DLSS path: it integrates the Monte-Carlo noise AND the jitter sequence over up to 32
+         * frames at render resolution. Under XeSS the upscaler then receives the converged image
+         * with zero jitter (its internal temporal layer stabilizes it instead of re-chasing the
+         * jitter) — that handoff is what makes the pair clean. Default ON: without it SPP 1 frames
+         * stay visibly noisy. Hidden only under DLSS-RR, which denoises internally.
          */
         public static final class Taa {
             public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);

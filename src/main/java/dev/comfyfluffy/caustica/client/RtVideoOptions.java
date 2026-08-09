@@ -104,11 +104,12 @@ public final class RtVideoOptions {
         } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
             options.add(xessQuality());
         }
-        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — the
-        // noise convergence step the analytic upscaler relies on. Hidden under DLSS (RR denoises
-        // internally) AND under XeSS (the XeSS network carries its own temporal accumulation —
-        // stacking this underneath proved invisible in A/B testing, so the option steps aside).
-        if (!RtUpscalerSupport.MODE_DLSS.equals(mode) && !RtUpscalerSupport.MODE_XESS.equals(mode)) {
+        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — it
+        // converges the Monte-Carlo noise + jitter sequence before the upscaler reads the image
+        // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
+        // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
+        // denoises internally.
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             options.add(temporalAccumulation());
         }
         options.add(omm());

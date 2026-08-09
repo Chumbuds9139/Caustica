@@ -398,6 +398,14 @@ public final class RtComposite {
     private int fgInterpW = -1;
     private int fgInterpH = -1;
     private int fgInterpFormat = Integer.MIN_VALUE;
+    // SDR FG backbuffer copy: Minecraft's main target arrives in TRANSFER_SRC layout (MC's own
+    // blit barrier ran first in the encoder) with no contractually known format, but the FFX FG
+    // GENERATE reads its presentColor as GENERAL with the declared format taken literally — a
+    // mismatch on either axis is undefined reads (the flickering generated frames). Blitting into
+    // an image we own makes both the layout (GENERAL) and the format (RGBA8) certain.
+    private RtImage fgBackbufferCopy;
+    private int fgBackbufferCopyW = -1;
+    private int fgBackbufferCopyH = -1;
     private boolean fgReset = true;
     private final Matrix4f fgClipToPrev = new Matrix4f();
     private final Matrix4f fgPrevToClip = new Matrix4f();
@@ -1019,9 +1027,11 @@ public final class RtComposite {
         // XeSS shares the slot under the same rules; if a hand-edit stacks them, RR > FSR > XeSS.
         boolean xessEnabled = !rrEnabled && !fsrEnabled && RtXessUpscaler.enabled();
         int xessQuality = xessEnabled ? RtXessUpscaler.quality() : Integer.MIN_VALUE;
-        // XeSS's network accumulates temporally on its own, so the TAA stage (and its history
-        // images) steps aside under it — same slot logic as RR.
-        boolean taaEnabled = !rrEnabled && !xessEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
+        // TAA is the temporal stage of every non-RR path, including XeSS: it converges the jitter
+        // sequence into the image BEFORE the upscaler reads it (the XeSS handoff then passes zero
+        // jitter, since the input is already jitter-integrated — two temporal layers fighting over
+        // the same jitter was the noisy/shimmery result).
+        boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
@@ -1120,6 +1130,7 @@ public final class RtComposite {
             taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
             if (taaPipeline == null) {
                 taaPipeline = RtTaaPipeline.create(ctx);
+                CausticaMod.LOGGER.info("Temporal accumulation active (window {} frames)", (int) TAA_MAX_FRAMES);
             }
             // Fresh buffers: the accumulation history no longer corresponds to anything.
             taaHasPrev = false;
@@ -1449,12 +1460,12 @@ public final class RtComposite {
             // the frame (exposure metering, display mapping) is untouched. The temporal accumulation
             // below may replace `output` as the source when it ran.
             RtImage upscaleSource = output;
-            // Temporal accumulation (own option): converges the Monte-Carlo noise at render res
-            // before the upscale stage reads it — EXCEPT under XeSS: the XeSS network carries its
-            // own temporal accumulation, and stacking this one underneath was invisible in A/B
-            // testing (XeSS re-converges within a few frames either way) while costing GPU + a
-            // frame of latency. There XeSS itself is the temporal stage.
-            if (taaPath && !xessPath && taaPipeline != null && taaPing != null && gViewZ != null) {
+            // Temporal accumulation (own option): converges the Monte-Carlo noise + the jitter
+            // sequence at render res before the upscale stage reads it. Under XeSS the upscaler
+            // then receives the converged image with zero jitter (see the evaluate call below) so
+            // its internal temporal layer stabilizes instead of fighting this one.
+            boolean taaRan = false;
+            if (taaPath && taaPipeline != null && taaPing != null && gViewZ != null) {
                 RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
                 RtImage outImg = taaWriteToPing ? taaPing : taaPong;
                 taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,
@@ -1467,6 +1478,7 @@ public final class RtComposite {
                 }
                 taaWriteToPing = !taaWriteToPing;
                 taaHasPrev = true;
+                taaRan = true;
                 VulkanCommandEncoder.memoryBarrier(cmd, stack); // TAA output visible to the upscale
                 upscaleSource = outImg;
             }
@@ -1522,9 +1534,15 @@ public final class RtComposite {
                     xessCamValid = true;
                     // XeSS takes the applied image-space jitter as-is (no negation — see
                     // RtXessUpscaler.evaluate), unlike FSR/DLSS which take the negated offsets.
+                    // EXCEPT when the TAA just ran: the image it outputs is already the integral
+                    // of the whole jitter sequence, so telling XeSS a per-frame jitter that is no
+                    // longer in the content makes its reprojection chase a phantom offset (the
+                    // noisy/shimmery output). Converged input -> zero jitter.
+                    float xessJitterX = taaRan ? 0.0f : jitterX;
+                    float xessJitterY = taaRan ? 0.0f : jitterY;
                     rrDone = RtXessUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
                             rrOutput,
-                            renderW, renderH, displayW, displayH, jitterX, jitterY);
+                            renderW, renderH, displayW, displayH, xessJitterX, xessJitterY);
                 }
             }
 
@@ -2194,6 +2212,12 @@ public final class RtComposite {
         fgInterpW = -1;
         fgInterpH = -1;
         fgInterpFormat = Integer.MIN_VALUE;
+        if (fgBackbufferCopy != null) {
+            fgBackbufferCopy.destroy();
+            fgBackbufferCopy = null;
+        }
+        fgBackbufferCopyW = -1;
+        fgBackbufferCopyH = -1;
         if (worldPipeline != null) {
             worldPipeline.destroy();
             worldPipeline = null;
@@ -2727,13 +2751,64 @@ public final class RtComposite {
             setVec3(camRightF, frameViewRotation.m00(), frameViewRotation.m01(), frameViewRotation.m02());
             setVec3(camUpF, frameViewRotation.m10(), frameViewRotation.m11(), frameViewRotation.m12());
             setVec3(camForwardF, frameViewRotation.m20(), frameViewRotation.m21(), frameViewRotation.m22());
+            // FFX FG's GENERATE reads presentColor as GENERAL with the declared format taken
+            // literally. The HDR backbuffer is already our own rgba16f GENERAL image, but the SDR
+            // path feeds Minecraft's main target — TRANSFER_SRC layout (MC's own blit barrier ran
+            // first in this encoder) and no contractually known format — so it gets blitted into
+            // an owned RGBA8 GENERAL copy first. Feeding the target directly was undefined reads
+            // (the flickering generated frames).
+            long presentImage = backbufferImage;
+            int presentFmt = fmt;
+            if (!hdrBackbuffer) {
+                ensureFgBackbufferCopy(ctx, swapW, swapH);
+                VkCommandBuffer copyCmd = enc.allocateAndBeginTransientCommandBuffer();
+                try (MemoryStack copyStack = MemoryStack.stackPush()) {
+                    VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
+                    toDst.get(0).srcStageMask(0L).srcAccessMask(0L).dstStageMask(4096L).dstAccessMask(4096L)
+                            .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                            .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
+                    toDst.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                    // The main target's TRANSFER_SRC state + contents were made available by MC's
+                    // barrier earlier in this encoder; a global memory dependency chains this blit
+                    // after it (same pattern the FG present blits use).
+                    VkMemoryBarrier2.Buffer srcVis = VkMemoryBarrier2.calloc(1, copyStack).sType$Default();
+                    srcVis.get(0).srcStageMask(1024L | 4096L).srcAccessMask(256L | 8L)
+                            .dstStageMask(4096L).dstAccessMask(8L);
+                    VkDependencyInfo dep1 = VkDependencyInfo.calloc(copyStack).sType$Default()
+                            .pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
+                    KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep1);
+                    // Straight (non-flipped) full-rect blit: orientation stays as-is here; the
+                    // Y-flip for the display happens when the generated frames hit the swapchain.
+                    VkImageBlit.Buffer region = VkImageBlit.calloc(1, copyStack);
+                    region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+                    region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+                    region.get(0).srcOffsets(1).set(swapW, swapH, 1);
+                    region.get(0).dstOffsets(1).set(swapW, swapH, 1);
+                    VK10.vkCmdBlitImage(copyCmd, backbufferImage, VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            fgBackbufferCopy.image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region,
+                            VK10.VK_FILTER_NEAREST);
+                    VkImageMemoryBarrier2.Buffer toGeneral = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
+                    toGeneral.get(0).srcStageMask(4096L).srcAccessMask(4096L).dstStageMask(65536L).dstAccessMask(98304L)
+                            .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
+                    toGeneral.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                    VkDependencyInfo dep2 = VkDependencyInfo.calloc(copyStack).sType$Default().pImageMemoryBarriers(toGeneral);
+                    KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep2);
+                }
+                if (VK10.vkEndCommandBuffer(copyCmd) != VK10.VK_SUCCESS) {
+                    throw new IllegalStateException("vkEndCommandBuffer(fg backbuffer copy) failed");
+                }
+                enc.execute(copyCmd);
+                presentImage = fgBackbufferCopy.image;
+                presentFmt = VK10.VK_FORMAT_R8G8B8A8_UNORM;
+            }
             VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
             // Same jitter sign convention as the FSR upscale dispatch (negated).
             boolean ok = RtFsrFrameGen.INSTANCE.prepareAndGenerate(cmd.address(),
                     gDepth.image, gMotion.image, renderW, renderH,
                     -fgJitterX, -fgJitterY, fovY,
                     camPosF, camUpF, camRightF, camForwardF,
-                    backbufferImage, fmt, outputs, count, swapW, swapH, hdrBackbuffer);
+                    presentImage, presentFmt, outputs, count, swapW, swapH, hdrBackbuffer);
             if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(fsr fg) failed");
             }
@@ -2788,5 +2863,19 @@ public final class RtComposite {
         fgInterpW = w;
         fgInterpH = h;
         fgInterpFormat = fmt;
+    }
+
+    /** Owned GENERAL/RGBA8 target for the SDR FG backbuffer copy (see fgBackbufferCopy's docs). */
+    private void ensureFgBackbufferCopy(RtContext ctx, int w, int h) {
+        if (fgBackbufferCopy != null && fgBackbufferCopyW == w && fgBackbufferCopyH == h) {
+            return;
+        }
+        if (fgBackbufferCopy != null) {
+            fgBackbufferCopy.destroy();
+        }
+        fgBackbufferCopy = ctx.createStorageImage(w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                "FG backbuffer copy " + w + "x" + h);
+        fgBackbufferCopyW = w;
+        fgBackbufferCopyH = h;
     }
 }
