@@ -37,6 +37,9 @@ env:
   # only the prebuilt DLL + the ffx_api headers need checking out (sparse).
   FFX_SDK_REF: v1.1.4
   FFX_SDK_PATH: third_party/FidelityFX-SDK
+  # NRD (NVIDIA Real-time Denoisers) source; its CMake fetches the matching NRI itself.
+  NRD_SDK_REF: v4.17.3
+  NRD_SDK_PATH: third_party/NRD
   # XeSS lives in Intel's xess repo; the shim loads the prebuilt libxess.dll at run time, so only
   # the prebuilt DLL + headers need checking out (sparse).
   XESS_SDK_REF: v2.1.1
@@ -120,6 +123,33 @@ jobs:
           path: |
             build/native/fsr_shim/release/fsrshim.dll
             build/native/fsr_shim/release/amd_fidelityfx_vk.dll
+          if-no-files-found: error
+
+      - name: Checkout NRD
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA-RTX/NRD
+          ref: ${{ env.NRD_SDK_REF }}
+          path: ${{ env.NRD_SDK_PATH }}
+
+      - name: Configure NRD shim
+        shell: pwsh
+        env:
+          NRD_SDK: ${{ github.workspace }}/${{ env.NRD_SDK_PATH }}
+        run: >
+          cmake -S native/nrd_shim
+          -B build/cmake/nrd_shim
+          -G "Visual Studio 17 2022"
+          -A x64
+
+      - name: Build NRD shim
+        run: cmake --build build/cmake/nrd_shim --config Release
+
+      - name: Upload Windows NRD shim
+        uses: actions/upload-artifact@v4
+        with:
+          name: nrdshim-windows-x64
+          path: build/native/nrd_shim/release/nrdshim.dll
           if-no-files-found: error
 
       - name: Checkout Intel XeSS SDK
@@ -255,6 +285,13 @@ jobs:
         with:
           pattern: fsrshim-*
           path: build/native/fsr_shim/release
+          merge-multiple: true
+
+      - name: Download NRD shims
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nrdshim-*
+          path: build/native/nrd_shim/release
           merge-multiple: true
 
       - name: Download XeSS shims
