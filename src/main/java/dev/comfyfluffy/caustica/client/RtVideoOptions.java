@@ -109,13 +109,9 @@ public final class RtVideoOptions {
         // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
         // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
         // denoises internally.
-        // NRD is the STRONG temporal denoiser option for the non-DLSS paths (and where its runtime
-        // is bundled); when on it owns the denoise slot and the spatial/TAA pair steps aside.
-        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)
-                && dev.comfyfluffy.caustica.nrd.NrdRuntime.platformSupported()) {
-            options.add(nrdDenoiser());
-            options.add(nrdValidation());
-        }
+        // NRD/REBLUR is hidden: its temporal reprojection conflicted with this renderer's motion
+        // contract (camera tremble + ghosting on every camera move, across all tuning attempts) —
+        // see RtNrdDenoiser.enabled(). The spatial denoiser + TAA pair below is the stable stack.
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             options.add(spatialDenoiser());
             options.add(temporalAccumulation());

@@ -37,8 +37,19 @@ import java.lang.foreign.ValueLayout;
 public final class RtNrdDenoiser {
     public static final RtNrdDenoiser INSTANCE = new RtNrdDenoiser();
 
+    /**
+     * REBLUR is DISABLED (hidden from the UI and never runs). Its internal temporal reprojection
+     * never made peace with this renderer's motion-vector/jitter/matrix contract: across multiple
+     * tuning rounds (history length, anti-lag, jitterPrev, camera-jump resets) it kept trading one
+     * motion artifact for another — camera tremble ("earthquake"), background objects shaking,
+     * smearing and heavy blur whenever the camera moved. The stable, artifact-free stack for the
+     * non-DLSS paths is the spatial à-trous denoiser + TAA + upscaler, which is what the renderer
+     * uses by default. The integration code stays in the tree (and the shim still builds) so a
+     * future clean-room attempt at REBLUR — or a different NRD denoiser — can start from here;
+     * re-enable by returning true and restoring the UI rows in RtVideoOptions.
+     */
     public static boolean enabled() {
-        return CausticaConfig.Rt.Nrd.ENABLED.value() && NrdRuntime.platformSupported();
+        return false;
     }
 
     // nrd::HitDistanceReconstructionMode::AREA_5X5. The tracer selects ONE lobe per pixel at SPP 1
