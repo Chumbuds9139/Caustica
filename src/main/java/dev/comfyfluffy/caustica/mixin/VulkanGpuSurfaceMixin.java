@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.rt.RtReflex;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
+import org.lwjgl.vulkan.KHRSurface;
 import org.lwjgl.vulkan.VkAllocationCallbacks;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPresentIdKHR;
@@ -151,12 +152,20 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * doesn't retain the pointer afterward, so freeing it when this method's stack frame pops is safe even
 	 * though {@code pCreateInfo} isn't touched again after this point in {@code configure()}. No-op (calls
 	 * through unchanged) when Reflex isn't enabled + device-supported.
+	 *
+	 * <p>Also bumps {@code minImageCount} while Frame Generation is enabled: every generated frame needs
+	 * its own swapchain image, on top of the real frame's image and the one the display is scanning out —
+	 * vanilla's pool (typically 3 images) hard-caps FG at ~2x no matter the configured multiplier (the
+	 * {@code acquireSkipped} ceiling in the present-rate log). Target covers the max multiplier
+	 * (5 generated = 6x) + real + display + one spare. Read once per swapchain creation: toggling FG or
+	 * changing the multiplier takes effect on the next window resize / restart.
 	 */
 	@Redirect(method = "configure",
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkCreateSwapchainKHR(Lorg/lwjgl/vulkan/VkDevice;Lorg/lwjgl/vulkan/VkSwapchainCreateInfoKHR;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Ljava/nio/LongBuffer;)I"))
 	private int caustica$createSwapchainWithReflex(VkDevice device, VkSwapchainCreateInfoKHR pCreateInfo,
 			VkAllocationCallbacks pAllocator, LongBuffer pSwapchain) {
+		caustica$bumpSwapchainImagesForFg(pCreateInfo);
 		if (!RtDeviceBringup.reflexEnabled()) {
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 		}
@@ -166,6 +175,33 @@ public abstract class VulkanGpuSurfaceMixin {
 			latency.latencyModeEnable(true);
 			pCreateInfo.pNext(latency.address());
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+		}
+	}
+
+	/** The FG image-pool target: 5 generated (6x) + 1 real + 1 on display + 1 spare. */
+	@Unique
+	private static final int caustica$FG_SWAPCHAIN_IMAGES = 8;
+
+	@Unique
+	private void caustica$bumpSwapchainImagesForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
+		if (!CausticaConfig.Rt.Fg.ENABLED.value() || pCreateInfo.minImageCount() >= caustica$FG_SWAPCHAIN_IMAGES) {
+			return;
+		}
+		int target = caustica$FG_SWAPCHAIN_IMAGES;
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR caps =
+					org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR.calloc(stack);
+			if (KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+					this.device.vkDevice().getPhysicalDevice(), this.surface, caps) == VK10.VK_SUCCESS
+					&& caps.maxImageCount() > 0) {
+				// maxImageCount == 0 means "no limit"; otherwise the driver's ceiling wins.
+				target = Math.min(target, caps.maxImageCount());
+			}
+		}
+		if (target > pCreateInfo.minImageCount()) {
+			pCreateInfo.minImageCount(target);
+			CausticaMod.LOGGER.info("FG: swapchain minImageCount raised to {} (generated frames need a "
+					+ "deeper image pool than vanilla's default)", target);
 		}
 	}
 
