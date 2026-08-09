@@ -101,6 +101,8 @@ public final class RtVideoOptions {
             options.add(dlssQuality());
         } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
             options.add(fsrQuality());
+        } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            options.add(xessQuality());
         }
         // NRD is the denoiser alternative for the non-DLSS paths: hidden while DLSS is active (RR
         // already denoises + upscales in one pass) and where the NRD runtime is not bundled.
@@ -547,6 +549,25 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(0, FSR_QUALITY_ORDER.size() - 1),
             initialPosition,
             position -> setting.set(FSR_QUALITY_ORDER.get(position)));
+    }
+
+    // Same shared PerfQuality vocabulary as DLSS/FSR (XeSS maps the same ratios onto its own
+    // xess_quality_settings_t). Reachable only once the selector offers XeSS — the bundled Intel
+    // runtime + the XeSS device features on the GPU decide that (RtUpscalerSupport).
+    private static final List<Integer> XESS_QUALITY_ORDER = List.of(3, 0, 1, 2, 5);
+
+    private static OptionInstance<Integer> xessQuality() {
+        IntSetting setting = CausticaConfig.Rt.Xess.QUALITY;
+        int initialQuality = XESS_QUALITY_ORDER.contains(setting.value()) ? setting.value() : 2;
+        int initialPosition = XESS_QUALITY_ORDER.indexOf(initialQuality);
+        return new OptionInstance<>(
+            "caustica.options.rt.xessQuality",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.xessQuality.tooltip")),
+            (caption, position) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.dlssQuality." + XESS_QUALITY_ORDER.get(position))),
+            new OptionInstance.IntRange(0, XESS_QUALITY_ORDER.size() - 1),
+            initialPosition,
+            position -> setting.set(XESS_QUALITY_ORDER.get(position)));
     }
 
     /**

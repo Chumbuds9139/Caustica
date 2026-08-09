@@ -64,6 +64,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
+import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
@@ -466,6 +467,9 @@ public final class RtComposite {
     // so switching upscaler or FSR quality rebuilds the trace targets exactly like RR does.
     private boolean renderSizeFsrEnabled;
     private int renderSizeFsrQuality = Integer.MIN_VALUE;
+    // XeSS shares that same slot (never with RR nor FSR): same keying contract.
+    private boolean renderSizeXessEnabled;
+    private int renderSizeXessQuality = Integer.MIN_VALUE;
     // Temporal accumulation allocates its own history targets: its toggle joins the render-size key
     // so flipping it at a fixed window size rebuilds exactly like the NRD/FSR toggles do.
     private boolean renderSizeTaaEnabled;
@@ -589,6 +593,12 @@ public final class RtComposite {
     private double prevFsrCamY;
     private double prevFsrCamZ;
     private boolean fsrCamValid;
+
+    // Same discontinuity bookkeeping for XeSS (its temporal history is equally jump-fragile).
+    private double prevXessCamX;
+    private double prevXessCamY;
+    private double prevXessCamZ;
+    private boolean xessCamValid;
 
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
@@ -1038,6 +1048,9 @@ public final class RtComposite {
         // mutually exclusive, but a hand-edited config could enable both — RR wins).
         boolean fsrEnabled = !rrEnabled && RtFsrUpscaler.enabled();
         int fsrQuality = fsrEnabled ? RtFsrUpscaler.quality() : Integer.MIN_VALUE;
+        // XeSS shares the slot under the same rules; if a hand-edit stacks them, RR > FSR > XeSS.
+        boolean xessEnabled = !rrEnabled && !fsrEnabled && RtXessUpscaler.enabled();
+        int xessQuality = xessEnabled ? RtXessUpscaler.quality() : Integer.MIN_VALUE;
         // NRD's denoise slot has the same exclusivity: off whenever RR is denoising.
         boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
         boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
@@ -1046,6 +1059,7 @@ public final class RtComposite {
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
                 && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
+                && renderSizeXessEnabled == xessEnabled && renderSizeXessQuality == xessQuality
                 && renderSizeNrdEnabled == nrdEnabled && renderSizeTaaEnabled == taaEnabled) {
             syncRestirResources(ctx);
             return;
@@ -1057,6 +1071,8 @@ public final class RtComposite {
         RtDlssRr.INSTANCE.releaseIfDisabled();
         // Same reasoning for the FSR context (its history textures) when the upscaler switches away.
         RtFsrUpscaler.INSTANCE.releaseIfDisabled();
+        // And for the XeSS upscaler (pipelines + history) on the same switch-away event.
+        RtXessUpscaler.INSTANCE.releaseIfDisabled();
         if (displayImage != null) {
             displayImage.destroy();
         }
@@ -1087,6 +1103,8 @@ public final class RtComposite {
             optimal = RtDlssRr.INSTANCE.queryOptimalRenderSize(width, height);
         } else if (fsrEnabled) {
             optimal = RtFsrUpscaler.INSTANCE.queryRenderSize(width, height);
+        } else if (xessEnabled) {
+            optimal = RtXessUpscaler.INSTANCE.queryRenderSize(width, height);
         } else {
             optimal = null;
         }
@@ -1096,6 +1114,8 @@ public final class RtComposite {
         renderSizeRrQuality = rrQuality;
         renderSizeFsrEnabled = fsrEnabled;
         renderSizeFsrQuality = fsrQuality;
+        renderSizeXessEnabled = xessEnabled;
+        renderSizeXessQuality = xessQuality;
         renderSizeNrdEnabled = nrdEnabled;
         renderSizeTaaEnabled = taaEnabled;
 
@@ -1212,6 +1232,7 @@ public final class RtComposite {
             // reference and for the debug guide views (raw inspection).
             boolean rrPath = RtDlssRr.enabled() && debugView == 0;
             boolean fsrPath = !rrPath && RtFsrUpscaler.enabled() && debugView == 0;
+            boolean xessPath = !rrPath && !fsrPath && RtXessUpscaler.enabled() && debugView == 0;
             // NRD needs a jittered trace to accumulate (its history reprojection compensates using the
             // jitter reported in CommonSettings); when an upscaler shares the frame, both consumers
             // get the same jitter sequence.
@@ -1229,6 +1250,11 @@ public final class RtComposite {
             } else if (fsrPath) {
                 // Same Halton(2,3) sequence, FSR 3's own phase-count rule (see CausticaJitter).
                 CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
+                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
+                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+            } else if (xessPath) {
+                // Same Halton(2,3) sequence, Intel's fixed 32-phase cycle (see CausticaJitter).
+                CausticaJitter.INSTANCE.prepareXess();
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             } else if (nrdPath) {
@@ -1577,6 +1603,33 @@ public final class RtComposite {
                     rrDone = RtFsrUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
                             null, rrOutput,
                             renderW, renderH, displayW, displayH, -jitterX, -jitterY, fovY);
+                }
+            }
+
+            // Intel XeSS occupies the slot when neither RR nor FSR is running: same inputs as FSR
+            // (denoised-or-raw color + depth + motion vectors), output straight into rrOutput. The
+            // ML reconstruction replaces FSR's analytic pass — same upscale slot, same consumers.
+            if (!rrDone && xessPath && RtXessUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "XeSS upscale");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.xess")) {
+                    // Camera discontinuity reset, same rule as the FSR path above.
+                    if (xessCamValid) {
+                        double xdx = camX - prevXessCamX;
+                        double xdy = camY - prevXessCamY;
+                        double xdz = camZ - prevXessCamZ;
+                        if (xdx * xdx + xdy * xdy + xdz * xdz > 32.0 * 32.0) {
+                            RtXessUpscaler.INSTANCE.requestReset();
+                        }
+                    }
+                    prevXessCamX = camX;
+                    prevXessCamY = camY;
+                    prevXessCamZ = camZ;
+                    xessCamValid = true;
+                    // XeSS takes the applied image-space jitter as-is (no negation — see
+                    // RtXessUpscaler.evaluate), unlike FSR/DLSS which take the negated offsets.
+                    rrDone = RtXessUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
+                            rrOutput,
+                            renderW, renderH, displayW, displayH, jitterX, jitterY);
                 }
             }
 
@@ -2178,6 +2231,8 @@ public final class RtComposite {
         RtDlssRr.INSTANCE.destroy();
         // Same contract for the FSR context (no-op when it was never created).
         RtFsrUpscaler.INSTANCE.destroy();
+        // And the XeSS upscaler (no-op when it was never initialized).
+        RtXessUpscaler.INSTANCE.destroy();
         // Tear down the NRD integration (wraps the Vulkan device via NRI) only after its images are
         // released below; destroyGuideImages runs after this in the teardown sequence.
         RtNrdDenoiser.INSTANCE.destroy();

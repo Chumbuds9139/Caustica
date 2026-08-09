@@ -48,6 +48,23 @@ terms. Bundled AMD runtime libraries may include files matching:
 Caustica's `fsrshim` native library is project-owned glue code and follows
 Caustica's project license unless otherwise noted.
 
+## Intel XeSS SDK (XeSS Super Resolution)
+
+Caustica can build and distribute release artifacts that include Intel XeSS
+runtime components for XeSS upscaling. The prebuilt `libxess.dll` runtime is
+provided by Intel under the Intel Simplified Software License (Version
+October 2022) and is not part of Caustica's LGPL grant:
+
+<https://github.com/intel/xess/blob/main/LICENSE.txt>
+
+Redistribution and use of those components must comply with Intel's license
+terms. Bundled Intel runtime libraries may include files matching:
+
+- `caustica/natives/windows-x64/libxess.dll`
+
+Caustica's `xessshim` native library is project-owned glue code and follows
+Caustica's project license unless otherwise noted.
+
 ## NVIDIA NRD (Real-time Denoisers) + NRI
 
 Caustica can build and distribute release artifacts that include NVIDIA NRD

@@ -116,6 +116,9 @@ public final class CausticaClient implements ClientModInitializer {
 		// Same ordering for the FidelityFX runtime: the FSR context is already released by
 		// RtComposite.destroy() above; this only clears the shared runtime state for the next device.
 		dev.comfyfluffy.caustica.fsr.FsrRuntime.INSTANCE.shutdown();
+		// Same ordering for the XeSS runtime: the upscaler is already released by
+		// RtComposite.destroy() above; this clears the shared runtime state for the next device.
+		dev.comfyfluffy.caustica.xess.XessRuntime.INSTANCE.shutdown();
 		if (ctx != null) {
 			ctx.destroy();
 		}

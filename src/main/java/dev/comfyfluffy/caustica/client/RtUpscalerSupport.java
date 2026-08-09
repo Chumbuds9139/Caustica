@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.fsr.FsrRuntime;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.xess.XessRuntime;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,14 +24,16 @@ public final class RtUpscalerSupport {
     public static final String MODE_NONE = "none";
     public static final String MODE_DLSS = "dlss";
     public static final String MODE_FSR3 = "fsr3";
+    public static final String MODE_XESS = "xess";
 
     private RtUpscalerSupport() {
     }
 
     /**
-     * The values the upscaler selector offers on this machine. FSR 3 appears only once the FidelityFX
-     * backend reports available (see {@link #fsrUpscalingAvailable()}) — until then the selector offers
-     * Off/DLSS, and the FSR 3 plumbing (config, translations, mode mapping) waits ready for it.
+     * The values the upscaler selector offers on this machine. FSR 3 / XeSS appear only once their
+     * backends report available (see {@link #fsrUpscalingAvailable()} /
+     * {@link #xessUpscalingAvailable()}) — until then the selector offers Off/DLSS, and the
+     * missing backend's plumbing (config, translations, mode mapping) waits ready for it.
      */
     public static List<String> upscalerValues() {
         List<String> values = new ArrayList<>();
@@ -38,6 +41,9 @@ public final class RtUpscalerSupport {
         values.add(MODE_DLSS);
         if (fsrUpscalingAvailable()) {
             values.add(MODE_FSR3);
+        }
+        if (xessUpscalingAvailable()) {
+            values.add(MODE_XESS);
         }
         return values;
     }
@@ -47,6 +53,9 @@ public final class RtUpscalerSupport {
         if (CausticaConfig.Rt.Fsr.ENABLED.value()) {
             return MODE_FSR3;
         }
+        if (CausticaConfig.Rt.Xess.ENABLED.value()) {
+            return MODE_XESS;
+        }
         if (CausticaConfig.Rt.DlssRr.ENABLED.value()) {
             return MODE_DLSS;
         }
@@ -54,12 +63,13 @@ public final class RtUpscalerSupport {
     }
 
     /**
-     * Apply an upscaler selection. Exactly one backend switch is on afterwards; the two are mutually
-     * exclusive even though the config file lets a hand-edit set both (the selector resolves that to
-     * FSR 3, then re-normalizes on the next change).
+     * Apply an upscaler selection. Exactly one backend switch is on afterwards; the three are
+     * mutually exclusive even though the config file lets a hand-edit set several (the renderer
+     * resolves that to RR &gt; FSR 3 &gt; XeSS, then re-normalizes on the next change).
      */
     public static void applyUpscalerMode(String mode) {
         CausticaConfig.Rt.Fsr.ENABLED.set(MODE_FSR3.equals(mode));
+        CausticaConfig.Rt.Xess.ENABLED.set(MODE_XESS.equals(mode));
         CausticaConfig.Rt.DlssRr.ENABLED.set(MODE_DLSS.equals(mode));
     }
 
@@ -72,6 +82,17 @@ public final class RtUpscalerSupport {
      */
     public static boolean fsrUpscalingAvailable() {
         return FsrRuntime.platformSupported();
+    }
+
+    /**
+     * Whether the Intel XeSS upscaler can run on this system. Two gates: the bundled runtime
+     * (native/xess_shim + Intel's libxess.dll, Windows-only like FSR 3) AND XeSS's required device
+     * features actually enabled on the Vulkan device (shaderStorageImageWriteWithoutFormat +
+     * mutableDescriptorType, injected at vkCreateDevice time by RtDeviceBringup). A GPU missing
+     * them can never run XeSS, so the selector must not offer it there.
+     */
+    public static boolean xessUpscalingAvailable() {
+        return XessRuntime.platformSupported() && RtDeviceBringup.xessFeaturesEnabled();
     }
 
     /**

@@ -34,6 +34,12 @@ public final class CausticaJitter {
 		prepareWithPhaseCount(Math.max(1, (int) (8.0f * ratio * ratio)));
 	}
 
+	/** Advance one frame on Intel XeSS's rule: a fixed 32-phase cycle, exactly the
+	 *  {@code GenerateHalton(2, 3, 1, 32)} sequence Intel's VK sample feeds XeSS. */
+	public void prepareXess() {
+		prepareWithPhaseCount(32);
+	}
+
 	private void prepareWithPhaseCount(int phaseCount) {
 		int index = (this.frameIndex++ % phaseCount) + 1; // Halton(0) is degenerate
 		this.pixelsX = halton(index, 2) - 0.5f;

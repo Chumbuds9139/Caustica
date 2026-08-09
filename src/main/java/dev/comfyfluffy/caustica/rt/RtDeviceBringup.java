@@ -6,10 +6,13 @@ import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.xess.XessRuntime;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.EXTMutableDescriptorType;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
@@ -23,7 +26,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
+import org.lwjgl.vulkan.VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
+import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapPropertiesEXT;
 import org.lwjgl.vulkan.VkPhysicalDevicePresentIdFeaturesKHR;
@@ -124,6 +129,10 @@ public final class RtDeviceBringup {
     private static volatile boolean reflexEnabled; // VK_NV_low_latency2 actually enabled on the device
     private static volatile boolean presentIdEnabled; // VK_KHR_present_id actually enabled on the device
     private static volatile boolean wideLinesEnabled; // VkPhysicalDeviceFeatures.wideLines actually enabled
+    // XeSS's required device features actually enabled (storage-image-write-without-format +
+    // mutable descriptors; DP4a int8/dot-product ride along per-feature when supported) — the
+    // selector's hardware gate alongside the bundled runtime.
+    private static volatile boolean xessFeaturesEnabled;
     private static volatile float maxLineWidth = 1.0f; // device's lineWidthRange[1]; 1.0 unless wideLinesEnabled
     private static volatile int overlayMsaaSamples = VK10.VK_SAMPLE_COUNT_1_BIT; // capped to the device's framebufferColorSampleCounts
     private static volatile int maxOpacity4StateSubdivisionLevel;
@@ -152,6 +161,12 @@ public final class RtDeviceBringup {
     private static final VulkanPNextStruct PRESENT_ID_FEATURES_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
             VkPhysicalDevicePresentIdFeaturesKHR.SIZEOF);
+    private static final VulkanPNextStruct VK13_FEATURES_STRUCT = new VulkanPNextStruct(
+            VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            VkPhysicalDeviceVulkan13Features.SIZEOF);
+    private static final VulkanPNextStruct MUTABLE_DESCRIPTOR_TYPE_FEATURES_STRUCT = new VulkanPNextStruct(
+            EXTMutableDescriptorType.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_EXT,
+            VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT.SIZEOF);
 
     private static final VulkanFeature BUFFER_DEVICE_ADDRESS_FEATURE = new VulkanFeature(
             VulkanBackend.VK12_FEATURES_STRUCT, "bufferDeviceAddress",
@@ -190,6 +205,26 @@ public final class RtDeviceBringup {
             PRESENT_ID_FEATURES_STRUCT, "presentId", VkPhysicalDevicePresentIdFeaturesKHR.PRESENTID);
     private static final VulkanFeature WIDE_LINES_FEATURE = new VulkanFeature(
             VulkanBackend.VK10_FEATURES_STRUCT, "wideLines", VkPhysicalDeviceFeatures.WIDELINES);
+    // Intel XeSS device features, per the XeSS-SR developer guide (v2.1.1 "Requirements"):
+    // REQUIRED — shaderStorageImageWriteWithoutFormat (core VK10) + mutableDescriptorType
+    // (VK_EXT_mutable_descriptor_type). Without both, xessVKCreateContext cannot run, so they gate
+    // the whole XeSS offer.
+    // PERFORMANCE-ONLY — shaderInt8 (VK12) + shaderIntegerDotProduct (VK13): the quantized INT8
+    // network's DP4a fast path. XeSS still runs without them, just not accelerated — on a GeForce
+    // RTX 2060 (no XMX, DP4a is its only path) these two ARE the performance, so they are enabled
+    // whenever the device supports them alongside the required pair.
+    private static final VulkanFeature SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE = new VulkanFeature(
+            VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageWriteWithoutFormat",
+            VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
+    private static final VulkanFeature MUTABLE_DESCRIPTOR_TYPE_FEATURE = new VulkanFeature(
+            MUTABLE_DESCRIPTOR_TYPE_FEATURES_STRUCT, "mutableDescriptorType",
+            VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT.MUTABLEDESCRIPTORTYPE);
+    private static final VulkanFeature SHADER_INT8_FEATURE = new VulkanFeature(
+            VulkanBackend.VK12_FEATURES_STRUCT, "shaderInt8",
+            VkPhysicalDeviceVulkan12Features.SHADERINT8);
+    private static final VulkanFeature SHADER_INTEGER_DOT_PRODUCT_FEATURE = new VulkanFeature(
+            VK13_FEATURES_STRUCT, "shaderIntegerDotProduct",
+            VkPhysicalDeviceVulkan13Features.SHADERINTEGERDOTPRODUCT);
 
     private static final List<VulkanFeature> REQUIRED_RT_FEATURES = List.of(
             BUFFER_DEVICE_ADDRESS_FEATURE,
@@ -223,7 +258,8 @@ public final class RtDeviceBringup {
     }
 
     private record FeatureSupport(List<String> missingRequired, SerBackend serBackend,
-                                  boolean omm, boolean presentId, boolean wideLines) {
+                                  boolean omm, boolean presentId, boolean wideLines,
+                                  boolean xess, boolean xessInt8, boolean xessIntDot) {
         boolean supportsRt() {
             return missingRequired.isEmpty();
         }
@@ -273,6 +309,15 @@ public final class RtDeviceBringup {
      *  lines, e.g. the block outline, use this instead of a screen-space quad when available). */
     public static boolean wideLinesEnabled() {
         return wideLinesEnabled;
+    }
+
+    /**
+     * True if XeSS's required device features (shaderStorageImageWriteWithoutFormat +
+     * mutableDescriptorType) were enabled on the device. The upscaler selector's hardware gate:
+     * the bundled runtime decides the platform half, this decides the GPU half.
+     */
+    public static boolean xessFeaturesEnabled() {
+        return xessFeaturesEnabled;
     }
 
     /** The device's max native line width (raster {@code lineWidthRange[1]}); 1.0 if wideLines isn't
@@ -426,6 +471,9 @@ public final class RtDeviceBringup {
                 supported.add(VK_KHR_PRESENT_ID_EXTENSION_NAME);
             }
         }
+        if (support.xess) {
+            supported.add(EXTMutableDescriptorType.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME);
+        }
         return supported;
     }
 
@@ -435,6 +483,16 @@ public final class RtDeviceBringup {
 
     private static boolean reflexRequested() {
         return CausticaConfig.Rt.Reflex.ENABLED.value();
+    }
+
+    /**
+     * XeSS's features change no other behavior, so they are NOT gated on the xess.enabled config —
+     * enabling them up front is what lets the upscaler be flipped on live from Video Settings
+     * without a restart (a vkCreateDevice-time-only decision otherwise). The gates are platform
+     * (bundled Windows runtime) + device support, queried below.
+     */
+    private static boolean xessRequested() {
+        return XessRuntime.platformSupported();
     }
 
     /** Query every feature boolean Caustica might enable in one complete Features2 chain. */
@@ -462,6 +520,17 @@ public final class RtDeviceBringup {
             if (queryPresentId) {
                 PRESENT_ID_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
             }
+            boolean queryXess = xessRequested()
+                    && physicalDevice.hasDeviceExtension(
+                            EXTMutableDescriptorType.VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME);
+            if (queryXess) {
+                // findOrCreate dedups each struct by sType (the VK10/VK12 ones merge into the
+                // chain's existing structs; EXT + VK13 are created fresh when missing).
+                SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
+                MUTABLE_DESCRIPTOR_TYPE_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
+                SHADER_INT8_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
+                SHADER_INTEGER_DOT_PRODUCT_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
+            }
             WIDE_LINES_FEATURE.struct().findOrCreateStructInPNextChain(available, stack);
 
             VK12.vkGetPhysicalDeviceFeatures2(physicalDevice.vkPhysicalDevice(), available);
@@ -474,10 +543,16 @@ public final class RtDeviceBringup {
             }
             SerBackend supportedSer = hasSerExt && SER_EXT_FEATURE.get(available) ? SerBackend.EXT
                     : SerBackend.NONE;
+            boolean xessRequired = queryXess
+                    && SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE.get(available)
+                    && MUTABLE_DESCRIPTOR_TYPE_FEATURE.get(available);
             return new FeatureSupport(missing, supportedSer,
                     queryOmm && OMM_FEATURE.get(available),
                     queryPresentId && PRESENT_ID_FEATURE.get(available),
-                    WIDE_LINES_FEATURE.get(available));
+                    WIDE_LINES_FEATURE.get(available),
+                    xessRequired,
+                    xessRequired && SHADER_INT8_FEATURE.get(available),
+                    xessRequired && SHADER_INTEGER_DOT_PRODUCT_FEATURE.get(available));
         }
     }
 
@@ -528,6 +603,7 @@ public final class RtDeviceBringup {
         reflexEnabled = false;
         presentIdEnabled = false;
         wideLinesEnabled = false;
+        xessFeaturesEnabled = false;
         maxLineWidth = 1.0f;
         String missingExtension = firstUnsupportedExtension(physicalDevice);
         if (missingExtension != null) {
@@ -598,6 +674,24 @@ public final class RtDeviceBringup {
             features.add(PRESENT_ID_FEATURE);
         }
 
+        // Optional: Intel XeSS device features (XeSS-SR guide: required = format-less storage-image
+        // writes + mutable descriptors; performance-only = shaderInt8 + shaderIntegerDotProduct, the
+        // quantized INT8 network's DP4a path). Only when the bundled runtime's platform matches AND
+        // the required pair is supported — their absence must not disable RT, and XeSS simply stays
+        // out of the upscaler selector instead. The DP4a pair rides along per-feature so a device
+        // with the required pair but no dot-product still gets a (slower) XeSS.
+        xessFeaturesEnabled = support.xess;
+        if (xessFeaturesEnabled) {
+            features.add(SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE);
+            features.add(MUTABLE_DESCRIPTOR_TYPE_FEATURE);
+            if (support.xessInt8) {
+                features.add(SHADER_INT8_FEATURE);
+            }
+            if (support.xessIntDot) {
+                features.add(SHADER_INTEGER_DOT_PRODUCT_FEATURE);
+            }
+        }
+
         args.set(2, features);
 
         rtRequested = true;
@@ -606,7 +700,11 @@ public final class RtDeviceBringup {
         CausticaMod.LOGGER.info(
                 "Ray tracing: enabling {}{}{} + features [bufferDeviceAddress, accelerationStructure, rayTracingPipeline, rayQuery, SER={}"
                         + (wideLinesEnabled ? ", wideLines(max=" + maxLineWidth + ")" : "")
-                        + (ommEnabled ? ", opacityMicromap" : "") + "] + overlayMsaa=" + overlayMsaaSamples + "x on [{}]",
+                        + (ommEnabled ? ", opacityMicromap" : "")
+                        + (xessFeaturesEnabled ? ", xess(mutableDesc,storageImgWrite"
+                                + (support.xessInt8 ? ",int8" : "")
+                                + (support.xessIntDot ? ",dp4a" : "") + ")" : "")
+                        + "] + overlayMsaa=" + overlayMsaaSamples + "x on [{}]",
                 RT_EXTENSIONS, serBackend.extensionName == null ? "" : " + " + serBackend.extensionName,
                 optionalExtensions.isEmpty() ? "" : " + " + optionalExtensions,
                 serBackend.label, physicalDevice.deviceName());

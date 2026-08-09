@@ -60,7 +60,7 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Nrd.ENABLED,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Nrd.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -924,6 +924,25 @@ public final class CausticaConfig {
             public static final IntSetting QUALITY = clampedInt("caustica.rt.fsr.quality", "fsr.quality", 2, 0, 5);
 
             private Fsr() {
+            }
+        }
+
+        /**
+         * Intel XeSS Super Resolution upscaler (EXPERIMENTAL): the ML-based alternative to FSR 3 —
+         * a trained neural network (quantized INT8 on DP4a hardware like GeForce RTX, XMX matrix
+         * engines on Intel Arc) reconstructs the display-res image from the render-res trace +
+         * motion vectors + depth. Occupies the same upscale slot as DLSS-RR/FSR 3 (mutually
+         * exclusive; if a hand-edit enables several, RR &gt; FSR &gt; XeSS). Windows-only like FSR 3
+         * (Intel ships the libxess runtime for Windows), plus XeSS device features enabled at
+         * vkCreateDevice time (RtDeviceBringup) — a GPU lacking them never sees the option.
+         */
+        public static final class Xess {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.xess", "xess.enabled", false);
+            /** PerfQuality numbering shared with DLSS: 0 Performance, 1 Balanced, 2 Quality, 3 Ultra
+             *  Performance, 5 native AA — mapped onto xess_quality_settings_t by RtXessUpscaler. */
+            public static final IntSetting QUALITY = clampedInt("caustica.rt.xess.quality", "xess.quality", 2, 0, 5);
+
+            private Xess() {
             }
         }
 
