@@ -59,6 +59,8 @@
 	"caustica.options.rt.xessQuality.tooltip": "Intel XeSS 超分辨率的质量模式。较低质量模式渲染更少的像素并进行更激进的放大以提高帧率；较高质量模式渲染更多像素以获得更清晰的图像。",
 	"caustica.options.rt.temporalAccumulation": "时间累积",
 	"caustica.options.rt.temporalAccumulation.tooltip": "利用追踪器的运动矢量将之前的帧累积到当前图像上。静止时即使 1 SPP 也能大幅降低噪点，快速移动时会有轻微的运动模糊。",
+	"caustica.options.rt.spatialDenoise": "空间降噪",
+	"caustica.options.rt.spatialDenoise.tooltip": "对原始追踪结果的轻量边缘保持滤波器（à-trous 小波，按亮度、深度和法线加权）。在时间累积和超分辨率之前去除萤火虫噪点和颗粒。没有历史记录，移动相机时不会产生鬼影——与时间累积搭配可获得最干净的图像。",
 	"caustica.options.rt.frameGeneration": "帧生成（实验性）",
 	"caustica.options.rt.frameGeneration.tooltip": "DLSS 帧生成会合成中间帧，以成倍提升感知帧率。实验性功能：可能增加延迟或产生伪影。需要 DLSS 超分辨率以及 NVIDIA GeForce RTX 40 或 50 系列 GPU。",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "此 GPU 不可用：DLSS 帧生成需要 NVIDIA GeForce RTX 40 或 50 系列显卡。支持情况在 NGX 激活时来自驱动的 NGX 能力查询，否则按 GPU 名称判断。",

@@ -72,6 +72,7 @@ public final class RtFramePresenter {
     private int interpOkInWindow;
     private int interpFallbackInWindow;
     private int acquireSkippedInWindow;
+    private int loggedImageCount = -1;
 
     private RtFramePresenter() {
     }
@@ -113,6 +114,11 @@ public final class RtFramePresenter {
         if (failed || swapchain == 0L || srcImage == 0L || generatedCount <= 0) {
             return;
         }
+        if (swapchainImages.size() != loggedImageCount) {
+            loggedImageCount = swapchainImages.size();
+            CausticaMod.LOGGER.info("FG: swapchain has {} images (each generated frame needs one per "
+                    + "real frame on top of the real one)", loggedImageCount);
+        }
         try {
             // Never ask for more extra images than the swapchain can lend: Minecraft needs one image
             // for the real frame itself, so the pool caps the generated count. Requesting beyond it
@@ -141,10 +147,13 @@ public final class RtFramePresenter {
                 int imageIndex;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     IntBuffer pIndex = stack.callocInt(1);
-                    // NON-BLOCKING acquire (timeout 0): when the display still holds every free image
-                    // (pacing ahead of the pool), skip the remaining generated frames instead of
-                    // waiting — the frame loop must never stall on FG.
-                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, 0L, acquireSem, 0L, pIndex);
+                    // BOUNDED 1ms acquire: images released by the presentation engine can lag a
+                    // hair behind the frame tail, and a timeout-0 acquire missed them systemically
+                    // (the 2x ceiling — acquireSkipped == real in the present-rate log). 1ms per
+                    // acquire keeps the worst-case stall at ~4ms, nowhere near the frame budget;
+                    // the old unbounded wait (pre-diagnostic) is what froze the loop, not a short
+                    // bounded one. Still non-fatal: on miss, present what we already recorded.
+                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, 1_000_000L, acquireSem, 0L, pIndex);
                     if (r != VK10.VK_SUCCESS && r != 1000001003 /* SUBOPTIMAL */) {
                         acquireSkippedInWindow++;
                         break; // present what we already recorded this frame

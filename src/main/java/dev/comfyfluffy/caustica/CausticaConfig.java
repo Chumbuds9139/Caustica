@@ -60,7 +60,7 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -959,6 +959,20 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);
 
             private Taa() {
+            }
+        }
+
+        /**
+         * Edge-avoiding à-trous SPATIAL denoise over the raw trace (2 passes at render res,
+         * weighted by luminance/depth/normal, with a firefly guard). History-less by design, so it
+         * cannot ghost on camera motion — the failure mode that retired the NRD/REBLUR stack —
+         * while still removing the single-sample grain the temporal layers would otherwise smear.
+         * Runs on every non-DLSS path before temporal accumulation / upscaling. Default ON.
+         */
+        public static final class Spatial {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.spatialDenoise", "spatial.enabled", true);
+
+            private Spatial() {
             }
         }
 

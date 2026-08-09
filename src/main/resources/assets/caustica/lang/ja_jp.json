@@ -59,6 +59,8 @@
 	"caustica.options.rt.xessQuality.tooltip": "Intel XeSSアップスケーラーの品質モード。低品質モードは少ないピクセルをレンダリングし、より積極的にアップスケールしてフレームレートを上げます。高品質モードはより多くのピクセルをレンダリングしてシャープな画像を得ます。",
 	"caustica.options.rt.temporalAccumulation": "テンポラルアキュムレーション",
 	"caustica.options.rt.temporalAccumulation.tooltip": "トレーサーのモーションベクトルを使って、以前のフレームを現在の画像に蓄積します。静止時は1 SPPでもノイズを大幅に減らしますが、高速に動いている間はわずかにぼやけます。",
+	"caustica.options.rt.spatialDenoise": "空間デノイザー",
+	"caustica.options.rt.spatialDenoise.tooltip": "生のトレースに対する軽量なエッジ保持フィルター（à-trousウェーブレット。輝度・深度・法線で重み付け）。テンポラル蓄積やアップスケールの前にファイアフライや粒状ノイズを除去します。履歴を持たないため、カメラ移動時のゴーストが発生しません。最もクリーンな画像にはテンポラル蓄積と併用してください。",
 	"caustica.options.rt.frameGeneration": "フレーム生成（実験的）",
 	"caustica.options.rt.frameGeneration.tooltip": "DLSS Frame Generationは中間フレームを合成して体感フレームレートを倍増させます。実験的機能のため、遅延が増えたりアーティファクトが発生したりする場合があります。DLSSアップスケーラーとNVIDIA GeForce RTX 40/50シリーズのGPUが必要です。",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "このGPUでは使用できません：DLSS Frame GenerationにはNVIDIA GeForce RTX 40/50シリーズのカードが必要です。NGXが有効なときはドライバーのNGX機能クエリで、それ以外はGPU名で対応状況を判定します。",

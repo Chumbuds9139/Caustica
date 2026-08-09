@@ -110,6 +110,7 @@ public final class RtVideoOptions {
         // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
         // denoises internally.
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(spatialDenoiser());
             options.add(temporalAccumulation());
         }
         options.add(omm());
@@ -572,6 +573,11 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> temporalAccumulation() {
         return bool("caustica.options.rt.temporalAccumulation", CausticaConfig.Rt.Taa.ENABLED);
+    }
+
+    /** Edge-avoiding spatial denoise — history-less, so live-safe like the other per-frame toggles. */
+    private static OptionInstance<Boolean> spatialDenoiser() {
+        return bool("caustica.options.rt.spatialDenoise", CausticaConfig.Rt.Spatial.ENABLED);
     }
 
     /**

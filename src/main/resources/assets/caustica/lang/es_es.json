@@ -59,6 +59,8 @@
 	"caustica.options.rt.xessQuality.tooltip": "Modo de calidad del upscaler Intel XeSS. Los modos de menor calidad renderizan menos píxeles y escalan de forma más agresiva para obtener tasas de fotogramas mayores; los modos de mayor calidad renderizan más píxeles para una imagen más nítida.",
 	"caustica.options.rt.temporalAccumulation": "Acumulación temporal",
 	"caustica.options.rt.temporalAccumulation.tooltip": "Acumula fotogramas anteriores sobre la imagen actual usando los vectores de movimiento del trazador. Reduce notablemente el ruido con 1 SPP quieto, con un ligero desenfoque durante el movimiento rápido.",
+	"caustica.options.rt.spatialDenoise": "Denoiser Espacial",
+	"caustica.options.rt.spatialDenoise.tooltip": "Filtro ligero sensible a bordes sobre el trazado bruto (wavelet à-trous, ponderado por luminancia, profundidad y normales). Elimina fireflies y grano antes de la acumulación temporal y el escalado. Sin historial, por lo que no produce ghosting al mover la cámara — combínalo con la Acumulación Temporal para la imagen más limpia.",
 	"caustica.options.rt.frameGeneration": "Generación de Fotogramas (Experimental)",
 	"caustica.options.rt.frameGeneration.tooltip": "DLSS Frame Generation sintetiza fotogramas intermedios para multiplicar la tasa de fotogramas percibida. EXPERIMENTAL: puede aumentar la latencia o producir artefactos. Requiere el upscaler DLSS y una GPU NVIDIA GeForce RTX de las series 40 o 50.",
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "No disponible en esta GPU: DLSS Frame Generation requiere una tarjeta NVIDIA GeForce RTX de las series 40 o 50. La compatibilidad proviene de la consulta de capacidades NGX del driver cuando está activa y, en caso contrario, del nombre de la GPU.",

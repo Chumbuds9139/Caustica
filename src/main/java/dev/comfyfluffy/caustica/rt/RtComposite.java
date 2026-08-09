@@ -66,6 +66,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtSpatialDenoisePipeline;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
@@ -438,6 +439,12 @@ public final class RtComposite {
     private boolean taaWriteToPing;
     private boolean taaHasPrev;
     private RtTaaPipeline taaPipeline;
+    // Edge-avoiding à-trous spatial denoise ping-pong (history-less, so motion-safe): cleans the
+    // raw trace before the temporal/upscale stages read it.
+    private RtImage spatialPing;
+    private RtImage spatialPong;
+    private RtSpatialDenoisePipeline spatialPipeline;
+    private boolean renderSizeSpatialEnabled;
     private final float[] prevProjection = new float[16];
     private final float[] curProjection = new float[16];
     private boolean prevProjectionValid;
@@ -943,6 +950,14 @@ public final class RtComposite {
             taaPong.destroy();
             taaPong = null;
         }
+        if (spatialPing != null) {
+            spatialPing.destroy();
+            spatialPing = null;
+        }
+        if (spatialPong != null) {
+            spatialPong.destroy();
+            spatialPong = null;
+        }
         if (rrOutput != null) {
             rrOutput.destroy();
             rrOutput = null;
@@ -1032,13 +1047,17 @@ public final class RtComposite {
         // jitter, since the input is already jitter-integrated — two temporal layers fighting over
         // the same jitter was the noisy/shimmery result).
         boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
+        // Spatial à-trous denoise: history-less noise killer over the raw trace, available on every
+        // non-RR path (pairs with the TAA + upscaler stack).
+        boolean spatialEnabled = !rrEnabled && CausticaConfig.Rt.Spatial.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
                 && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
                 && renderSizeXessEnabled == xessEnabled && renderSizeXessQuality == xessQuality
-                && renderSizeTaaEnabled == taaEnabled) {
+                && renderSizeTaaEnabled == taaEnabled
+                && renderSizeSpatialEnabled == spatialEnabled) {
             syncRestirResources(ctx);
             return;
         }
@@ -1095,6 +1114,7 @@ public final class RtComposite {
         renderSizeXessEnabled = xessEnabled;
         renderSizeXessQuality = xessQuality;
         renderSizeTaaEnabled = taaEnabled;
+        renderSizeSpatialEnabled = spatialEnabled;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
         // mapping seam. displayImage stays R8G8B8A8 to match the main target it is copied into
@@ -1134,6 +1154,15 @@ public final class RtComposite {
             }
             // Fresh buffers: the accumulation history no longer corresponds to anything.
             taaHasPrev = false;
+        }
+        // Spatial à-trous ping-pong targets over the raw trace (history-less, motion-safe).
+        if (spatialEnabled) {
+            spatialPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "spatial denoise ping " + renderW + "x" + renderH);
+            spatialPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "spatial denoise pong " + renderW + "x" + renderH);
+            if (spatialPipeline == null) {
+                spatialPipeline = RtSpatialDenoisePipeline.create(ctx);
+                CausticaMod.LOGGER.info("Spatial denoiser active (2 à-trous passes)");
+            }
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
@@ -1460,6 +1489,24 @@ public final class RtComposite {
             // the frame (exposure metering, display mapping) is untouched. The temporal accumulation
             // below may replace `output` as the source when it ran.
             RtImage upscaleSource = output;
+            // Spatial denoise (edge-avoiding à-trous over the raw trace): kills single-sample
+            // fireflies and grain BEFORE the temporal/upscale stages read the image. History-less
+            // by design, so it cannot ghost on camera motion — the failure mode that retired the
+            // NRD/REBLUR stack. Feeds the TAA below, which then accumulates cleaned frames.
+            boolean spatialPath = !rrPath && CausticaConfig.Rt.Spatial.ENABLED.value() && debugView == 0;
+            if (spatialPath && spatialPipeline != null && spatialPing != null) {
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // trace output visible to the denoise
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "spatial denoise");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.spatialDenoise")) {
+                    spatialPipeline.setImages(output.view, spatialPing.view, gDepth.view, gNormal.view);
+                    spatialPipeline.dispatch(cmd, renderW, renderH, 1);
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // pass 1 output visible to pass 2
+                    spatialPipeline.setImages(spatialPing.view, spatialPong.view, gDepth.view, gNormal.view);
+                    spatialPipeline.dispatch(cmd, renderW, renderH, 2);
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // denoised output visible downstream
+                }
+                upscaleSource = spatialPong;
+            }
             // Temporal accumulation (own option): converges the Monte-Carlo noise + the jitter
             // sequence at render res before the upscale stage reads it. Under XeSS the upscaler
             // then receives the converged image with zero jitter (see the evaluate call below) so
@@ -2149,6 +2196,10 @@ public final class RtComposite {
         if (taaPipeline != null) {
             taaPipeline.destroy();
             taaPipeline = null;
+        }
+        if (spatialPipeline != null) {
+            spatialPipeline.destroy();
+            spatialPipeline = null;
         }
         taaHasPrev = false;
         prevProjectionValid = false;
