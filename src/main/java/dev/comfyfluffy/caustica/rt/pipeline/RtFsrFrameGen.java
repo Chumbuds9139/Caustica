@@ -52,11 +52,15 @@ public final class RtFsrFrameGen {
     }
 
     // FfxApiCreateContextFramegenerationFlags for this renderer: reversed-Z (infinite far) depth and
-    // HDR-capable inputs (the PQ path feeds HDR10-encoded frames; SDR ignores the HDR flag).
+    // FfxApiCreateContextFramegenerationFlags. DEPTH_INVERTED + DEPTH_INFINITE match the tracer's
+    // reversed-Z infinite-far depth. HIGH_DYNAMIC_RANGE is applied ONLY when the backbuffer actually
+    // is HDR — declaring HDR while feeding SDR content makes FG linearize SDR values as PQ, which
+    // maps them to near-black and was a prime suspect for the black generated frames.
     private static final int FLAG_DEPTH_INVERTED = 1 << 3;
     private static final int FLAG_DEPTH_INFINITE = 1 << 4;
     private static final int FLAG_HIGH_DYNAMIC_RANGE = 1 << 5;
-    private static final int CONTEXT_FLAGS = FLAG_DEPTH_INVERTED | FLAG_DEPTH_INFINITE | FLAG_HIGH_DYNAMIC_RANGE;
+    private static final int CONTEXT_FLAGS_SDR = FLAG_DEPTH_INVERTED | FLAG_DEPTH_INFINITE;
+    private static final int CONTEXT_FLAGS_HDR = CONTEXT_FLAGS_SDR | FLAG_HIGH_DYNAMIC_RANGE;
 
     // FfxApiBackbufferTransferFunction values.
     private static final int TRANSFER_SRGB = 0;
@@ -119,8 +123,10 @@ public final class RtFsrFrameGen {
             }
             if (!featureReadyFor(displayWidth, displayHeight, renderWidth, renderHeight, backbufferFormat)) {
                 releaseContext(device);
+                // HDR flag must match the real backbuffer format (see CONTEXT_FLAGS_* docs).
+                boolean hdr = backbufferFormat == VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
                 context = lib.createFg(renderWidth, renderHeight, displayWidth, displayHeight,
-                        backbufferFormat, CONTEXT_FLAGS);
+                        backbufferFormat, hdr ? CONTEXT_FLAGS_HDR : CONTEXT_FLAGS_SDR);
                 if (isNull(context)) {
                     throw new IllegalStateException("fsrshim_create_fg failed: last=" + lib.lastResult());
                 }
