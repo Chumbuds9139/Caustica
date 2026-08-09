@@ -65,6 +65,10 @@ static const nrd::Identifier DENOISER_ID = 0;
 static int g_hitDistReconstructionMode = 0; // nrd::HitDistanceReconstructionMode
 static int g_maxAccumulatedFrameNum = 0;
 static int g_maxFastAccumulatedFrameNum = 0;
+// Anti-lag (camera-move ghosting) + firefly suppressor (flicker) tuning. <= 0 = keep NRD default.
+static float g_antilagLuminanceSigmaScale = 0.0f;
+static float g_antilagLuminanceSensitivity = 0.0f;
+static float g_fireflySuppressorMinRelativeScale = 0.0f;
 
 static void applyStoredReblurSettings() {
     if (!g_integration) {
@@ -77,6 +81,15 @@ static void applyStoredReblurSettings() {
     }
     if (g_maxFastAccumulatedFrameNum > 0) {
         settings.maxFastAccumulatedFrameNum = (uint32_t) g_maxFastAccumulatedFrameNum;
+    }
+    if (g_antilagLuminanceSigmaScale > 0.0f) {
+        settings.antilagSettings.luminanceSigmaScale = g_antilagLuminanceSigmaScale;
+    }
+    if (g_antilagLuminanceSensitivity > 0.0f) {
+        settings.antilagSettings.luminanceSensitivity = g_antilagLuminanceSensitivity;
+    }
+    if (g_fireflySuppressorMinRelativeScale > 0.0f) {
+        settings.fireflySuppressorMinRelativeScale = g_fireflySuppressorMinRelativeScale;
     }
     nrd::Result result = g_integration->SetDenoiserSettings(DENOISER_ID, &settings);
     if (result != nrd::Result::SUCCESS) {
@@ -182,10 +195,16 @@ NRD_SHIM_EXPORT int nrdshim_init(unsigned long long vkInstance, unsigned long lo
 // 0 = keep NRD default.
 NRD_SHIM_EXPORT int nrdshim_set_reblur_settings(int hitDistReconstructionMode,
                                                 int maxAccumulatedFrameNum,
-                                                int maxFastAccumulatedFrameNum) {
+                                                int maxFastAccumulatedFrameNum,
+                                                float antilagLuminanceSigmaScale,
+                                                float antilagLuminanceSensitivity,
+                                                float fireflySuppressorMinRelativeScale) {
     g_hitDistReconstructionMode = hitDistReconstructionMode;
     g_maxAccumulatedFrameNum = maxAccumulatedFrameNum;
     g_maxFastAccumulatedFrameNum = maxFastAccumulatedFrameNum;
+    g_antilagLuminanceSigmaScale = antilagLuminanceSigmaScale;
+    g_antilagLuminanceSensitivity = antilagLuminanceSensitivity;
+    g_fireflySuppressorMinRelativeScale = fireflySuppressorMinRelativeScale;
     applyStoredReblurSettings();
     return 0;
 }

@@ -108,7 +108,15 @@ public final class RtNrdDenoiser {
                 // denoising in one coherent pass instead of stacking temporal stages). 60 accumulated
                 // frames gives strong convergence at SPP 1; AREA_5X5 reconstructs the lobe the
                 // probabilistic single-lobe sample missed this frame.
-                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 60, 6);
+                //
+                // Tuning toward DLSS-RR-like stability, targeting the two reported symptoms:
+                //  - camera-move ghosting: anti-lag luminanceSensitivity 3.0 (NRD default) -> 2.5, so
+                //    REBLUR lets go of stale history a bit sooner when the camera turns instead of
+                //    smearing it; sigmaScale stays at the 2.0 default.
+                //  - flicker in bright/dark: fireflySuppressorMinRelativeScale 2.0 (default) -> 1.75,
+                //    a slightly stronger suppression of sporadic fireflies (the cost is a little bias).
+                lib.setReblurSettings(HIT_DIST_RECONSTRUCTION_AREA_5X5, 60, 6,
+                        2.0f, 2.5f, 1.75f);
                 reblurSettingsSent = true;
             }
             lib.newFrame();

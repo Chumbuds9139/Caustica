@@ -47,10 +47,12 @@ public final class NrdLibrary {
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-        // int nrdshim_set_reblur_settings(i32 hitDistReconMode, i32 maxAccum, i32 maxFastAccum)
+        // int nrdshim_set_reblur_settings(i32 hitDistReconMode, i32 maxAccum, i32 maxFastAccum,
+        //                                 f32 antilagSigmaScale, f32 antilagSensitivity, f32 fireflyScale)
         this.setReblurSettings = handle(lookup, "nrdshim_set_reblur_settings",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
         // int nrdshim_denoise(u64 cmd, [image,fmt]x7: mv, normalRough, viewZ, diffIn, specIn, diffOut,
         //                     specOut, [validationImage, validationFmt])
         this.denoise = handle(lookup, "nrdshim_denoise",
@@ -113,13 +115,19 @@ public final class NrdLibrary {
 
     /**
      * REBLUR tuning. {@code hitDistReconstructionMode}: 0 OFF, 1 AREA_3X3, 2 AREA_5X5; the frame
-     * counts accept 0 = keep NRD's default. The shim remembers these across resize re-inits.
+     * counts accept 0 = keep NRD's default. The three trailing floats tune the anti-lag (camera-move
+     * ghosting) and firefly suppressor (flicker); each accepts <= 0 = keep NRD's default. The shim
+     * remembers all of these across resize re-inits.
      */
     public int setReblurSettings(int hitDistReconstructionMode, int maxAccumulatedFrameNum,
-                                 int maxFastAccumulatedFrameNum) {
+                                 int maxFastAccumulatedFrameNum,
+                                 float antilagLuminanceSigmaScale, float antilagLuminanceSensitivity,
+                                 float fireflySuppressorMinRelativeScale) {
         try {
             return (int) this.setReblurSettings.invokeExact(
-                    hitDistReconstructionMode, maxAccumulatedFrameNum, maxFastAccumulatedFrameNum);
+                    hitDistReconstructionMode, maxAccumulatedFrameNum, maxFastAccumulatedFrameNum,
+                    antilagLuminanceSigmaScale, antilagLuminanceSensitivity,
+                    fireflySuppressorMinRelativeScale);
         } catch (Throwable t) {
             throw new RuntimeException("nrdshim_set_reblur_settings failed", t);
         }
