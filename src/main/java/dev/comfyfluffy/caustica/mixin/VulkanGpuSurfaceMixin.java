@@ -154,13 +154,14 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * though {@code pCreateInfo} isn't touched again after this point in {@code configure()}. No-op (calls
 	 * through unchanged) when Reflex isn't enabled + device-supported.
 	 *
-	 * <p>Also tunes the swapchain for Frame Generation while it is enabled: (1) forces FIFO present
-	 * mode — with IMMEDIATE/MAILBOX the end-of-frame burst of generated-frame presents overwrites
-	 * itself before scanout (flicker, zero FPS gain); (2) bumps {@code minImageCount} — every
-	 * generated frame needs its own image on top of the real frame's and the one on display, and
-	 * vanilla's pool (~3) hard-capped FG at ~2x regardless of multiplier. Target covers the max
-	 * multiplier (5 generated = 6x) + real + display + one spare. Both are read once per swapchain
-	 * creation: toggling FG or changing the multiplier takes effect on the next resize / restart.
+	 * <p>Also makes every RT swapchain Frame-Generation-ready, unconditionally: (1) forces FIFO
+	 * present mode — with IMMEDIATE/MAILBOX the end-of-frame burst of generated-frame presents
+	 * overwrites itself before scanout (flicker, zero FPS gain); (2) bumps {@code minImageCount} —
+	 * every generated frame needs its own image on top of the real frame's and the one on display,
+	 * and vanilla's pool (~3) hard-capped FG at ~2x regardless of multiplier. Target covers the max
+	 * multiplier (5 generated = 6x) + real + display + one spare. Both are creation-time properties,
+	 * and FG is toggled at runtime, so they are applied on EVERY swapchain (not gated on the FG
+	 * toggle) — otherwise flipping FG on after load left the pool at 3 images and FG capped at 2x.
 	 */
 	@Redirect(method = "configure",
 			at = @At(value = "INVOKE",
@@ -186,21 +187,25 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private void caustica$configureSwapchainForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
-		if (!CausticaConfig.Rt.Fg.ENABLED.value()) {
-			return;
-		}
+		// Applied UNCONDITIONALLY (not gated on the FG toggle): FG is flipped on/off at runtime from
+		// the Video Settings screen, but present mode and image count are swapchain-CREATION-time
+		// properties. If we only deepened the pool when FG was already enabled at creation, toggling
+		// FG on after load left the swapchain at vanilla's ~3 images / IMMEDIATE mode and FG silently
+		// capped at 2x no matter the multiplier (the reported "6x but FPS isn't smooth"). Making every
+		// RT swapchain FG-ready means the toggle works live. Cost: a few extra swapchain images and
+		// FIFO pacing — negligible for a path-traced renderer running well below the display rate.
+		//
 		// FIFO pacing: with IMMEDIATE/MAILBOX the end-of-frame BURST of generated-frame presents
-		// overwrites each other before the display ever scans them out — exactly the observed
-		// flicker-with-zero-FPS-gain. FIFO (spec-mandated on every surface) gives every queued
-		// present its own vblank, which is what frame generation needs to actually reach the
-		// display. Forcing it here means FG works regardless of the in-game V-Sync setting.
+		// overwrites each other before the display ever scans them out (flicker, no FPS gain). FIFO
+		// (spec-mandated on every surface) gives every queued present its own vblank, which is what
+		// frame generation needs to actually reach the display.
 		if (pCreateInfo.presentMode() != KHRSurface.VK_PRESENT_MODE_FIFO_KHR) {
 			CausticaMod.LOGGER.info("FG: forcing FIFO present mode (was {}) so generated frames are "
 					+ "paced on vblanks instead of overwriting each other", pCreateInfo.presentMode());
 			pCreateInfo.presentMode(KHRSurface.VK_PRESENT_MODE_FIFO_KHR);
 		}
 		// Deepen the image pool: each generated frame needs its own swapchain image on top of the
-		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-capped FG
+		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-caps FG
 		// at ~2x no matter the multiplier.
 		if (pCreateInfo.minImageCount() < caustica$FG_SWAPCHAIN_IMAGES) {
 			int target = caustica$FG_SWAPCHAIN_IMAGES;
