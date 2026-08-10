@@ -204,7 +204,10 @@ public final class RtFramePresenter {
                 pendingCount = 0;
             }
         }
-        if (RtDlssFg.enabled() || RtFsrFrameGen.enabled()) {
+        // Diagnostic only fires while FG is ACTUALLY presenting this session: with the FG toggle
+        // on but the active backend unavailable (e.g. DLSS-G on a non-40/50 card), the old gate
+        // (config toggle) kept logging "gen=0" lines that looked like a stuck engine.
+        if (isActive()) {
             logPresentRate(presentedThisFrame);
         }
     }
