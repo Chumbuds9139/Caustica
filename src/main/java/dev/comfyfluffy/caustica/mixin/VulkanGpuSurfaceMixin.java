@@ -181,7 +181,11 @@ public abstract class VulkanGpuSurfaceMixin {
 		}
 	}
 
-	/** The FG image-pool target: 5 generated (6x) + 1 real + 1 on display + 1 spare. */
+	/**
+	 * The FG image-pool target: room for the DLSS MFG maximum (4 generated = 5x) + 1 real + 1 on
+	 * display + spares. FSR 3.1 only ever generates 1 frame per real one, but the pool is sized for
+	 * the best case of any backend so the same swapchain works whichever FG rides on it.
+	 */
 	@Unique
 	private static final int caustica$FG_SWAPCHAIN_IMAGES = 8;
 

@@ -378,8 +378,13 @@ FSR_SHIM_EXPORT int fsrshim_query_jitter_offset(int index, int phaseCount, float
 // FSR 3.1 FG without the FFX swapchain wrapper: Caustica owns Minecraft's swapchain and presents the
 // generated frames itself (RtFramePresenter), so the FG context is created WITHOUT a swapchain and only
 // the two compute dispatches are used — PREPARE once per rendered frame (depth + dilated-MV inputs +
-// camera info), then GENERATE producing numGeneratedFrames interpolated frames into outputs[4] in a
-// single dispatch (multiplier = numGeneratedFrames + 1, capped at 4 generated / 5x by the API).
+// camera info), then GENERATE producing the interpolated frame into outputs[0].
+//
+// NOTE: the descriptor ALLOWS numGeneratedFrames up to 4, but the FSR 3.1 provider in the signed
+// runtime only ever writes outputs[0] (ffx-api/src/ffx_provider_framegeneration.cpp forwards
+// desc->outputs[0] alone into ffxFrameInterpolationDispatch) — the ABI accepts 1..4 here for
+// completeness, but Caustica must only present the frames the runtime actually wrote (see
+// RtFsrFrameGen.MAX_GENERATED_FRAMES), or it presents never-written images (black/garbage frames).
 // ======================================================================================================================================
 
 struct FsrFrameGen {
@@ -495,9 +500,11 @@ FSR_SHIM_EXPORT int fsrshim_fg_prepare(void* handle, unsigned long long cmd,
     return (int) r;
 }
 
-// Generates numGeneratedFrames (1..4) interpolated frames from presentImage into outImages in one
-// dispatch. transferFunction is an FfxApiBackbufferTransferFunction (SRGB for the RGBA8 path, PQ for
-// the HDR path). frameID must match the prepare call for this rendered frame.
+// Generates interpolated frame(s) from presentImage into outImages in one dispatch. The ABI accepts
+// numGeneratedFrames 1..4, but see the section note above: the FSR 3.1 runtime only writes
+// outImages[0] — requesting more silently leaves outImages[1..] untouched. transferFunction is an
+// FfxApiBackbufferTransferFunction (SRGB for the RGBA8 path, PQ for the HDR path). frameID must
+// match the prepare call for this rendered frame.
 FSR_SHIM_EXPORT int fsrshim_fg_generate(void* handle, unsigned long long cmd,
                                         unsigned long long presentImage, unsigned int presentFormat,
                                         const unsigned long long* outImages, unsigned int outFormat,

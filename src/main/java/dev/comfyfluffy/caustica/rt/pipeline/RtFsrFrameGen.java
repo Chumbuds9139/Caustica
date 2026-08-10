@@ -22,8 +22,8 @@ import java.lang.foreign.ValueLayout;
  * owns Minecraft's swapchain and presents the generated frames itself ({@code RtFramePresenter}), so
  * the FFX FG context is created WITHOUT a swapchain — only the two compute dispatches run here:
  * PREPARE once per rendered frame (dilated depth + MVs + camera info at render resolution), then one
- * GENERATE dispatch producing {@code numGeneratedFrames} interpolated frames into the presenter's
- * targets (multiplier = numGeneratedFrames + 1; the FFX API caps it at 4 generated / 5x).
+ * GENERATE dispatch producing the single interpolated frame into the presenter's target
+ * (multiplier is fixed at 2x — see {@link #MAX_GENERATED_FRAMES} for why the runtime cannot do more).
  *
  * <p>Inputs mirror the FSR upscale conventions already validated in {@code RtFsrUpscaler}:
  * reversed-Z infinite depth (DEPTH_INVERTED | DEPTH_INFINITE), render-pixel motion vectors scaled to
@@ -32,16 +32,25 @@ import java.lang.foreign.ValueLayout;
 public final class RtFsrFrameGen {
     public static final RtFsrFrameGen INSTANCE = new RtFsrFrameGen();
 
-    /** The FFX API generates at most 4 frames per dispatch (ffxDispatchDescUpscale::outputs[4]). */
-    public static final int MAX_GENERATED_FRAMES = 4;
-
     /**
-     * Practical stability cap. Generating more than 2 interpolated frames per rendered frame
-     * produces escalating flicker and, at 4 generated frames, outright corrupted/colorful frames on
-     * top of the noisy 1-SPP RT input (user-confirmed: 2x smooth, 4x flickers, 5x/6x corrupts).
-     * Capped at 2 generated frames (= 3x) — the highest multiplier that stays stable.
+     * Hard engine limit, not a tuning knob: FSR 3.1 frame generation produces EXACTLY ONE
+     * interpolated frame per rendered frame (= 2x multiplier), so this caps the generated count at 1.
+     *
+     * <p>Why: the {@code ffxDispatchDescFrameGeneration} descriptor declares {@code outputs[4]} and a
+     * {@code numGeneratedFrames} field, but the FSR 3.1 runtime that ships in the signed
+     * {@code amd_fidelityfx_vk.dll} ignores both — verified in the SDK's own provider source
+     * (FidelityFX-SDK v1.1.4, {@code ffx-api/src/ffx_provider_framegeneration.cpp}): its Dispatch()
+     * forwards only {@code desc->outputs[0]} into {@code ffxFrameInterpolationDispatch}, which
+     * interpolates a single midpoint frame. Multi-output generation (3x/4x MFG) only exists in the
+     * FSR 4 / FFX 1.2+ engine, which is not what this runtime bundles.
+     *
+     * <p>This is the root cause of the reported "3x black blink" and post-switch colorful corruption:
+     * with a configured count of 2+ the presenter dutifully blitted + presented {@code outputs[1..3]},
+     * which the runtime never writes — freshly created storage images present as black (the periodic
+     * black blink) and stale/reused ones as colorful garbage, i.e. exactly one corrupted "slot" per
+     * presented group. 2x stays clean because {@code outputs[0]} is the one image the runtime fills.
      */
-    public static final int STABLE_MAX_GENERATED_FRAMES = 2;
+    public static final int MAX_GENERATED_FRAMES = 1;
 
     /**
      * FG is opted into through the shared {@code caustica.rt.fg} toggle, and rides when FSR 3 OR
@@ -99,9 +108,13 @@ public final class RtFsrFrameGen {
     private RtFsrFrameGen() {
     }
 
-    /** Generated-frame count the player asked for, clamped to the stability cap (>=1 once clamped). */
+    /**
+     * Generated-frame count the player asked for, clamped to the engine limit (always 1 on this
+     * runtime — see {@link #MAX_GENERATED_FRAMES}). A stale higher config value from an earlier
+     * build is clamped silently rather than presenting never-written frames.
+     */
     public int effectiveGeneratedCount() {
-        return Math.clamp(CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value(), 1, STABLE_MAX_GENERATED_FRAMES);
+        return Math.clamp(CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value(), 1, MAX_GENERATED_FRAMES);
     }
 
     public boolean isReady() {

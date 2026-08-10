@@ -640,14 +640,34 @@ public final class RtVideoOptions {
                 Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
     }
 
-    // Multiplier options as configured generated-frame counts: 2x=1, 3x=2. Higher multipliers are
-    // intentionally not offered: generating >2 frames per rendered frame produces escalating flicker
-    // and corrupted/colorful frames on the noisy 1-SPP RT input (see RtFsrFrameGen's stability cap).
-    private static final int[] FG_MULTIPLIER_OPTIONS = { 1, 2 };
+    /**
+     * Generated-frame counts the ACTIVE backend can really produce. DLSS-G offers 1..driver MFG cap
+     * (probed from NGX). FSR 3.1 / XeSS offer exactly one: the FFX runtime only ever writes
+     * outputs[0] per dispatch (see RtFsrFrameGen.MAX_GENERATED_FRAMES), so there is nothing to
+     * choose — offering higher "multipliers" before was presenting never-written frames (the black
+     * blink + colorful corruption the player sees at 3x+).
+     */
+    private static int[] fgMultiplierOptions() {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            int max = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.multiFrameCountMax();
+            if (max > 1) {
+                int[] options = new int[max];
+                for (int i = 0; i < max; i++) {
+                    options[i] = i + 1;
+                }
+                return options;
+            }
+        }
+        return new int[] { 1 };
+    }
 
     /**
-     * The FG multiplier selector (2x/3x): how many frames the display receives per rendered frame.
-     * Visible alongside {@link #frameGenerationButton()} on the DLSS, FSR 3 and XeSS paths.
+     * The FG multiplier selector: how many frames the display receives per rendered frame. Visible
+     * alongside {@link #frameGenerationButton()} ONLY when the active backend genuinely supports
+     * more than one generated frame (DLSS Multi Frame Generation on supporting drivers) — on the
+     * FSR 3 / XeSS path the multiplier is fixed at 2x by the engine, so the button is omitted
+     * instead of pretending there's a choice.
      */
     public static Button fgMultiplierButton() {
         String mode = RtUpscalerSupport.currentUpscalerMode();
@@ -655,17 +675,21 @@ public final class RtVideoOptions {
                 && !RtUpscalerSupport.MODE_XESS.equals(mode)) {
             return null;
         }
+        int[] options = fgMultiplierOptions();
+        if (options.length < 2) {
+            return null; // fixed multiplier on this backend — nothing to cycle through
+        }
         CausticaConfig.IntSetting setting = CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT;
         Button button = Button.builder(fgMultiplierLabel(), clicked -> {
             int current = setting.value();
             int idx = 0;
-            for (int i = 0; i < FG_MULTIPLIER_OPTIONS.length; i++) {
-                if (FG_MULTIPLIER_OPTIONS[i] == current) {
+            for (int i = 0; i < options.length; i++) {
+                if (options[i] == current) {
                     idx = i;
                     break;
                 }
             }
-            setting.set(FG_MULTIPLIER_OPTIONS[(idx + 1) % FG_MULTIPLIER_OPTIONS.length]);
+            setting.set(options[(idx + 1) % options.length]);
             clicked.setMessage(fgMultiplierLabel());
         }).width(310).build();
         button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.fgMultiplier.tooltip")));
@@ -673,9 +697,12 @@ public final class RtVideoOptions {
     }
 
     private static Component fgMultiplierLabel() {
-        // Show the EFFECTIVE multiplier (config clamped to the stability cap), so a stale high config
-        // value from a previous build doesn't mislead.
-        int effective = dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
+        // Show the EFFECTIVE multiplier (config clamped to what the backend can produce), so a stale
+        // high config value from a previous build doesn't mislead.
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        int effective = RtUpscalerSupport.MODE_DLSS.equals(mode)
+                ? dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount()
+                : dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.fgMultiplier"),
                 Component.literal((effective + 1) + "x"));
