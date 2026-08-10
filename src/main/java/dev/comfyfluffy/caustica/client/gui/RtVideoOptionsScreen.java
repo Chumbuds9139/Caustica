@@ -86,6 +86,7 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         if (fgMultiplier != null) {
             list.addBig(fgMultiplier);
         }
+        list.addBig(RtVideoOptions.reflexButton());
 
         // --- General ---
         list.addHeader(GENERAL_HEADER);

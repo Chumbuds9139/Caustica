@@ -137,5 +137,8 @@
 	"caustica.options.rt.dhHeader": "Distant Horizons",
 	"caustica.options.rt.exposureHeader": "Exposure",
 	"caustica.options.rt.tonemapOperator.psychov": "Psychov",
-	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Frame Generation mediante el motor propio de Caustica: esta GPU no tiene DLSS Frame Generation (solo series RTX 40/50), así que el motor nativo de interpolación por vectores de movimiento de Caustica toma el relevo — mismo interruptor, multiplicador hasta 4x. Cuesta un poco más de GPU y latencia."
+	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Frame Generation mediante el motor propio de Caustica: esta GPU no tiene DLSS Frame Generation (solo series RTX 40/50), así que el motor nativo de interpolación por vectores de movimiento de Caustica toma el relevo — mismo interruptor, multiplicador hasta 4x. Cuesta un poco más de GPU y latencia.",
+	"caustica.options.rt.reflex": "NVIDIA Reflex",
+	"caustica.options.rt.reflex.tooltip": "NVIDIA Reflex (baja latencia): el driver sincroniza la entrega de frames para que terminen justo a tiempo para la pantalla — menos retraso entre tu entrada y la imagen. Combina especialmente bien con Frame Generation (FG cuesta ~un frame de latencia; Reflex elimina el resto de la cola). Puede reducir ligeramente los FPS máximos — es el intercambio latencia/rendimiento.",
+	"caustica.options.rt.reflex.unsupported.tooltip": "No disponible: la extensión VK_NV_low_latency2 no se activó en este dispositivo (requiere un driver NVIDIA reciente)."
 }

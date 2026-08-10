@@ -721,6 +721,33 @@ public final class RtVideoOptions {
                 Component.literal((effective + 1) + "x"));
     }
 
+    /**
+     * NVIDIA Reflex (VK_NV_low_latency2) toggle: driver-paced frame submission that cuts input
+     * latency — the natural pairing with frame generation (FG always costs ~one rendered frame of
+     * latency; Reflex removes the rest of the pipeline queue). Greyed out with a tooltip on devices
+     * without the extension; engages live (the pacing loop self-applies sleep mode on the next
+     * frame), no restart needed.
+     */
+    public static Button reflexButton() {
+        CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Reflex.ENABLED;
+        boolean supported = dev.comfyfluffy.caustica.rt.RtDeviceBringup.reflexEnabled();
+        Button button = Button.builder(reflexLabel(), clicked -> {
+            setting.set(!setting.value());
+            clicked.setMessage(reflexLabel());
+        }).width(310).build();
+        button.active = supported;
+        button.setTooltip(Tooltip.create(Component.translatable(supported
+                ? "caustica.options.rt.reflex.tooltip"
+                : "caustica.options.rt.reflex.unsupported.tooltip")));
+        return button;
+    }
+
+    private static Component reflexLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.reflex"),
+                Component.translatable(CausticaConfig.Rt.Reflex.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
     private static OptionInstance<Boolean> hdrEnabled() {
         return bool("caustica.options.rt.hdr", CausticaConfig.Rt.Hdr.ENABLED);
     }

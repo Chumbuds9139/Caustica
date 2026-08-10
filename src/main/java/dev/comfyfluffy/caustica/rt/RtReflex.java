@@ -133,7 +133,16 @@ public final class RtReflex {
      * has already been applied for this exact {@code swapchain}.
      */
     public void sleep(VkDevice device, long swapchain) {
-        if (!enabled() || failed || swapchain == 0L || swapchain != sleepModeSwapchain || timelineSemaphore == 0L) {
+        if (!enabled() || failed || swapchain == 0L) {
+            return;
+        }
+        // Live engagement: the toggle (and a swapchain recreation) may land after the last
+        // configure-time apply — self-apply here so pacing starts on the very next frame instead of
+        // waiting for the next resize/restart. applySleepMode is idempotent, so this is free once applied.
+        if (swapchain != sleepModeSwapchain) {
+            applySleepMode(device, swapchain);
+        }
+        if (failed || swapchain != sleepModeSwapchain || timelineSemaphore == 0L) {
             return;
         }
         counter++;

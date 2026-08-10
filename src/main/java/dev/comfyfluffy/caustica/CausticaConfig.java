@@ -1008,10 +1008,13 @@ public final class CausticaConfig {
         }
 
         /**
-         * NVIDIA Reflex ({@code VK_NV_low_latency2}). Default off; gated additionally by device support.
-         * Phase 0 (extension + capability probe only, see {@code RtDeviceBringup}/{@code RtReflex}) — the
-         * per-frame sleep call + latency markers + the swapchain {@code VkSwapchainLatencyCreateInfoNV} the
-         * spec requires for {@code vkSetLatencySleepModeNV} to take effect land in a later phase.
+         * NVIDIA Reflex ({@code VK_NV_low_latency2}), exposed in the Video Settings screen. Default
+         * off; gated additionally by device support ({@code RtDeviceBringup}). The full loop is
+         * implemented: per-frame {@code vkLatencySleepNV} + timeline-semaphore wait pacing
+         * ({@code RtReflex.sleep}, hooked at the top of the frame), latency markers around
+         * sim/render-submit/present, the swapchain {@code VkSwapchainLatencyCreateInfoNV} the spec
+         * requires, and {@code VK_KHR_present_id} correlation. minimum-interval-us: 0 = no
+         * framerate cap (Reflex just paces submission).
          */
         public static final class Reflex {
             public static final BooleanSetting ENABLED = bool("caustica.rt.reflex", "reflex.enabled", false);
