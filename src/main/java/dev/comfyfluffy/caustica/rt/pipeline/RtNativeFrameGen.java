@@ -27,16 +27,26 @@ public final class RtNativeFrameGen {
     }
 
     /**
-     * FG is opted into through the shared {@code caustica.rt.fg} toggle and rides the FSR 3 / XeSS
-     * upscaler paths (same contract as the vendor engines). The native engine replaces the FSR
-     * runtime there unless {@code caustica.rt.fg.nativeEngine} is switched off for comparison.
+     * FG is opted into through the shared {@code caustica.rt.fg} toggle. Rides the FSR 3 / XeSS
+     * upscaler paths (replacing the FSR runtime unless {@code frame-generation.native-engine} is
+     * switched off for comparison). On the DLSS path it acts as the FALLBACK engine: GPUs the
+     * driver reports as DLSS-G-capable (RTX 40/50 series) keep the vendor DLSS Frame Generation,
+     * everyone else gets this engine instead of nothing — same contract either way, so the toggle
+     * and multiplier work on any card.
      */
     public static boolean enabled() {
         if (!CausticaConfig.Rt.Fg.ENABLED.value() || !CausticaConfig.Rt.Fg.NATIVE_ENGINE.value()) {
             return false;
         }
         String mode = RtUpscalerSupport.currentUpscalerMode();
-        return RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode);
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            return true;
+        }
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            // DLSS-G hardware (RTX 40/50) keeps the vendor engine; all other GPUs substitute this one.
+            return !RtUpscalerSupport.dlssFrameGenerationSupported();
+        }
+        return false;
     }
 
     /** Generated-frame count the player asked for, clamped to this engine's cap. */

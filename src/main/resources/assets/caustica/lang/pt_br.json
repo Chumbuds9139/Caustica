@@ -138,5 +138,6 @@
 	"caustica.options.voxy.chunks": "%s chunks",
 	"caustica.options.voxy.refresh": "Reconstruir LODs do Voxy",
 	"caustica.options.voxy.refresh.queued": "Reconstrução do Voxy na fila",
-	"caustica.options.voxy.refresh.unavailable": "Voxy indisponível"
+	"caustica.options.voxy.refresh.unavailable": "Voxy indisponível",
+	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Frame Generation via motor próprio do Caustica: essa GPU não tem DLSS Frame Generation (só séries RTX 40/50), então o motor nativo de interpolação por motion vectors do Caustica assume no lugar — mesmo botão, multiplicador até 4x. Custa um pouco mais de GPU e latência."
 }

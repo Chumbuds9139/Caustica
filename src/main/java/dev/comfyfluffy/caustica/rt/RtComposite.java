@@ -67,6 +67,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFgSkyMaskPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFgUiCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGenPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSpatialDenoisePipeline;
@@ -431,6 +432,9 @@ public final class RtComposite {
     // duplicating the real frame instead of blending against garbage.
     private RtNativeFrameGenPipeline nativeFgPipeline;
     private boolean nativeFgFailed;
+    // SDR UI re-composite for native FG's generated frames (HDR reuses hdrCompositePipeline).
+    private RtFgUiCompositePipeline fgUiCompositePipeline;
+    private boolean fgUiCompositeFailed;
     // frameCounter of the last native-FG interpolation; a gap (> 2 composite frames) means the
     // stored previous frame no longer neighbours the current one (menu/loading/toggle gap) and
     // must be dropped before blending. -1 = never ran.
@@ -2363,6 +2367,10 @@ public final class RtComposite {
             fgSkyMaskPipeline.destroy();
             fgSkyMaskPipeline = null;
         }
+        if (fgUiCompositePipeline != null) {
+            fgUiCompositePipeline.destroy();
+            fgUiCompositePipeline = null;
+        }
         taaHasPrev = false;
         prevProjectionValid = false;
         if (displayImage != null) {
@@ -2557,11 +2565,12 @@ public final class RtComposite {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
 
-            // DLSS-FG "hudless" capture: hdrDisplayImage right now holds the RT world before the combined
+            // FG "hudless" capture: hdrDisplayImage right now holds the RT world before the combined
             // UI overlay is blended in. Snapshot it before that composite overwrites it in place, mirroring
             // captureFgHudless's SDR pattern (pre-UI copy) but reusing this frame's already-open command
-            // buffer.
-            if (RtDlssFg.enabled()) {
+            // buffer. Both DLSS-FG (hudless resource) and the native engine (interpolation source +
+            // UI re-composite) consume it.
+            if (fgHudlessNeeded()) {
                 captureFgHdrHudless(cmd, stack, src);
             }
 
@@ -2776,7 +2785,7 @@ public final class RtComposite {
      * copy the ALREADY-composited backbuffer, which is useless as a distinct hudless input.
      */
     public void captureFgHudless(RenderTarget main) {
-        if (!RtDlssFg.enabled() || !RtUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
+        if (!fgHudlessNeeded() || !RtUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
             return;
         }
         RtContext ctx = RtContext.currentOrNull();
@@ -3066,11 +3075,21 @@ public final class RtComposite {
             if (fgInterp.length != count) {
                 throw new IllegalStateException("native FG interp targets mismatch: " + fgInterp.length + " != " + count);
             }
-            // Current frame as an owned GENERAL image: SDR blits the main target (TRANSFER_SRC, no
-            // contractual format) into the RGBA8 copy; HDR's PQ backbuffer is already ours.
+            // Source selection — HUD-LESS whenever the UI overlay redirect captured one this tick
+            // (hand, screen effects and GUI live on the overlay, not in the world image): the
+            // interpolation then never sees screen-fixed content, so it cannot wobble the hotbar /
+            // hand / overlays — the UI is stamped back onto every generated frame afterwards (see
+            // the composite passes below). Without a hudless capture (overlay latched off), fall
+            // back to interpolating the final frame as-is.
+            RtImage hudless = hdrBackbuffer ? fgHdrHudlessImage : fgHudlessImage;
+            boolean hudlessReady = hudless != null && hudless.width == swapW && hudless.height == swapH;
             long curView;
             long curImage;
-            if (!hdrBackbuffer) {
+            if (hudlessReady) {
+                curView = hudless.view;
+                curImage = hudless.image;
+            } else if (!hdrBackbuffer) {
+                // SDR fallback: main target (TRANSFER_SRC, no contractual format) into the owned copy.
                 recordFgBackbufferCopy(ctx, enc, backbufferImage, swapW, swapH);
                 curView = fgBackbufferCopy.view;
                 curImage = fgBackbufferCopy.image;
@@ -3106,7 +3125,8 @@ public final class RtComposite {
             VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 if (hadPrev) {
-                    // Make the cur copy (previous command buffer) and last tick's prev-frame write visible.
+                    // Make the cur source (captured earlier this frame) and last tick's prev-frame
+                    // write visible.
                     VulkanCommandEncoder.memoryBarrier(cmd, stack);
                     for (int k = 0; k < count; k++) {
                         float t = (k + 1.0f) / (count + 1.0f);
@@ -3121,6 +3141,33 @@ public final class RtComposite {
                         for (int k = 0; k < count; k++) {
                             fgSkyMaskPipeline.dispatch(cmd, fgInterp[k].view, curView, gDepth.view,
                                     swapW, swapH, renderW, renderH, hdrBackbuffer);
+                        }
+                    }
+                    // UI re-composite (hudless path only): stamp this tick's overlay — hand, GUI,
+                    // screen effects, mod overlays — onto every generated frame, identical across the
+                    // group, which is what stops screen-fixed content from wobbling.
+                    long overlayView = hudlessReady ? RtUiOverlay.overlayColorView() : 0L;
+                    boolean uiReady = overlayView != 0L
+                            && RtUiOverlay.overlayWidth() == swapW && RtUiOverlay.overlayHeight() == swapH;
+                    if (uiReady && ensureUiSampler(ctx)) {
+                        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                        if (hdrBackbuffer) {
+                            ensureHdrUiResources();
+                            if (hdrCompositePipeline != null) {
+                                for (int k = 0; k < count; k++) {
+                                    hdrCompositePipeline.setImages(fgInterp[k].view, overlayView, hdrUiSampler);
+                                    hdrCompositePipeline.dispatch(cmd, swapW, swapH,
+                                            CausticaConfig.Rt.Hdr.paperWhiteNits());
+                                }
+                            }
+                        } else {
+                            ensureFgUiComposite(ctx);
+                            if (fgUiCompositePipeline != null) {
+                                for (int k = 0; k < count; k++) {
+                                    fgUiCompositePipeline.dispatch(cmd, fgInterp[k].view, overlayView,
+                                            hdrUiSampler, swapW, swapH);
+                                }
+                            }
                         }
                     }
                     // Interp reads of fgPrevFrame are done; the advance below may overwrite it.
@@ -3277,6 +3324,28 @@ public final class RtComposite {
             nativeFgFailed = true;
             CausticaMod.LOGGER.error("native FG pipeline creation failed; frame generation disabled", t);
         }
+    }
+
+    /** Lazily create the SDR UI re-composite pipeline for native FG's generated frames. */
+    private void ensureFgUiComposite(RtContext ctx) {
+        if (fgUiCompositePipeline != null || fgUiCompositeFailed) {
+            return;
+        }
+        try {
+            fgUiCompositePipeline = RtFgUiCompositePipeline.create(ctx);
+        } catch (Throwable t) {
+            fgUiCompositeFailed = true;
+            CausticaMod.LOGGER.error("FG UI composite pipeline creation failed; generated frames stay HUD-less", t);
+        }
+    }
+
+    /**
+     * Whether the FG stack needs the pre-UI ("hudless") snapshot of the frame this tick: DLSS-FG
+     * consumes it as its hudless resource, and the native engine interpolates it (then stamps the
+     * UI overlay back onto every generated frame) so screen-fixed content doesn't wobble.
+     */
+    private static boolean fgHudlessNeeded() {
+        return RtDlssFg.enabled() || RtNativeFrameGen.enabled();
     }
 
     /** Owned previous-frame history target for the native FG interpolator (see fgPrevFrame's docs). */

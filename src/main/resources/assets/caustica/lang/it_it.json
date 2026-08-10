@@ -136,5 +136,6 @@
 	"caustica.options.rt.debugHeader": "Debug",
 	"caustica.options.rt.dhHeader": "Distant Horizons",
 	"caustica.options.rt.exposureHeader": "Exposure",
-	"caustica.options.rt.tonemapOperator.psychov": "Psychov"
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov",
+	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Frame Generation tramite il motore proprietario di Caustica: questa GPU non ha DLSS Frame Generation (solo serie RTX 40/50), quindi subentra il motore nativo di interpolazione con motion vector di Caustica — stesso interruttore, moltiplicatore fino a 4x. Costa un po' più di GPU e latenza."
 }

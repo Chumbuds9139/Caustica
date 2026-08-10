@@ -136,5 +136,6 @@
 	"caustica.options.rt.debugHeader": "Debug",
 	"caustica.options.rt.dhHeader": "Distant Horizons",
 	"caustica.options.rt.exposureHeader": "Exposure",
-	"caustica.options.rt.tonemapOperator.psychov": "Psychov"
+	"caustica.options.rt.tonemapOperator.psychov": "Psychov",
+	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Caustica 자체 엔진을 통한 프레임 생성: 이 GPU에는 DLSS Frame Generation이 없으므로(RTX 40/50 시리즈 전용), Caustica의 네이티브 모션 벡터 보간 엔진이 대신합니다 — 동일한 토글, 배율은 최대 4x. GPU 부하와 지연이 약간 늘어납니다."
 }

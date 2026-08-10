@@ -621,16 +621,15 @@ public final class RtVideoOptions {
         }
         CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
         boolean supported = RtUpscalerSupport.dlssFrameGenerationSupported();
-        // active=false greys the button out and blocks clicks but leaves hover (and therefore the
-        // tooltip) intact, which is exactly the "visible but unavailable" state the gate wants.
+        // DLSS-G hardware (RTX 40/50) uses the vendor engine; every other GPU falls back to the
+        // Caustica native engine instead of greying the toggle out (the old "unsupported" state).
         Button button = Button.builder(frameGenerationLabel(), clicked -> {
             setting.set(!setting.value());
             clicked.setMessage(frameGenerationLabel());
         }).width(310).build();
-        button.active = supported;
         button.setTooltip(Tooltip.create(Component.translatable(supported
                 ? "caustica.options.rt.frameGeneration.tooltip"
-                : "caustica.options.rt.frameGeneration.unsupported.tooltip")));
+                : "caustica.options.rt.frameGeneration.nativeFallback.tooltip")));
         return button;
     }
 
@@ -707,13 +706,13 @@ public final class RtVideoOptions {
 
     private static Component fgMultiplierLabel() {
         // Show the EFFECTIVE multiplier (config clamped to what the backend can produce), so a stale
-        // high config value from a previous build doesn't mislead.
-        String mode = RtUpscalerSupport.currentUpscalerMode();
+        // high config value from a previous build doesn't mislead. Native engine first: it wins
+        // wherever it's active (FSR 3 / XeSS default, and the DLSS-path fallback on non-DLSS-G GPUs).
         int effective;
-        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
-            effective = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-        } else if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+        if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
             effective = dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.INSTANCE.effectiveGeneratedCount();
+        } else if (RtUpscalerSupport.MODE_DLSS.equals(RtUpscalerSupport.currentUpscalerMode())) {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
         } else {
             effective = dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
         }
