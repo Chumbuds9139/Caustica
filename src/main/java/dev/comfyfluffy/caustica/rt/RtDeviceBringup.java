@@ -481,8 +481,26 @@ public final class RtDeviceBringup {
         return CausticaConfig.Rt.Omm.ENABLED.value();
     }
 
+    /**
+     * Reflex's features change no other behavior, so they are NOT gated on the reflex.enabled
+     * config — requesting VK_NV_low_latency2 (+ present_id) up front whenever the device supports
+     * them is what lets the Video Settings toggle engage Reflex LIVE, without a restart. Device
+     * extensions are a vkCreateDevice-time-only decision: gating the request on the runtime toggle
+     * (default off) meant the extension was never requested, and the toggle could never turn on —
+     * the "not enabled on this device" grey button. Same pattern as XeSS below.
+     */
     private static boolean reflexRequested() {
-        return CausticaConfig.Rt.Reflex.ENABLED.value();
+        return true;
+    }
+
+    /**
+     * XeSS's features change no other behavior, so they are NOT gated on the xess.enabled config —
+     * enabling them up front is what lets the upscaler be flipped on live from Video Settings
+     * without a restart (a vkCreateDevice-time-only decision otherwise). The gates are platform
+     * (bundled Windows runtime) + device support, queried below.
+     */
+    private static boolean xessRequested() {
+        return XessRuntime.platformSupported();
     }
 
     /**
