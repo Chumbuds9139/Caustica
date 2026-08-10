@@ -173,6 +173,12 @@ abstract class CompileShaders extends DefaultTask {
 				}
 			} else {
 				compileOne(src, spv, [])
+				if (base == "fg_sky_mask.comp") {
+					// The FG outputs are rgba8 (SDR) or rgba16f (HDR); compile the format variant
+					// of the sky-mask shader from the same source (ifdef switch on the layouts).
+					compileOne(src, new File(scratchDir, "fg_sky_mask_rgba8.comp.spv"),
+							["-DCAUSTICA_FG_MASK_RGBA8"])
+				}
 			}
 		}
 		outDirFile.mkdirs()

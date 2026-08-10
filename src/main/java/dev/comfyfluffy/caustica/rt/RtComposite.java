@@ -66,6 +66,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFgSkyMaskPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSpatialDenoisePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
@@ -456,6 +457,8 @@ public final class RtComposite {
     private RtImage spatialPing;
     private RtImage spatialPong;
     private RtSpatialDenoisePipeline spatialPipeline;
+    /** Sky-mask pass over FSR FG's generated frames (see RtFgSkyMaskPipeline); created lazily. */
+    private RtFgSkyMaskPipeline fgSkyMaskPipeline;
     private boolean renderSizeSpatialEnabled;
     // NRD/REBLUR: the denoiser's own input/output pair + the combined (decoded + summed) radiance
     // the upscale stage consumes, plus the validation overlay target and the combine pipeline.
@@ -2337,6 +2340,10 @@ public final class RtComposite {
             spatialPipeline.destroy();
             spatialPipeline = null;
         }
+        if (fgSkyMaskPipeline != null) {
+            fgSkyMaskPipeline.destroy();
+            fgSkyMaskPipeline = null;
+        }
         taaHasPrev = false;
         prevProjectionValid = false;
         if (displayImage != null) {
@@ -2998,6 +3005,23 @@ public final class RtComposite {
                     -fgJitterX, -fgJitterY, fovY,
                     camPosF, camUpF, camRightF, camForwardF,
                     presentImage, presentFmt, outputs, count, swapW, swapH, hdrBackbuffer);
+            // Sky mask right after the generate, in the same command buffer: FG's block-based
+            // interpolation breaks on sky pixels (~0 depth + textureless gradients + 1-SPP hot
+            // samples) and emits black blocks and gray smudges there — the sky flicker the player
+            // sees whenever the sky is on screen. Every sky pixel of each generated frame is
+            // replaced with the real frame's sky (see RtFgSkyMaskPipeline). The barrier makes the
+            // FFX output writes visible to the mask's read-modify-write.
+            ensureFgSkyMask(ctx);
+            if (ok && fgSkyMaskPipeline != null) {
+                try (MemoryStack maskStack = MemoryStack.stackPush()) {
+                    VulkanCommandEncoder.memoryBarrier(cmd, maskStack);
+                    long maskPresentView = hdrBackbuffer ? hdrBackbufferView() : fgBackbufferCopy.view;
+                    for (int i = 0; i < count; i++) {
+                        fgSkyMaskPipeline.dispatch(cmd, fgInterp[i].view, maskPresentView, gDepth.view,
+                                swapW, swapH, renderW, renderH, hdrBackbuffer);
+                    }
+                }
+            }
             if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(fsr fg) failed");
             }
@@ -3066,5 +3090,26 @@ public final class RtComposite {
                 "FG backbuffer copy " + w + "x" + h);
         fgBackbufferCopyW = w;
         fgBackbufferCopyH = h;
+    }
+
+    /** Set when the sky-mask pipeline failed to create; the mask is skipped for the session. */
+    private boolean fgSkyMaskFailed;
+
+    /**
+     * Lazily create the FG sky-mask pipeline on first FG use (FG toggles at runtime, so it can't
+     * ride the resource-creation block). Failure degrades gracefully: generated frames keep the
+     * raw FG sky (the pre-mask artifact state) instead of killing FG entirely.
+     */
+    private void ensureFgSkyMask(RtContext ctx) {
+        if (fgSkyMaskPipeline != null || fgSkyMaskFailed) {
+            return;
+        }
+        try {
+            fgSkyMaskPipeline = RtFgSkyMaskPipeline.create(ctx);
+            CausticaMod.LOGGER.info("FG sky mask active (generated frames copy the real frame's sky)");
+        } catch (Throwable t) {
+            fgSkyMaskFailed = true;
+            CausticaMod.LOGGER.error("FG sky mask pipeline creation failed; generated frames keep raw FG sky", t);
+        }
     }
 }
