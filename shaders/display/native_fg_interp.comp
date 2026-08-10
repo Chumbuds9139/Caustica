@@ -11,16 +11,14 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 // The SDR generated frames are rgba8, the HDR ones rgba16f — compiled to two SPIR-V variants
 // (see the compileShaders task; -DCAUSTICA_NFG_RGBA8 picks this one).
 #ifdef CAUSTICA_NFG_RGBA8
-layout(binding = 0, rgba8)   uniform writeonly image2D outImg;
-layout(binding = 1, rgba8)   uniform readonly  image2D curFrame;
-layout(binding = 2, rgba8)   uniform readonly  image2D prevFrame;
-#define IMGTYPE rgba8 image2D
+#define IMG_FMT rgba8
 #else
-layout(binding = 0, rgba16f) uniform writeonly image2D outImg;
-layout(binding = 1, rgba16f) uniform readonly  image2D curFrame;
-layout(binding = 2, rgba16f) uniform readonly  image2D prevFrame;
-#define IMGTYPE rgba16f image2D
+#define IMG_FMT rgba16f
 #endif
+
+layout(binding = 0, IMG_FMT) uniform writeonly image2D outImg;
+layout(binding = 1, IMG_FMT) uniform readonly  image2D curFrame;
+layout(binding = 2, IMG_FMT) uniform readonly  image2D prevFrame;
 layout(binding = 3, rg16f)   uniform readonly  image2D motion; // render-res MVs, prev - current (render px)
 
 layout(push_constant) uniform Push {
@@ -33,12 +31,15 @@ layout(push_constant) uniform Push {
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
-vec3 fetchColor(IMGTYPE img, ivec2 p, ivec2 size) {
+// Helper parameters carry the same readonly + format qualifiers as the globals they receive:
+// GLSL treats the access/format qualifiers as part of the image type, so a readonly rgba8 image
+// only matches a readonly rgba8 image parameter.
+vec3 fetchColor(readonly IMG_FMT image2D img, ivec2 p, ivec2 size) {
     p = clamp(p, ivec2(0), size - ivec2(1, 1));
     return imageLoad(img, p).rgb;
 }
 
-vec3 bilinearColor(IMGTYPE img, vec2 uv, ivec2 size) {
+vec3 bilinearColor(readonly IMG_FMT image2D img, vec2 uv, ivec2 size) {
     vec2 px = uv * vec2(size) - 0.5;
     ivec2 p0 = ivec2(floor(px));
     vec2 f = clamp(fract(px), vec2(0.0), vec2(1.0));
