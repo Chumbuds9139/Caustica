@@ -76,6 +76,11 @@ public final class RtFsrFrameGen {
     private boolean resetRequested = true;
     private long frameId;
     private long lastFrameNanos;
+    // Multiplier the FG temporal state was last configured for. Changing the generated-frame count
+    // at runtime (user flips 2x->4x->5x in the menu) shifts the interpolation cadence, so FG gets a
+    // clean reset on the transition instead of interpolating across a mismatched cadence. This is
+    // what lets the multiplier change take effect live, without a game restart.
+    private int lastNumGenerated = -1;
 
     private int contextDisplayWidth = -1;
     private int contextDisplayHeight = -1;
@@ -187,6 +192,8 @@ public final class RtFsrFrameGen {
                     throw new IllegalStateException("fsrshim_fg_prepare failed: " + rc + " last=" + lib.lastResult());
                 }
 
+                boolean multiplierChanged = lastNumGenerated > 0 && lastNumGenerated != numGenerated;
+                lastNumGenerated = numGenerated;
                 MemorySegment outArray = arena.allocate(ValueLayout.JAVA_LONG, numGenerated);
                 for (int i = 0; i < numGenerated; i++) {
                     outArray.setAtIndex(ValueLayout.JAVA_LONG, i, outputs[i]);
@@ -195,7 +202,7 @@ public final class RtFsrFrameGen {
                         presentImage, presentFormat,
                         outArray, presentFormat, numGenerated,
                         width, height, frameId,
-                        hdr ? TRANSFER_PQ : TRANSFER_SRGB, resetRequested ? 1 : 0);
+                        hdr ? TRANSFER_PQ : TRANSFER_SRGB, (resetRequested || multiplierChanged) ? 1 : 0);
                 if (rc != 0) {
                     throw new IllegalStateException("fsrshim_fg_generate failed: " + rc + " last=" + lib.lastResult());
                 }
