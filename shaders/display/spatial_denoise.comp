@@ -11,6 +11,7 @@ layout(push_constant) uniform Push {
     int width;
     int height;
     int step;    // à-trous tap spacing (1, 2, ...): the wavelet doubles its reach per pass
+    int extraSkySmooth; // 1 = frame generation is presenting frames this frame (see sigmaL below)
 } pc;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -50,7 +51,16 @@ void main() {
     vec3 nc = imageLoad(normal, pix).rgb;
     bool centerSky = isSkyPixel(zc, nc);
 
-    float sigmaL = 0.08 + 0.35 * lc; // HDR-adaptive: bright regions tolerate brighter taps
+    // HDR-adaptive: bright regions tolerate brighter taps. When frame generation is presenting,
+    // the sky additionally smooths harder: FG interpolates between presented frames, and any
+    // per-frame residual sky noise (1-SPP grain the temporal stage hasn't converged yet, worst
+    // while the camera moves) gets amplified into visible sky flicker by the interpolation. The
+    // extra blur is free in a region with no fine geometry detail; the sun/moon keep their edge
+    // through the luminance weight (sky-vs-disc contrast is high). Off when FG isn't presenting,
+    // so the plain path keeps maximum sky crispness.
+    float sigmaL = (centerSky && pc.extraSkySmooth != 0)
+            ? (0.15 + 0.5 * lc)
+            : (0.08 + 0.35 * lc);
     float wsum = 0.0;
     vec3 csum = vec3(0.0);
     for (int dy = -2; dy <= 2; dy++) {

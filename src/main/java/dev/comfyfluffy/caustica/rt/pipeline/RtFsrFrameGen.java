@@ -93,6 +93,9 @@ public final class RtFsrFrameGen {
     private boolean resetRequested = true;
     private long frameId;
     private long lastFrameNanos;
+    // EMA-smoothed frame interval (see prepareAndGenerate): FG times its interpolation from the
+    // frame delta, and this renderer's low/variable real framerates make the raw delta wobble.
+    private float smoothedFrameMs;
     // Multiplier the FG temporal state was last configured for. Changing the generated-frame count
     // at runtime (user flips 2x->4x->5x in the menu) shifts the interpolation cadence, so FG gets a
     // clean reset on the transition instead of interpolating across a mismatched cadence. This is
@@ -193,9 +196,18 @@ public final class RtFsrFrameGen {
         }
         try {
             long now = System.nanoTime();
-            float frameMs = lastFrameNanos == 0 ? 16.6f
+            float rawFrameMs = lastFrameNanos == 0 ? 16.6f
                     : Math.clamp((now - lastFrameNanos) / 1_000_000.0f, 0.1f, 200.0f);
             lastFrameNanos = now;
+            // EMA-smooth the frame interval before handing it to FG: at the low/variable real
+            // framerates this renderer runs at (~30fps on a 2060), the raw delta wobbles
+            // frame-to-frame, and FSR FG times its interpolation from it — a jittery delta makes
+            // the generated frames' positions wobble too, a flicker that reads worst on large
+            // uniform regions like the sky. A light EMA stabilises the timing signal while still
+            // tracking genuine pace changes within a few frames.
+            smoothedFrameMs = smoothedFrameMs <= 0.0f ? rawFrameMs
+                    : 0.75f * smoothedFrameMs + 0.25f * rawFrameMs;
+            float frameMs = smoothedFrameMs;
             frameId++;
 
             try (Arena arena = Arena.ofConfined()) {
@@ -275,6 +287,7 @@ public final class RtFsrFrameGen {
         contextRenderHeight = -1;
         contextFormat = Integer.MIN_VALUE;
         lastFrameNanos = 0;
+        smoothedFrameMs = 0.0f; // fresh context restarts the timing EMA too
     }
 
     private static boolean isNull(MemorySegment segment) {

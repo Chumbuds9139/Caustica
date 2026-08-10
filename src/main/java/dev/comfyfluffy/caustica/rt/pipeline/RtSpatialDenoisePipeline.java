@@ -38,8 +38,8 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
  */
 public final class RtSpatialDenoisePipeline {
     private static final String SHADER_DIR = "/caustica/rt/";
-    /** Push: int width, int height, int step. */
-    private static final int PUSH_BYTES = 3 * Integer.BYTES;
+    /** Push: int width, int height, int step, int extraSkySmooth. */
+    private static final int PUSH_BYTES = 4 * Integer.BYTES;
 
     private final RtContext ctx;
     private final long descriptorSetLayout;
@@ -134,8 +134,13 @@ public final class RtSpatialDenoisePipeline {
         boundNormal = normalView;
     }
 
-    /** One à-trous pass; call with step 1 then step 2 (ping-ponging the images between passes). */
-    public void dispatch(VkCommandBuffer cmd, int width, int height, int step) {
+    /**
+     * One à-trous pass; call with step 1 then step 2 (ping-ponging the images between passes).
+     * {@code extraSkySmooth} (0/1) tells the shader that frame generation is presenting this
+     * frame, so the sky should smooth harder — FG amplifies residual per-frame sky noise into
+     * visible flicker (see the shader's sigmaL comment).
+     */
+    public void dispatch(VkCommandBuffer cmd, int width, int height, int step, int extraSkySmooth) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "spatial denoise step " + step)) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -145,6 +150,7 @@ public final class RtSpatialDenoisePipeline {
             push.putInt(0, width);
             push.putInt(4, height);
             push.putInt(8, step);
+            push.putInt(12, extraSkySmooth);
             VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
         }

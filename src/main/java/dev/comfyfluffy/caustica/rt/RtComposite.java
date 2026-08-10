@@ -1620,14 +1620,18 @@ public final class RtComposite {
             boolean spatialPath = !rrPath && !nrdDone && !nrdValidationOn
                     && CausticaConfig.Rt.Spatial.ENABLED.value() && debugView == 0;
             if (spatialPath && spatialPipeline != null && spatialPing != null) {
+                // FG amplifies residual per-frame sky noise into visible sky flicker (it
+                // interpolates between presented frames), so the sky smooths harder whenever the
+                // presenter will actually show generated frames this tick.
+                int extraSkySmooth = RtFramePresenter.INSTANCE.isActive() ? 1 : 0;
                 VulkanCommandEncoder.memoryBarrier(cmd, stack); // trace output visible to the denoise
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "spatial denoise");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.spatialDenoise")) {
                     spatialPipeline.setImages(output.view, spatialPing.view, gDepth.view, gNormal.view);
-                    spatialPipeline.dispatch(cmd, renderW, renderH, 1);
+                    spatialPipeline.dispatch(cmd, renderW, renderH, 1, extraSkySmooth);
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // pass 1 output visible to pass 2
                     spatialPipeline.setImages(spatialPing.view, spatialPong.view, gDepth.view, gNormal.view);
-                    spatialPipeline.dispatch(cmd, renderW, renderH, 2);
+                    spatialPipeline.dispatch(cmd, renderW, renderH, 2, extraSkySmooth);
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // denoised output visible downstream
                 }
                 upscaleSource = spatialPong;
