@@ -70,7 +70,7 @@
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "이 GPU에서는 사용할 수 없습니다: DLSS Frame Generation은 NVIDIA GeForce RTX 40/50 시리즈 그래픽 카드가 필요합니다. NGX가 활성화되어 있으면 드라이버의 NGX 기능 쿼리로, 그 외에는 GPU 이름으로 지원 여부를 판단합니다.",
 	"caustica.options.rt.frameGeneration.fsr.tooltip": "AMD FSR 3.1 프레임 생성 (실험적): 실제로 렌더링된 프레임 사이에 중간 프레임을 합성하여 체감 프레임률을 곱절로 늘립니다. 모든 GPU에서 작동하지만 GPU 부하와 약간의 지연이 늘어납니다. 아래 배율 선택기와 함께 사용하세요.",
 	"caustica.options.rt.fgMultiplier": "FG 배율",
-	"caustica.options.rt.fgMultiplier.tooltip": "렌더링된 프레임당 디스플레이에 표시할 프레임 수 (2x/4x/6x). 높을수록 부드러운 대신 GPU 부하와 지연이 커집니다. 각 백엔드는 자체 한계로 제한됩니다: FSR은 5x까지 (FFX API 제한), DLSS는 드라이버가 보고하는 최대치까지.",
+	"caustica.options.rt.fgMultiplier.tooltip": "렌더링된 프레임당 디스플레이가 받는 프레임 수(2x/3x). 높을수록 GPU 작업과 지연을 대가로 더 부드러운 움직임. 3x로 제한됨 — 그 이상 프레임을 생성하면 레이 트레이싱 이미지에서 플리커와 시각적 아티팩트가 발생합니다.",
 	"caustica.options.rt.debugView": "디버그 보기",
 	"caustica.options.rt.debugView.tooltip": "최종 이미지 대신 중간 레이 트레이싱 버퍼를 시각화합니다.",
 	"caustica.options.rt.debugView.0": "꺼짐",

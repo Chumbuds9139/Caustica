@@ -36,6 +36,14 @@ public final class RtFsrFrameGen {
     public static final int MAX_GENERATED_FRAMES = 4;
 
     /**
+     * Practical stability cap. Generating more than 2 interpolated frames per rendered frame
+     * produces escalating flicker and, at 4 generated frames, outright corrupted/colorful frames on
+     * top of the noisy 1-SPP RT input (user-confirmed: 2x smooth, 4x flickers, 5x/6x corrupts).
+     * Capped at 2 generated frames (= 3x) — the highest multiplier that stays stable.
+     */
+    public static final int STABLE_MAX_GENERATED_FRAMES = 2;
+
+    /**
      * FG is opted into through the shared {@code caustica.rt.fg} toggle, and rides when FSR 3 OR
      * XeSS is the selected upscaler — same "FG rides on the selected upscaler" contract as the
      * DLSS path. XeSS has no Frame Generation of its own on Vulkan (Intel's XeSS-FG/XeLL are
@@ -91,9 +99,9 @@ public final class RtFsrFrameGen {
     private RtFsrFrameGen() {
     }
 
-    /** Generated-frame count the player asked for, clamped to the FFX API cap (>=1 once clamped). */
+    /** Generated-frame count the player asked for, clamped to the stability cap (>=1 once clamped). */
     public int effectiveGeneratedCount() {
-        return Math.clamp(CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value(), 1, MAX_GENERATED_FRAMES);
+        return Math.clamp(CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value(), 1, STABLE_MAX_GENERATED_FRAMES);
     }
 
     public boolean isReady() {

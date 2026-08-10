@@ -70,7 +70,7 @@
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "このGPUでは使用できません：DLSS Frame GenerationにはNVIDIA GeForce RTX 40/50シリーズのカードが必要です。NGXが有効なときはドライバーのNGX機能クエリで、それ以外はGPU名で対応状況を判定します。",
 	"caustica.options.rt.frameGeneration.fsr.tooltip": "AMD FSR 3.1によるフレーム生成（実験的）：実際にレンダリングされたフレームの間に中間フレームを合成し、表示上のフレームレートを倍増させます。どんなGPUでも動作しますが、追加のGPU負荷とわずかな遅延が発生します。下の倍率セレクターと組み合わせてください。",
 	"caustica.options.rt.fgMultiplier": "FG倍率",
-	"caustica.options.rt.fgMultiplier.tooltip": "レンダリングされた1フレームごとに表示へ送るフレーム数（2x/4x/6x）。高いほど滑らかになりますが、GPU負荷と遅延が増えます。各バックエンドには上限があります：FSRは5xまで（FFX APIの制限）、DLSSはドライバー報告の最大値まで。",
+	"caustica.options.rt.fgMultiplier.tooltip": "レンダリングされたフレームごとに表示されるフレーム数（2x/3x）。高いほどGPU負荷と遅延を増やして滑らかな動きになります。3xが上限です。それ以上フレームを生成すると、レイトレース画像にフリッカーや視覚アーティファクトが発生します。",
 	"caustica.options.rt.debugView": "デバッグ表示",
 	"caustica.options.rt.debugView.tooltip": "最終画像の代わりに、レイトレーシングの中間バッファを可視化します。",
 	"caustica.options.rt.debugView.0": "オフ",

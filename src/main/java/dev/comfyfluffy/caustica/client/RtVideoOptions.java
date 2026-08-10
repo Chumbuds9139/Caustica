@@ -640,13 +640,13 @@ public final class RtVideoOptions {
                 Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
     }
 
-    // Multiplier options as configured generated-frame counts: 2x=1, 4x=3, 6x=5. Each backend clamps
-    // to what it can actually produce (FSR: the FFX API's 4 generated frames per dispatch = 5x; DLSS:
-    // the driver-reported MFG maximum) — the tooltip says so, the presenter applies the clamp.
-    private static final int[] FG_MULTIPLIER_OPTIONS = { 1, 3, 5 };
+    // Multiplier options as configured generated-frame counts: 2x=1, 3x=2. Higher multipliers are
+    // intentionally not offered: generating >2 frames per rendered frame produces escalating flicker
+    // and corrupted/colorful frames on the noisy 1-SPP RT input (see RtFsrFrameGen's stability cap).
+    private static final int[] FG_MULTIPLIER_OPTIONS = { 1, 2 };
 
     /**
-     * The FG multiplier selector (2x/4x/6x): how many frames the display receives per rendered frame.
+     * The FG multiplier selector (2x/3x): how many frames the display receives per rendered frame.
      * Visible alongside {@link #frameGenerationButton()} on the DLSS, FSR 3 and XeSS paths.
      */
     public static Button fgMultiplierButton() {
@@ -673,9 +673,12 @@ public final class RtVideoOptions {
     }
 
     private static Component fgMultiplierLabel() {
+        // Show the EFFECTIVE multiplier (config clamped to the stability cap), so a stale high config
+        // value from a previous build doesn't mislead.
+        int effective = dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.fgMultiplier"),
-                Component.literal((CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value() + 1) + "x"));
+                Component.literal((effective + 1) + "x"));
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {

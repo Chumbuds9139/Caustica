@@ -2830,8 +2830,9 @@ public final class RtComposite {
      */
     /**
      * Generated-frame count the active FG backend will actually produce this frame: DLSS clamps to
-     * the driver-reported MFG maximum, FSR to the FFX API's 4-outputs-per-dispatch cap. Called by
-     * the present hooks ({@code VulkanGpuSurfaceMixin}) instead of the DLSS-only getter.
+     * the driver-reported MFG maximum, FSR to its stability cap (2 generated frames = 3x — higher
+     * multipliers flicker/corrupt on the noisy RT input). Called by the present hooks
+     * ({@code VulkanGpuSurfaceMixin}) instead of the DLSS-only getter.
      */
     public static int fgGeneratedCount() {
         if (RtFsrFrameGen.enabled()) {

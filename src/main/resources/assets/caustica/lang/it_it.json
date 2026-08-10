@@ -70,7 +70,7 @@
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Non disponibile su questa GPU: DLSS Frame Generation richiede una scheda NVIDIA GeForce RTX delle serie 40 o 50. Il supporto proviene dalla query delle capacità NGX del driver quando è attiva, altrimenti dal nome della GPU.",
 	"caustica.options.rt.frameGeneration.fsr.tooltip": "Frame Generation tramite AMD FSR 3.1 (sperimentale): sintetizza fotogrammi intermedi tra quelli realmente renderizzati, moltiplicando il frame rate percepito sul display. Funziona su qualsiasi GPU, al costo di più lavoro GPU e un po' più di latenza. Da abbinare al selettore di moltiplicatore qui sotto.",
 	"caustica.options.rt.fgMultiplier": "Moltiplicatore FG",
-	"caustica.options.rt.fgMultiplier.tooltip": "Quanti fotogrammi riceve il display per ogni fotogramma renderizzato (2x/4x/6x). Più alto = movimento più fluido al costo di più GPU e latenza. Ogni backend è limitato al suo massimo: FSR fino a 5x (limite API FFX), DLSS fino al massimo riportato dal driver.",
+	"caustica.options.rt.fgMultiplier.tooltip": "Quanti fotogrammi riceve il tuo display per fotogramma renderizzato (2x/3x). Più alto = movimento più fluido al costo di più GPU e latenza. Limitato a 3x — generare più fotogrammi causa flickering e artefatti visivi nell'immagine ray-traced.",
 	"caustica.options.rt.debugView": "Vista di debug",
 	"caustica.options.rt.debugView.tooltip": "Visualizza un buffer intermedio del ray tracing invece dell'immagine finale.",
 	"caustica.options.rt.debugView.0": "Disattivato",

@@ -70,7 +70,7 @@
 	"caustica.options.rt.frameGeneration.unsupported.tooltip": "Indisponible sur ce GPU : DLSS Frame Generation nécessite une carte NVIDIA GeForce RTX des séries 40 ou 50. La prise en charge provient de la requête de capacités NGX du pilote lorsqu'elle est active, sinon du nom du GPU.",
 	"caustica.options.rt.frameGeneration.fsr.tooltip": "Frame Generation via AMD FSR 3.1 (expérimental) : synthétise des images intermédiaires entre les images réellement rendues, multipliant le taux d'images perçu à l'écran. Fonctionne sur tout GPU, au prix d'un surcoût GPU et d'un peu plus de latence. À combiner avec le sélecteur de multiplicateur ci-dessous.",
 	"caustica.options.rt.fgMultiplier": "Multiplicateur FG",
-	"caustica.options.rt.fgMultiplier.tooltip": "Combien d'images l'écran reçoit par image rendue (2x/4x/6x). Plus élevé = mouvement plus fluide, mais plus de GPU et de latence. Chaque backend est plafonné à son maximum : FSR jusqu'à 5x (limite de l'API FFX), DLSS jusqu'au maximum signalé par le pilote.",
+	"caustica.options.rt.fgMultiplier.tooltip": "Combien d'images votre écran reçoit par image rendue (2x/3x). Plus élevé = mouvement plus fluide au prix de plus de GPU et de latence. Plafonné à 3x — générer plus d'images provoque du scintillement et des artefacts visuels sur l'image raytracée.",
 	"caustica.options.rt.debugView": "Vue de débogage",
 	"caustica.options.rt.debugView.tooltip": "Visualise un tampon intermédiaire du lancer de rayons au lieu de l'image finale.",
 	"caustica.options.rt.debugView.0": "Désactivé",
