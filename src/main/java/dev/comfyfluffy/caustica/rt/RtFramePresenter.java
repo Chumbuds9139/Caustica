@@ -79,9 +79,10 @@ public final class RtFramePresenter {
 
     /**
      * Whether FG extra-present should run this frame (enabled, available, in a world). Backend
-     * follows the selected upscaler: DLSS-G under DLSS, FSR 3.1 FG under FSR 3 AND under XeSS
-     * (Intel's own FG is D3D12-only, so the FFX engine doubles as XeSS's frame-gen) — FSR FG has
-     * no hardware gate beyond the FSR runtime being bundled for this platform.
+     * follows the selected upscaler: DLSS-G under DLSS; under FSR 3 AND XeSS the default engine is
+     * Caustica's own motion-vector interpolation ({@code RtNativeFrameGen} — no external runtime,
+     * no hardware gate, works wherever the renderer runs), with the FSR 3.1 runtime as the
+     * fallback when the native engine is switched off ({@code frame-generation.native-engine}).
      */
     public boolean isActive() {
         if (failed || Minecraft.getInstance().level == null) {
@@ -89,6 +90,9 @@ public final class RtFramePresenter {
         }
         String mode = RtUpscalerSupport.currentUpscalerMode();
         if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+                return true;
+            }
             return RtFsrFrameGen.enabled()
                     && dev.comfyfluffy.caustica.fsr.FsrRuntime.platformSupported();
         }

@@ -642,10 +642,11 @@ public final class RtVideoOptions {
 
     /**
      * Generated-frame counts the ACTIVE backend can really produce. DLSS-G offers 1..driver MFG cap
-     * (probed from NGX). FSR 3.1 / XeSS offer exactly one: the FFX runtime only ever writes
-     * outputs[0] per dispatch (see RtFsrFrameGen.MAX_GENERATED_FRAMES), so there is nothing to
-     * choose — offering higher "multipliers" before was presenting never-written frames (the black
-     * blink + colorful corruption the player sees at 3x+).
+     * (probed from NGX). The Caustica native engine (default on the FSR 3 / XeSS paths) offers
+     * 1..its cap — it interpolates with the tracer's own motion vectors, so every slot is a real
+     * frame. The FSR 3.1 runtime fallback offers exactly one: it only ever writes outputs[0] per
+     * dispatch (see RtFsrFrameGen.MAX_GENERATED_FRAMES) — offering more there was presenting
+     * never-written frames (the black blink + colorful corruption of the 3x+ era).
      */
     private static int[] fgMultiplierOptions() {
         String mode = RtUpscalerSupport.currentUpscalerMode();
@@ -658,6 +659,14 @@ public final class RtVideoOptions {
                 }
                 return options;
             }
+        }
+        if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+            int max = dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.MAX_GENERATED_FRAMES;
+            int[] options = new int[max];
+            for (int i = 0; i < max; i++) {
+                options[i] = i + 1;
+            }
+            return options;
         }
         return new int[] { 1 };
     }
@@ -700,9 +709,14 @@ public final class RtVideoOptions {
         // Show the EFFECTIVE multiplier (config clamped to what the backend can produce), so a stale
         // high config value from a previous build doesn't mislead.
         String mode = RtUpscalerSupport.currentUpscalerMode();
-        int effective = RtUpscalerSupport.MODE_DLSS.equals(mode)
-                ? dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount()
-                : dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
+        int effective;
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+        } else if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.INSTANCE.effectiveGeneratedCount();
+        } else {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
+        }
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.fgMultiplier"),
                 Component.literal((effective + 1) + "x"));

@@ -67,6 +67,8 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFgSkyMaskPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen;
+import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGenPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSpatialDenoisePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
@@ -421,6 +423,23 @@ public final class RtComposite {
     private int fgBackbufferCopyW = -1;
     private int fgBackbufferCopyH = -1;
     private boolean fgReset = true;
+    // Caustica native frame generation: the motion-vector interpolation pipeline plus the previous
+    // presented frame it interpolates from. fgPrevFrame holds last tick's final image (same
+    // format/size as fgBackbufferCopy / the HDR backbuffer); the current frame is copied into it
+    // after each interpolation dispatch so the next tick can blend. fgPrevFrameValid is false until
+    // the first successful capture (and after any resize), which makes that tick fall back to
+    // duplicating the real frame instead of blending against garbage.
+    private RtNativeFrameGenPipeline nativeFgPipeline;
+    private boolean nativeFgFailed;
+    // frameCounter of the last native-FG interpolation; a gap (> 2 composite frames) means the
+    // stored previous frame no longer neighbours the current one (menu/loading/toggle gap) and
+    // must be dropped before blending. -1 = never ran.
+    private long fgNativeLastUseFrame = -1;
+    private RtImage fgPrevFrame;
+    private int fgPrevFrameW = -1;
+    private int fgPrevFrameH = -1;
+    private int fgPrevFrameFormat = Integer.MIN_VALUE;
+    private boolean fgPrevFrameValid;
     private final Matrix4f fgClipToPrev = new Matrix4f();
     private final Matrix4f fgPrevToClip = new Matrix4f();
     private final Matrix4f fgMatTmp = new Matrix4f();
@@ -2412,6 +2431,21 @@ public final class RtComposite {
         }
         fgBackbufferCopyW = -1;
         fgBackbufferCopyH = -1;
+        if (nativeFgPipeline != null) {
+            nativeFgPipeline.destroy();
+            nativeFgPipeline = null;
+        }
+        if (fgPrevFrame != null) {
+            fgPrevFrame.destroy();
+            fgPrevFrame = null;
+        }
+        fgPrevFrameW = -1;
+        fgPrevFrameH = -1;
+        fgPrevFrameFormat = Integer.MIN_VALUE;
+        fgPrevFrameValid = false;
+        nativeFgCamValid = false;
+        fgNativeLastUseFrame = -1;
+        fgNativeSeededTick = false;
         if (worldPipeline != null) {
             worldPipeline.destroy();
             worldPipeline = null;
@@ -2840,13 +2874,17 @@ public final class RtComposite {
      * consumes it differs, done separately by {@code presentHdr}/{@code RtUiOverlay}, not here).
      */
     /**
-     * Generated-frame count the active FG backend will actually produce this frame: DLSS clamps to
-     * the driver-reported MFG maximum; FSR 3.1 is hard-capped at 1 generated frame (= 2x) because
-     * that is all the FFX runtime writes (see RtFsrFrameGen.MAX_GENERATED_FRAMES) — presenting more
-     * would show never-written images. Called by the present hooks ({@code VulkanGpuSurfaceMixin})
-     * instead of the DLSS-only getter.
+     * Generated-frame count the active FG backend will actually produce this frame: the native
+     * engine clamps to its cap (up to 3 generated = 4x); FSR 3.1 is hard-capped at 1 generated
+     * frame (= 2x) because that is all the FFX runtime writes (see RtFsrFrameGen.MAX_GENERATED_FRAMES)
+     * — presenting more would show never-written images; DLSS clamps to the driver-reported MFG
+     * maximum. Called by the present hooks ({@code VulkanGpuSurfaceMixin}) instead of the
+     * DLSS-only getter.
      */
     public static int fgGeneratedCount() {
+        if (RtNativeFrameGen.enabled()) {
+            return RtNativeFrameGen.INSTANCE.effectiveGeneratedCount();
+        }
         if (RtFsrFrameGen.enabled()) {
             return RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
         }
@@ -2863,6 +2901,9 @@ public final class RtComposite {
             return null;
         }
         final int fmt = hdrBackbuffer ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
+        if (RtNativeFrameGen.enabled()) {
+            return fgInterpolateNative(ctx, enc, backbufferImage, swapW, swapH, index, count, hdrBackbuffer, fmt);
+        }
         if (RtFsrFrameGen.enabled()) {
             return fgInterpolateFsr(ctx, enc, backbufferImage, swapW, swapH, index, count, hdrBackbuffer, fmt);
         }
@@ -2956,45 +2997,7 @@ public final class RtComposite {
             long presentImage = backbufferImage;
             int presentFmt = fmt;
             if (!hdrBackbuffer) {
-                ensureFgBackbufferCopy(ctx, swapW, swapH);
-                VkCommandBuffer copyCmd = enc.allocateAndBeginTransientCommandBuffer();
-                try (MemoryStack copyStack = MemoryStack.stackPush()) {
-                    VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
-                    toDst.get(0).srcStageMask(0L).srcAccessMask(0L).dstStageMask(4096L).dstAccessMask(4096L)
-                            .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                            .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
-                    toDst.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-                    // The main target's TRANSFER_SRC state + contents were made available by MC's
-                    // barrier earlier in this encoder; a global memory dependency chains this blit
-                    // after it (same pattern the FG present blits use).
-                    VkMemoryBarrier2.Buffer srcVis = VkMemoryBarrier2.calloc(1, copyStack).sType$Default();
-                    srcVis.get(0).srcStageMask(1024L | 4096L).srcAccessMask(256L | 8L)
-                            .dstStageMask(4096L).dstAccessMask(8L);
-                    VkDependencyInfo dep1 = VkDependencyInfo.calloc(copyStack).sType$Default()
-                            .pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
-                    KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep1);
-                    // Straight (non-flipped) full-rect blit: orientation stays as-is here; the
-                    // Y-flip for the display happens when the generated frames hit the swapchain.
-                    VkImageBlit.Buffer region = VkImageBlit.calloc(1, copyStack);
-                    region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-                    region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-                    region.get(0).srcOffsets(1).set(swapW, swapH, 1);
-                    region.get(0).dstOffsets(1).set(swapW, swapH, 1);
-                    VK10.vkCmdBlitImage(copyCmd, backbufferImage, VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            fgBackbufferCopy.image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region,
-                            VK10.VK_FILTER_NEAREST);
-                    VkImageMemoryBarrier2.Buffer toGeneral = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
-                    toGeneral.get(0).srcStageMask(4096L).srcAccessMask(4096L).dstStageMask(65536L).dstAccessMask(98304L)
-                            .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                            .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
-                    toGeneral.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-                    VkDependencyInfo dep2 = VkDependencyInfo.calloc(copyStack).sType$Default().pImageMemoryBarriers(toGeneral);
-                    KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep2);
-                }
-                if (VK10.vkEndCommandBuffer(copyCmd) != VK10.VK_SUCCESS) {
-                    throw new IllegalStateException("vkEndCommandBuffer(fg backbuffer copy) failed");
-                }
-                enc.execute(copyCmd);
+                recordFgBackbufferCopy(ctx, enc, backbufferImage, swapW, swapH);
                 presentImage = fgBackbufferCopy.image;
                 presentFmt = VK10.VK_FORMAT_R8G8B8A8_UNORM;
             }
@@ -3036,6 +3039,126 @@ public final class RtComposite {
         }
         return fgInterp[index - 1];
     }
+
+    /**
+     * Caustica native FG branch of {@link #fgInterpolate}: motion-vector interpolation between the
+     * previous presented frame ({@link #fgPrevFrame}) and this frame's final image. At {@code index == 1}
+     * it records ALL {@code count} generated frames at times t = (k+1)/(count+1) between prev (t=0)
+     * and current (t=1); later indices just hand back the already-generated image. The renderer's
+     * jitter-free motion vectors are exact per pixel (entities included), so no optical flow is
+     * needed — the shader back-warps both real frames and blends them, with a forward/backward
+     * consistency check falling back toward the current frame at occlusion boundaries.
+     *
+     * <p>The seeding tick (no previous frame captured yet — first frame, resize, teleport) returns
+     * {@code null} for every index, which makes the presenter duplicate the real frame for just
+     * that tick; interpolation starts on the next one. Same routine-fallback contract as the other
+     * branches.
+     */
+    private RtImage fgInterpolateNative(RtContext ctx, VulkanCommandEncoder enc, long backbufferImage,
+            int swapW, int swapH, int index, int count, boolean hdrBackbuffer, int fmt) {
+        if (index == 1) {
+            fgNativeSeededTick = false;
+            ensureNativeFgPipeline(ctx);
+            if (nativeFgPipeline == null) {
+                throw new IllegalStateException("native FG pipeline not ready");
+            }
+            ensureFgInterp(ctx, count, swapW, swapH, fmt);
+            if (fgInterp.length != count) {
+                throw new IllegalStateException("native FG interp targets mismatch: " + fgInterp.length + " != " + count);
+            }
+            // Current frame as an owned GENERAL image: SDR blits the main target (TRANSFER_SRC, no
+            // contractual format) into the RGBA8 copy; HDR's PQ backbuffer is already ours.
+            long curView;
+            long curImage;
+            if (!hdrBackbuffer) {
+                recordFgBackbufferCopy(ctx, enc, backbufferImage, swapW, swapH);
+                curView = fgBackbufferCopy.view;
+                curImage = fgBackbufferCopy.image;
+            } else {
+                curView = hdrBackbufferView();
+                curImage = backbufferImage;
+            }
+            ensureFgPrevFrame(ctx, swapW, swapH, fmt);
+            // Staleness guard: if FG hasn't interpolated for a couple of composite frames (menu /
+            // loading gap / FG just toggled on), the stored previous frame no longer neighbours the
+            // current one — drop it instead of blending across the gap.
+            if (fgNativeLastUseFrame >= 0 && frameCounter - fgNativeLastUseFrame > 2) {
+                fgPrevFrameValid = false;
+            }
+            fgNativeLastUseFrame = frameCounter;
+            // Camera discontinuity (teleport / respawn / world change): the previous frame depicts a
+            // different world; drop it so nothing of the old one leaks into the blend (same 32-block
+            // rule the upscaler resets use).
+            if (nativeFgCamValid) {
+                double ndx = camX - prevNativeFgCamX;
+                double ndy = camY - prevNativeFgCamY;
+                double ndz = camZ - prevNativeFgCamZ;
+                if (ndx * ndx + ndy * ndy + ndz * ndz > 32.0 * 32.0) {
+                    fgPrevFrameValid = false;
+                }
+            }
+            prevNativeFgCamX = camX;
+            prevNativeFgCamY = camY;
+            prevNativeFgCamZ = camZ;
+            nativeFgCamValid = true;
+
+            boolean hadPrev = fgPrevFrameValid;
+            VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                if (hadPrev) {
+                    // Make the cur copy (previous command buffer) and last tick's prev-frame write visible.
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                    for (int k = 0; k < count; k++) {
+                        float t = (k + 1.0f) / (count + 1.0f);
+                        nativeFgPipeline.dispatch(cmd, fgInterp[k].view, curView, fgPrevFrame.view, gMotion.view,
+                                swapW, swapH, renderW, renderH, t, hdrBackbuffer);
+                    }
+                    // Sky mask on the generated frames (same protection as the FSR path): sky pixels
+                    // copy the real frame's sky instead of trusting the blend at the horizon/sun edge.
+                    ensureFgSkyMask(ctx);
+                    if (fgSkyMaskPipeline != null) {
+                        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                        for (int k = 0; k < count; k++) {
+                            fgSkyMaskPipeline.dispatch(cmd, fgInterp[k].view, curView, gDepth.view,
+                                    swapW, swapH, renderW, renderH, hdrBackbuffer);
+                        }
+                    }
+                    // Interp reads of fgPrevFrame are done; the advance below may overwrite it.
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                }
+                // Advance the history for the next tick: this frame becomes the previous frame.
+                VK10.vkCmdCopyImage(cmd, curImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                        fgPrevFrame.image, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, swapW, swapH));
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // prev write visible to the next tick's read
+            }
+            if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
+                throw new IllegalStateException("vkEndCommandBuffer(native fg) failed");
+            }
+            enc.execute(cmd);
+            fgPrevFrameValid = true;
+            if (!hadPrev) {
+                fgNativeSeededTick = true; // every index this tick falls back to the real frame
+                return null;
+            }
+        }
+        if (fgNativeSeededTick) {
+            return null; // seeding tick: no generated content for any slot yet
+        }
+        if (index < 1 || index > fgInterp.length || fgInterp[index - 1] == null) {
+            throw new IllegalStateException(
+                    "native fgInterpolate index " + index + " out of range for fgInterp[" + fgInterp.length + "]");
+        }
+        return fgInterp[index - 1];
+    }
+
+    // Native FG camera-jump bookkeeping (see fgInterpolateNative).
+    private double prevNativeFgCamX;
+    private double prevNativeFgCamY;
+    private double prevNativeFgCamZ;
+    private boolean nativeFgCamValid;
+    // Set when the current tick seeded the previous-frame history: every fgInterpolate index of
+    // this tick returns null so the presenter duplicates the real frame (no blend against garbage).
+    private boolean fgNativeSeededTick;
 
     private final float[] camPosF = new float[3];
     private final float[] camRightF = new float[3];
@@ -3090,6 +3213,85 @@ public final class RtComposite {
                 "FG backbuffer copy " + w + "x" + h);
         fgBackbufferCopyW = w;
         fgBackbufferCopyH = h;
+    }
+
+    /**
+     * Record the SDR main-target -&gt; {@link #fgBackbufferCopy} blit into the encoder (own command
+     * buffer, executed immediately). Minecraft's main target arrives in TRANSFER_SRC layout with no
+     * contractually known format; the FG consumers read GENERAL with the format taken literally, so
+     * this copy makes both certain (see fgBackbufferCopy's docs). Shared by the FSR and native FG
+     * branches.
+     */
+    private void recordFgBackbufferCopy(RtContext ctx, VulkanCommandEncoder enc, long backbufferImage,
+            int swapW, int swapH) {
+        ensureFgBackbufferCopy(ctx, swapW, swapH);
+        VkCommandBuffer copyCmd = enc.allocateAndBeginTransientCommandBuffer();
+        try (MemoryStack copyStack = MemoryStack.stackPush()) {
+            VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
+            toDst.get(0).srcStageMask(0L).srcAccessMask(0L).dstStageMask(4096L).dstAccessMask(4096L)
+                    .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
+            toDst.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            // The main target's TRANSFER_SRC state + contents were made available by MC's
+            // barrier earlier in this encoder; a global memory dependency chains this blit
+            // after it (same pattern the FG present blits use).
+            VkMemoryBarrier2.Buffer srcVis = VkMemoryBarrier2.calloc(1, copyStack).sType$Default();
+            srcVis.get(0).srcStageMask(1024L | 4096L).srcAccessMask(256L | 8L)
+                    .dstStageMask(4096L).dstAccessMask(8L);
+            VkDependencyInfo dep1 = VkDependencyInfo.calloc(copyStack).sType$Default()
+                    .pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep1);
+            // Straight (non-flipped) full-rect blit: orientation stays as-is here; the
+            // Y-flip for the display happens when the generated frames hit the swapchain.
+            VkImageBlit.Buffer region = VkImageBlit.calloc(1, copyStack);
+            region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+            region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+            region.get(0).srcOffsets(1).set(swapW, swapH, 1);
+            region.get(0).dstOffsets(1).set(swapW, swapH, 1);
+            VK10.vkCmdBlitImage(copyCmd, backbufferImage, VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    fgBackbufferCopy.image, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region,
+                    VK10.VK_FILTER_NEAREST);
+            VkImageMemoryBarrier2.Buffer toGeneral = VkImageMemoryBarrier2.calloc(1, copyStack).sType$Default();
+            toGeneral.get(0).srcStageMask(4096L).srcAccessMask(4096L).dstStageMask(65536L).dstAccessMask(98304L)
+                    .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                    .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(fgBackbufferCopy.image);
+            toGeneral.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            VkDependencyInfo dep2 = VkDependencyInfo.calloc(copyStack).sType$Default().pImageMemoryBarriers(toGeneral);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(copyCmd, dep2);
+        }
+        if (VK10.vkEndCommandBuffer(copyCmd) != VK10.VK_SUCCESS) {
+            throw new IllegalStateException("vkEndCommandBuffer(fg backbuffer copy) failed");
+        }
+        enc.execute(copyCmd);
+    }
+
+    /** Set when the native FG pipeline failed to create; native FG is skipped for the session. */
+    private void ensureNativeFgPipeline(RtContext ctx) {
+        if (nativeFgPipeline != null || nativeFgFailed) {
+            return;
+        }
+        try {
+            nativeFgPipeline = RtNativeFrameGenPipeline.create(ctx);
+            CausticaMod.LOGGER.info("Caustica native frame generation active (motion-vector interpolation)");
+        } catch (Throwable t) {
+            nativeFgFailed = true;
+            CausticaMod.LOGGER.error("native FG pipeline creation failed; frame generation disabled", t);
+        }
+    }
+
+    /** Owned previous-frame history target for the native FG interpolator (see fgPrevFrame's docs). */
+    private void ensureFgPrevFrame(RtContext ctx, int w, int h, int fmt) {
+        if (fgPrevFrame != null && fgPrevFrameW == w && fgPrevFrameH == h && fgPrevFrameFormat == fmt) {
+            return;
+        }
+        if (fgPrevFrame != null) {
+            fgPrevFrame.destroy();
+        }
+        fgPrevFrame = ctx.createStorageImage(w, h, fmt, "native FG prev frame " + w + "x" + h);
+        fgPrevFrameW = w;
+        fgPrevFrameH = h;
+        fgPrevFrameFormat = fmt;
+        fgPrevFrameValid = false; // fresh image: no history to blend against
     }
 
     /** Set when the sky-mask pipeline failed to create; the mask is skipped for the session. */

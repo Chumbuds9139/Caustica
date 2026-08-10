@@ -179,6 +179,12 @@ abstract class CompileShaders extends DefaultTask {
 					compileOne(src, new File(scratchDir, "fg_sky_mask_rgba8.comp.spv"),
 							["-DCAUSTICA_FG_MASK_RGBA8"])
 				}
+				if (base == "native_fg_interp.comp") {
+					// Same format split for the native frame-generation interpolator (SDR frames
+					// are rgba8, HDR frames rgba16f).
+					compileOne(src, new File(scratchDir, "native_fg_interp_rgba8.comp.spv"),
+							["-DCAUSTICA_NFG_RGBA8"])
+				}
 			}
 		}
 		outDirFile.mkdirs()

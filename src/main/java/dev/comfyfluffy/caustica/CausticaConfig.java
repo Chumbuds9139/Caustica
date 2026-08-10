@@ -906,6 +906,15 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.fg", "frame-generation.enabled", false);
             public static final IntSetting MULTI_FRAME_COUNT =
                     intAtLeast("caustica.rt.fg.multiFrameCount", "frame-generation.multi-frame-count", 1, 1);
+            /**
+             * Use Caustica's own motion-vector interpolation engine on the FSR 3 / XeSS paths
+             * instead of the AMD FSR 3.1 runtime. Default ON: the native engine is not limited to
+             * one generated frame per dispatch (the FSR runtime only ever writes outputs[0]) and
+             * needs no external runtime. Off falls back to FSR FG (capped at 2x there) for
+             * comparison. DLSS Frame Generation is unaffected (it has its own hardware path).
+             */
+            public static final BooleanSetting NATIVE_ENGINE =
+                    bool("caustica.rt.fg.nativeEngine", "frame-generation.native-engine", true);
 
             private Fg() {
             }
