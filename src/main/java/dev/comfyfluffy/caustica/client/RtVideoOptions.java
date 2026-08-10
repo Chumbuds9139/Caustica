@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.CausticaConfig.BooleanSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.FloatSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.IntSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
@@ -16,6 +17,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -30,6 +32,12 @@ import net.minecraft.network.chat.Component;
  * startup surface. Two exceptions are handled specially: DLSS-RR quality recreates the RR feature
  * live on change (see {@code RtDlssRr}), and the opacity-micromap toggle is read at section BUILD
  * time and answered with a full terrain rebuild (see {@code omm()}), so both are safe to expose.
+ *
+ * <p>Upscaling group: {@link #qualityOptions(Runnable)} starts with the upscaler selector
+ * (Off / DLSS, plus FSR 3 once its backend lands — see {@code RtUpscalerSupport}), and the rows that
+ * depend on that selection — the quality slider and the Frame Generation toggle — are built from the
+ * currently selected upscaler. Changing the selector reopens the screen through the supplied refresh
+ * callback so those rows switch together with the upscaler instead of lagging one screen behind.
  */
 public final class RtVideoOptions {
     private RtVideoOptions() {
@@ -75,14 +83,41 @@ public final class RtVideoOptions {
 
     // ===== Organized groups for the dedicated RT settings screen =====
 
-    public static OptionInstance<?>[] qualityOptions() {
-        return new OptionInstance<?>[] {
-            spp(),
-            maxBounces(),
-            dlssQuality(),
-            denoiser(),
-            omm(),
-        };
+    /**
+     * Quality section, headed by the upscaler selector. The selector's dependent rows — the quality
+     * slider (DLSS modes today, FSR modes once that backend lands) and, via
+     * {@link #frameGenerationButton()}, the Frame Generation toggle — are derived from the currently
+     * selected upscaler; {@code upscalerChanged} reopens the screen so they switch together with it.
+     * (The old standalone "Denoising Filter" toggle folded into the selector: Off is exactly the raw
+     * full-resolution view the toggle used to select.)
+     */
+    public static OptionInstance<?>[] qualityOptions(Runnable upscalerChanged) {
+        List<OptionInstance<?>> options = new ArrayList<>();
+        options.add(spp());
+        options.add(maxBounces());
+        options.add(upscaler(upscalerChanged));
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(dlssQuality());
+        } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+            options.add(fsrQuality());
+        } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            options.add(xessQuality());
+        }
+        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — it
+        // converges the Monte-Carlo noise + jitter sequence before the upscaler reads the image
+        // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
+        // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
+        // denoises internally.
+        // NRD/REBLUR is hidden: its temporal reprojection conflicted with this renderer's motion
+        // contract (camera tremble + ghosting on every camera move, across all tuning attempts) —
+        // see RtNrdDenoiser.enabled(). The spatial denoiser + TAA pair below is the stable stack.
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(spatialDenoiser());
+            options.add(temporalAccumulation());
+        }
+        options.add(omm());
+        return options.toArray(OptionInstance<?>[]::new);
     }
 
     public static OptionInstance<?>[] generalOptions() {
@@ -463,6 +498,259 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(0, DLSS_QUALITY_ORDER.size() - 1),
             initialPosition,
             position -> setting.set(DLSS_QUALITY_ORDER.get(position)));
+    }
+
+    /**
+     * The upscaler selector: Off (native-resolution trace) / DLSS (Ray Reconstruction denoise + upscale),
+     * plus FSR 3 once its backend reports available (see {@code RtUpscalerSupport.fsrUpscalingAvailable}).
+     * Selection maps onto the existing backend switches ({@code dlss-rr.enabled} / {@code fsr.enabled})
+     * rather than a new setting, so every renderer-side check keeps one source of truth, and the screen
+     * rebuilds through {@code onChanged} so the quality slider and Frame Generation toggle switch together
+     * with the selected upscaler.
+     */
+    private static OptionInstance<String> upscaler(Runnable onChanged) {
+        List<String> values = RtUpscalerSupport.upscalerValues();
+        String initial = RtUpscalerSupport.currentUpscalerMode();
+        if (!values.contains(initial)) {
+            // e.g. fsr.enabled hand-set in the config while no FSR backend is bundled yet: display the
+            // backend that is actually driving the image (DLSS if it is on), not a mode that cannot run.
+            initial = CausticaConfig.Rt.DlssRr.ENABLED.value()
+                    ? RtUpscalerSupport.MODE_DLSS : RtUpscalerSupport.MODE_NONE;
+        }
+        return new OptionInstance<>(
+            "caustica.options.rt.upscaler",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.upscaler.tooltip")),
+            // CycleButton (used for Enum values) already prepends "caption: " itself, so this must return
+            // only the value's text, not caption + value again.
+            (caption, value) -> Component.translatable("caustica.options.rt.upscaler." + value),
+            new OptionInstance.Enum<>(values, Codec.STRING),
+            initial,
+            value -> {
+                RtUpscalerSupport.applyUpscalerMode(value);
+                onChanged.run();
+            });
+    }
+
+    // Same PerfQuality vocabulary as DLSS (the FSR 3 upscaler uses the same mode scale), so this row
+    // reuses the dlssQuality value-name keys. Reachable only once the selector offers FSR 3 —
+    // RtUpscalerSupport.fsrUpscalingAvailable() (the bundled FidelityFX runtime) decides that.
+    private static final List<Integer> FSR_QUALITY_ORDER = List.of(3, 0, 1, 2, 5);
+
+    private static OptionInstance<Integer> fsrQuality() {
+        IntSetting setting = CausticaConfig.Rt.Fsr.QUALITY;
+        int initialQuality = FSR_QUALITY_ORDER.contains(setting.value()) ? setting.value() : 2;
+        int initialPosition = FSR_QUALITY_ORDER.indexOf(initialQuality);
+        return new OptionInstance<>(
+            "caustica.options.rt.fsrQuality",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.fsrQuality.tooltip")),
+            (caption, position) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.dlssQuality." + FSR_QUALITY_ORDER.get(position))),
+            new OptionInstance.IntRange(0, FSR_QUALITY_ORDER.size() - 1),
+            initialPosition,
+            position -> setting.set(FSR_QUALITY_ORDER.get(position)));
+    }
+
+    // Same shared PerfQuality vocabulary as DLSS/FSR (XeSS maps the same ratios onto its own
+    // xess_quality_settings_t). Reachable only once the selector offers XeSS — the bundled Intel
+    // runtime + the XeSS device features on the GPU decide that (RtUpscalerSupport).
+    private static final List<Integer> XESS_QUALITY_ORDER = List.of(3, 0, 1, 2, 5);
+
+    private static OptionInstance<Integer> xessQuality() {
+        IntSetting setting = CausticaConfig.Rt.Xess.QUALITY;
+        int initialQuality = XESS_QUALITY_ORDER.contains(setting.value()) ? setting.value() : 2;
+        int initialPosition = XESS_QUALITY_ORDER.indexOf(initialQuality);
+        return new OptionInstance<>(
+            "caustica.options.rt.xessQuality",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.xessQuality.tooltip")),
+            (caption, position) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.dlssQuality." + XESS_QUALITY_ORDER.get(position))),
+            new OptionInstance.IntRange(0, XESS_QUALITY_ORDER.size() - 1),
+            initialPosition,
+            position -> setting.set(XESS_QUALITY_ORDER.get(position)));
+    }
+
+    /**
+     * Renderer-owned temporal accumulation toggle. Live-safe like the other per-frame toggles:
+     * flipping it re-keys {@code RtComposite.ensureOutput} (the history images are allocated on the
+     * rebuild) and the tracer picks the feature flag up next frame.
+     */
+    private static OptionInstance<Boolean> temporalAccumulation() {
+        return bool("caustica.options.rt.temporalAccumulation", CausticaConfig.Rt.Taa.ENABLED);
+    }
+
+    /** Edge-avoiding spatial denoise — history-less, so live-safe like the other per-frame toggles. */
+    private static OptionInstance<Boolean> spatialDenoiser() {
+        return bool("caustica.options.rt.spatialDenoise", CausticaConfig.Rt.Spatial.ENABLED);
+    }
+
+    /**
+     * NRD (REBLUR) denoiser toggle: the strong temporal option. Live-safe like the other per-frame
+     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
+     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
+     */
+    private static OptionInstance<Boolean> nrdDenoiser() {
+        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
+    }
+
+    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
+    private static OptionInstance<Boolean> nrdValidation() {
+        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
+    }
+
+    /**
+     * The Frame Generation toggle (EXPERIMENTAL). Rides on the selected upscaler: DLSS mode toggles
+     * DLSS-G (hardware-gated: unsupported GPUs get a greyed-out button that stays visible so its
+     * tooltip can explain the requirement), FSR 3 AND XeSS modes toggle FSR 3.1 FG (no hardware
+     * gate beyond the bundled FSR runtime — Intel's own XeSS-FG is D3D12-only, so the FFX engine
+     * is the frame-gen for the XeSS path too). Returns null on every other path.
+     */
+    public static Button frameGenerationButton(Runnable onChanged) {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
+            Button button = Button.builder(frameGenerationLabel(), clicked -> {
+                setting.set(!setting.value());
+                clicked.setMessage(frameGenerationLabel());
+                // The multiplier row only exists while FG is on (and the engine's cap changes with
+                // the active backend): rebuild the screen around the new state instead of making the
+                // player close and reopen the menu to see/hide it.
+                onChanged.run();
+            }).width(310).build();
+            button.setTooltip(Tooltip.create(
+                    Component.translatable("caustica.options.rt.frameGeneration.fsr.tooltip")));
+            return button;
+        }
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            return null;
+        }
+        CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
+        boolean supported = RtUpscalerSupport.dlssFrameGenerationSupported();
+        // DLSS-G hardware (RTX 40/50) uses the vendor engine; every other GPU falls back to the
+        // Caustica native engine instead of greying the toggle out (the old "unsupported" state).
+        Button button = Button.builder(frameGenerationLabel(), clicked -> {
+            setting.set(!setting.value());
+            clicked.setMessage(frameGenerationLabel());
+            onChanged.run(); // same rebuild reason as above
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(Component.translatable(supported
+                ? "caustica.options.rt.frameGeneration.tooltip"
+                : "caustica.options.rt.frameGeneration.nativeFallback.tooltip")));
+        return button;
+    }
+
+    private static Component frameGenerationLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.frameGeneration"),
+                Component.translatable(CausticaConfig.Rt.Fg.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
+    /**
+     * Generated-frame counts the ACTIVE backend can really produce. DLSS-G offers 1..driver MFG cap
+     * (probed from NGX). The Caustica native engine (default on the FSR 3 / XeSS paths) offers
+     * 1..its cap — it interpolates with the tracer's own motion vectors, so every slot is a real
+     * frame. The FSR 3.1 runtime fallback offers exactly one: it only ever writes outputs[0] per
+     * dispatch (see RtFsrFrameGen.MAX_GENERATED_FRAMES) — offering more there was presenting
+     * never-written frames (the black blink + colorful corruption of the 3x+ era).
+     */
+    private static int[] fgMultiplierOptions() {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            int max = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.multiFrameCountMax();
+            if (max > 1) {
+                int[] options = new int[max];
+                for (int i = 0; i < max; i++) {
+                    options[i] = i + 1;
+                }
+                return options;
+            }
+        }
+        if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+            int max = dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.MAX_GENERATED_FRAMES;
+            int[] options = new int[max];
+            for (int i = 0; i < max; i++) {
+                options[i] = i + 1;
+            }
+            return options;
+        }
+        return new int[] { 1 };
+    }
+
+    /**
+     * The FG multiplier selector: how many frames the display receives per rendered frame. Visible
+     * alongside {@link #frameGenerationButton()} ONLY when the active backend genuinely supports
+     * more than one generated frame (DLSS Multi Frame Generation on supporting drivers) — on the
+     * FSR 3 / XeSS path the multiplier is fixed at 2x by the engine, so the button is omitted
+     * instead of pretending there's a choice.
+     */
+    public static Button fgMultiplierButton() {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (!RtUpscalerSupport.MODE_DLSS.equals(mode) && !RtUpscalerSupport.MODE_FSR3.equals(mode)
+                && !RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            return null;
+        }
+        int[] options = fgMultiplierOptions();
+        if (options.length < 2) {
+            return null; // fixed multiplier on this backend — nothing to cycle through
+        }
+        CausticaConfig.IntSetting setting = CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT;
+        Button button = Button.builder(fgMultiplierLabel(), clicked -> {
+            int current = setting.value();
+            int idx = 0;
+            for (int i = 0; i < options.length; i++) {
+                if (options[i] == current) {
+                    idx = i;
+                    break;
+                }
+            }
+            setting.set(options[(idx + 1) % options.length]);
+            clicked.setMessage(fgMultiplierLabel());
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.fgMultiplier.tooltip")));
+        return button;
+    }
+
+    private static Component fgMultiplierLabel() {
+        // Show the EFFECTIVE multiplier (config clamped to what the backend can produce), so a stale
+        // high config value from a previous build doesn't mislead. Native engine first: it wins
+        // wherever it's active (FSR 3 / XeSS default, and the DLSS-path fallback on non-DLSS-G GPUs).
+        int effective;
+        if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.INSTANCE.effectiveGeneratedCount();
+        } else if (RtUpscalerSupport.MODE_DLSS.equals(RtUpscalerSupport.currentUpscalerMode())) {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+        } else {
+            effective = dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen.INSTANCE.effectiveGeneratedCount();
+        }
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.fgMultiplier"),
+                Component.literal((effective + 1) + "x"));
+    }
+
+    /**
+     * NVIDIA Reflex (VK_NV_low_latency2) toggle: driver-paced frame submission that cuts input
+     * latency — the natural pairing with frame generation (FG always costs ~one rendered frame of
+     * latency; Reflex removes the rest of the pipeline queue). Greyed out with a tooltip on devices
+     * without the extension; engages live (the pacing loop self-applies sleep mode on the next
+     * frame), no restart needed.
+     */
+    public static Button reflexButton() {
+        CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Reflex.ENABLED;
+        boolean supported = dev.comfyfluffy.caustica.rt.RtDeviceBringup.reflexEnabled();
+        Button button = Button.builder(reflexLabel(), clicked -> {
+            setting.set(!setting.value());
+            clicked.setMessage(reflexLabel());
+        }).width(310).build();
+        button.active = supported;
+        button.setTooltip(Tooltip.create(Component.translatable(supported
+                ? "caustica.options.rt.reflex.tooltip"
+                : "caustica.options.rt.reflex.unsupported.tooltip")));
+        return button;
+    }
+
+    private static Component reflexLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.reflex"),
+                Component.translatable(CausticaConfig.Rt.Reflex.ENABLED.value() ? "options.on" : "options.off"));
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {

@@ -1,0 +1,51 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba16f) uniform readonly image2D nrdDiff;   // OUT_DIFF (denoised, YCoCg)
+layout(binding = 1, set = 0, rgba16f) uniform readonly image2D nrdSpec;   // OUT_SPEC (denoised, YCoCg)
+layout(binding = 2, set = 0, rgba16f) uniform writeonly image2D combined; // upscale source
+layout(binding = 3, set = 0, rgba16f) uniform readonly image2D rawDiff;   // IN_DIFF (raw, YCoCg)
+layout(binding = 4, set = 0, rgba16f) uniform readonly image2D rawSpec;   // IN_SPEC (raw, YCoCg)
+layout(binding = 5, set = 0, r32f)    uniform readonly image2D viewZ;     // linear view depth
+
+layout(push_constant) uniform Push {
+    int width;
+    int height;
+    float denoisingRange; // pixels beyond this viewZ are passed through raw (sky)
+} pc;
+
+// Inverse of NRD's _NRD_LinearToYCoCg (Y, Co, Cg -> linear RGB). REBLUR emits the same YCoCg
+// packing the front-end wrote, so decoding here is the exact round trip.
+vec3 yCoCgToLinear(vec3 c) {
+    float Y = c.r;
+    float Co = c.g;
+    float Cg = c.b;
+    return vec3(Y + Co - Cg, Y + Cg, Y - Co - Cg);
+}
+
+vec3 sanitize(vec3 c) {
+    // NaN/Inf from misses or degenerate hits must never reach the temporal stages; clamp to the
+    // FP16 range the rest of the chain works in.
+    return clamp(c, vec3(0.0), vec3(65504.0));
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= pc.width || pix.y >= pc.height) {
+        return;
+    }
+    // Pixels REBLUR treats as out-of-range (the sky: viewZ = 1e6) come back black/garbage from its
+    // temporal machinery; pass the raw radiance through untouched instead. NaN anywhere falls back
+    // to raw as well.
+    float z = imageLoad(viewZ, pix).r;
+    if (!(z < pc.denoisingRange)) {
+        vec3 raw = sanitize(yCoCgToLinear(imageLoad(rawDiff, pix).rgb)
+                          + yCoCgToLinear(imageLoad(rawSpec, pix).rgb));
+        imageStore(combined, pix, vec4(raw, 1.0));
+        return;
+    }
+    vec3 diffRadiance = sanitize(yCoCgToLinear(imageLoad(nrdDiff, pix).rgb));
+    vec3 specRadiance = sanitize(yCoCgToLinear(imageLoad(nrdSpec, pix).rgb));
+    imageStore(combined, pix, vec4(max(diffRadiance + specRadiance, vec3(0.0)), 1.0));
+}

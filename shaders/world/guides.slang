@@ -238,6 +238,25 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     float4 curClip = mul(worldPush.curViewProj, float4(gv_hitCamRel, 1.0));
     float depth = curClip.w > 0.0 ? curClip.z / curClip.w : 0.0;
 
+    // NRD IN_VIEWZ / TAA sky cutoff: linear view depth of the primary hit (positive, grows forward;
+    // the perspective divide's w is exactly that distance). Sky/miss pixels place gv_hitCamRel at
+    // 1e6 blocks, so their viewZ lands above CommonSettings::denoisingRange — how REBLUR recognizes
+    // INF pixels and the TAA recognizes "accumulate in place". Written here (Pass A) because the
+    // primary hit is owned here; Pass B only reads it for hit-distance normalization.
+    if (nrdEnabled() || taaEnabled()) {
+        // BUGFIX: for sky, curClip.w works out to ~1e6 * |rd.z_view|, which is DIRECTION-dependent:
+        // sky rays near the view axis exceed denoisingRange (correctly INF) but sky rays far from the
+        // axis fall BELOW it, so the NRD mistakes edge-of-screen sky for geometry and tries to denoise
+        // it — a visible circular boundary between "sky treated as sky" and "sky treated as geometry".
+        // Detect sky robustly by hit distance instead: sky sits at |gv_hitCamRel| = 1e6 exactly (the
+        // miss path writes rd*1e6, sq = 1e12), while real geometry never approaches that — even far LOD
+        // terrain stays well under 1e5 blocks (sq < 1e10). A 1e11 threshold separates the two with wide
+        // margins on both sides. Force sky viewZ to a guaranteed-INF value regardless of ray direction.
+        float hitDistSq = dot(gv_hitCamRel, gv_hitCamRel);
+        bool isSky = hitDistSq > 1.0e11;
+        gViewZ[pix] = isSky ? 1.0e6 : (curClip.w > 0.0 ? min(curClip.w, 1.0e6) : 1.0e6);
+    }
+
     // Motion vector: reproject this guide point through the previous frame's view-projection.
     // The primary ray was cast through the JITTERED ndc (jndc), so this hit's current screen position is
     // jndc, NOT the pixel centre. Subtract jndc so the MV is jitter-free (= 0 when static), which is
@@ -272,6 +291,11 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gMotion[pix] = motion;
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
     gSpecMotion[pix] = specMotion;
+    // gReactive (binding 12) is deliberately NOT written: the FSR reactive-mask experiment
+    // (marking moving entities/transmission so FSR would not lock its history there) did not reduce
+    // the ghosting and introduced shimmer regressions, so it was reverted. The image stays allocated
+    // because removing the binding would re-shift the guide block and the celestials-atlas binding
+    // in world.rmiss again; nothing samples it.
 }
 
 // 48-byte queue record. float3 + uint intentionally share the first 16-byte lane; every remaining

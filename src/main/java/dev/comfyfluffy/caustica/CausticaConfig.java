@@ -60,6 +60,8 @@ public final class CausticaConfig {
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
+            Rt.Nrd.ENABLED,
             Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -101,9 +103,20 @@ public final class CausticaConfig {
                         + " Buffer fill and BLAS/OMM preparation run on workers. max-inflight-sections bounds\n"
                         + " the complete snapshot -> worker -> GPU build -> publication lifecycle.");
         FILE.setComment("frame-generation",
-                " DLSS Frame Generation. Default off; gated additionally by hardware/driver availability.\n"
+                " DLSS Frame Generation. Default off; gated additionally by hardware/driver availability\n"
+                        + " (the driver's NGX capability query reports FrameGeneration_Available; RTX 40/50 series only).\n"
                         + " multi-frame-count: frames generated per rendered frame (1 = 2x, 2 = 3x, ...), clamped\n"
                         + " at runtime to the driver's reported DLSSG.MultiFrameCountMax.");
+        FILE.setComment("fsr",
+                " AMD FSR 3 upscaling (experimental): upscales the path-traced image WITHOUT denoising,\n"
+                        + " so raw-trace noise follows the SPP setting unless the NRD denoiser is also on. quality\n"
+                        + " mirrors the DLSS PerfQuality numbering (0 Performance, 1 Balanced, 2 Quality,\n"
+                        + " 3 Ultra Performance, 5 native AA). The runtime is bundled for Windows only for\n"
+                        + " now; elsewhere the upscaler selector does not offer FSR 3.");
+        FILE.setComment("nrd",
+                " NRD (NVIDIA Real-time Denoisers) REBLUR denoising (experimental): the denoiser path for\n"
+                        + " GPUs without DLSS Ray Reconstruction. Denoises at render resolution; combine with the\n"
+                        + " FSR 3 upscaler (or none) for the display. Mutually exclusive with DLSS in the UI.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -893,16 +906,115 @@ public final class CausticaConfig {
             public static final BooleanSetting ENABLED = bool("caustica.rt.fg", "frame-generation.enabled", false);
             public static final IntSetting MULTI_FRAME_COUNT =
                     intAtLeast("caustica.rt.fg.multiFrameCount", "frame-generation.multi-frame-count", 1, 1);
+            /**
+             * Use Caustica's own motion-vector interpolation engine on the FSR 3 / XeSS paths
+             * instead of the AMD FSR 3.1 runtime. Default ON: the native engine is not limited to
+             * one generated frame per dispatch (the FSR runtime only ever writes outputs[0]) and
+             * needs no external runtime. Off falls back to FSR FG (capped at 2x there) for
+             * comparison. DLSS Frame Generation is unaffected (it has its own hardware path).
+             */
+            public static final BooleanSetting NATIVE_ENGINE =
+                    bool("caustica.rt.fg.nativeEngine", "frame-generation.native-engine", true);
 
             private Fg() {
             }
         }
 
         /**
-         * NVIDIA Reflex ({@code VK_NV_low_latency2}). Default off; gated additionally by device support.
-         * Phase 0 (extension + capability probe only, see {@code RtDeviceBringup}/{@code RtReflex}) — the
-         * per-frame sleep call + latency markers + the swapchain {@code VkSwapchainLatencyCreateInfoNV} the
-         * spec requires for {@code vkSetLatencySleepModeNV} to take effect land in a later phase.
+         * AMD FidelityFX Super Resolution 3 (experimental). Drives the FSR 3 upscaler backend
+         * ({@code RtFsrUpscaler} over {@code native/fsr_shim} + the signed AMD FidelityFX Vulkan
+         * runtime): FSR 3 upscales without denoising, so the raw trace quality follows SPP until the
+         * NRD denoiser lands — the UI labels it experimental accordingly. The runtime is bundled for
+         * Windows only for now; where it is absent the upscaler selector does not offer FSR 3.
+         */
+        public static final class Fsr {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.fsr", "fsr.enabled", false);
+            /** PerfQuality numbering shared with DLSS: 0 Performance, 1 Balanced, 2 Quality, 3 Ultra
+             *  Performance, 5 native AA (4 Ultra Quality does not exist for the FSR 3 upscaler either). */
+            public static final IntSetting QUALITY = clampedInt("caustica.rt.fsr.quality", "fsr.quality", 2, 0, 5);
+
+            private Fsr() {
+            }
+        }
+
+        /**
+         * Intel XeSS Super Resolution upscaler (EXPERIMENTAL): the ML-based alternative to FSR 3 —
+         * a trained neural network (quantized INT8 on DP4a hardware like GeForce RTX, XMX matrix
+         * engines on Intel Arc) reconstructs the display-res image from the render-res trace +
+         * motion vectors + depth. Occupies the same upscale slot as DLSS-RR/FSR 3 (mutually
+         * exclusive; if a hand-edit enables several, RR &gt; FSR &gt; XeSS). Windows-only like FSR 3
+         * (Intel ships the libxess runtime for Windows), plus XeSS device features enabled at
+         * vkCreateDevice time (RtDeviceBringup) — a GPU lacking them never sees the option.
+         */
+        public static final class Xess {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.xess", "xess.enabled", false);
+            /** PerfQuality numbering shared with DLSS: 0 Performance, 1 Balanced, 2 Quality, 3 Ultra
+             *  Performance, 5 native AA — mapped onto xess_quality_settings_t by RtXessUpscaler. */
+            public static final IntSetting QUALITY = clampedInt("caustica.rt.xess.quality", "xess.quality", 2, 0, 5);
+
+            private Xess() {
+            }
+        }
+
+        /**
+         * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
+         * reprojected with the tracer's motion vectors). The noise-convergence stage of every
+         * non-DLSS path: it integrates the Monte-Carlo noise AND the jitter sequence over up to 32
+         * frames at render resolution. Under XeSS the upscaler then receives the converged image
+         * with zero jitter (its internal temporal layer stabilizes it instead of re-chasing the
+         * jitter) — that handoff is what makes the pair clean. Default ON: without it SPP 1 frames
+         * stay visibly noisy. Hidden only under DLSS-RR, which denoises internally.
+         */
+        public static final class Taa {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);
+
+            private Taa() {
+            }
+        }
+
+        /**
+         * Edge-avoiding à-trous SPATIAL denoise over the raw trace (2 passes at render res,
+         * weighted by luminance/depth/normal, with a firefly guard). History-less by design, so it
+         * cannot ghost on camera motion — the failure mode that retired the NRD/REBLUR stack —
+         * while still removing the single-sample grain the temporal layers would otherwise smear.
+         * Runs on every non-DLSS path before temporal accumulation / upscaling. Default ON.
+         */
+        public static final class Spatial {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.spatialDenoise", "spatial.enabled", true);
+
+            private Spatial() {
+            }
+        }
+
+        /**
+         * NRD (NVIDIA Real-time Denoisers) REBLUR denoising — the STRONG temporal option: a trained
+         * spatio-temporal filter over the per-lobe radiance signals, better than the spatial pass at
+         * holding noise down WHILE MOVING (the spatial filter restarts on motion by design). Costs
+         * more GPU and can trade stability for strength on fast camera motion. Mutually exclusive
+         * with the spatial/TAA stack in the renderer: when NRD is on it owns the denoise slot (RR
+         * still wins over everything when DLSS-RR is active).
+         */
+        public static final class Nrd {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);
+            /**
+             * REBLUR's 16-viewport validation overlay (OUT_VALIDATION): diagnostics for inputs,
+             * accumulation frame counts, disocclusion/occlusion state — the tool for debugging
+             * temporal artifacts in-game. When on, the overlay replaces the normal image.
+             */
+            public static final BooleanSetting VALIDATION = bool("caustica.rt.nrdValidation", "nrd.validation", false);
+
+            private Nrd() {
+            }
+        }
+
+        /**
+         * NVIDIA Reflex ({@code VK_NV_low_latency2}), exposed in the Video Settings screen. Default
+         * off; gated additionally by device support ({@code RtDeviceBringup}). The full loop is
+         * implemented: per-frame {@code vkLatencySleepNV} + timeline-semaphore wait pacing
+         * ({@code RtReflex.sleep}, hooked at the top of the frame), latency markers around
+         * sim/render-submit/present, the swapchain {@code VkSwapchainLatencyCreateInfoNV} the spec
+         * requires, and {@code VK_KHR_present_id} correlation. minimum-interval-us: 0 = no
+         * framerate cap (Reflex just paces submission).
          */
         public static final class Reflex {
             public static final BooleanSetting ENABLED = bool("caustica.rt.reflex", "reflex.enabled", false);

@@ -31,10 +31,28 @@ import trace_ser;
 import lighting;
 import clouds;
 
+// First-bounce lobe decomposition for NRD (REBLUR_DIFFUSE_SPECULAR): alongside the combined
+// radiance L, accumulates per-lobe radiance (outLdiff/outLspec) and the first-bounce hit distance
+// per lobe (0 = lobe not traced / no data, REBLUR's convention). Every term added to L lands in
+// exactly one of the two accumulators, so L == outLdiff + outLspec remains bit-exact and the
+// ordinary (non-NRD) output is untouched. The lobe a path belongs to is decided once: dielectric
+// segments are specular from the start; an opaque shading point classifies by its chosen
+// continuation lobe; until then (camera prefix, sky) the diffuse bucket is the catch-all.
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                  bool restirEligiblePath, bool restirOwner, float restirSampleScale,
-                 uint2 dimensions) {
+                 uint2 dimensions,
+                 out float3 outLdiff, out float3 outLspec,
+                 out float outHitDiff, out float outHitSpec) {
     float3 L = float3(0.0, 0.0, 0.0);
+    float3 Ldiff = float3(0.0, 0.0, 0.0);
+    float3 Lspec = float3(0.0, 0.0, 0.0);
+    float hitDiff = 0.0;
+    float hitSpec = 0.0;
+    // channel: 0 = not yet classified (diffuse catch-all), 1 = diffuse path, 2 = specular path.
+    int channel = seg.bounce > 0 ? 2 : 0;
+    // Segments split off a dielectric start mid-flight: their first trace inside this call IS the
+    // specular continuation hop, so its hit distance feeds the specular channel.
+    int pendingHitChannel = seg.bounce > 0 ? 2 : 0;
     float3 ro = seg.ro;
     float3 rd = seg.rd;
     float3 throughput = seg.throughput;
@@ -66,13 +84,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // read as crisp holes punched through the weather. That is the "water is not affected by the
             // rain/fog" case. The split-branch accounting is exact for the same reason as the cloud: the
             // two branches' Fresnel throughputs sum to one, so the prefix is counted once, not twice.
+            // Prefix segments only exist behind a dielectric split — specular channel.
             AmbientFog preFog = evalAmbientFog(worldPush.ambientFog, prefixDist);
             L += throughput * preFog.inScatter;
+            Lspec += throughput * preFog.inScatter;
             throughput *= preFog.transmittance;
 
             CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
                                            prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
             L += throughput * pre.scatter;
+            Lspec += throughput * pre.scatter;
             throughput *= pre.transmittance;
         }
     }
@@ -132,6 +153,18 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                       showCelestial, rayConeWidth, rayConeSpread);
 #endif
 
+        // First-bounce hit distance capture: the trace we just ran is the continuation hop whose
+        // distance REBLUR wants for the lobe that spawned it. A miss leaves the distance at 0 —
+        // REBLUR's "no data" value, which it treats as a skipped lobe rather than zero distance.
+        if (pendingHitChannel != 0 && payload.hitT >= 0.0) {
+            if (pendingHitChannel == 1) {
+                hitDiff = payload.hitT;
+            } else {
+                hitSpec = payload.hitT;
+            }
+            pendingHitChannel = 0;
+        }
+
         if (payload.hitT < 0.0) {
             // world.rmiss writes sky radiance (gradient + sun/moon disc + stars) into payload.albedo. The
             // packed show-celestial flag decides whether this path segment may see the bright disc.
@@ -144,6 +177,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // zero — and replace every skybox with a flat fog colour, so the fog is deliberately scoped
             // to segments that actually end on geometry, where it is doing depth cueing.
             L += throughput * sky;
+            if (channel == 2) {
+                Lspec += throughput * sky;
+            } else {
+                Ldiff += throughput * sky;
+            }
             break;
         }
 
@@ -162,6 +200,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         {
             AmbientFog segFog = evalAmbientFog(worldPush.ambientFog, payload.hitT);
             L += throughput * segFog.inScatter;
+            if (channel == 2) {
+                Lspec += throughput * segFog.inScatter;
+            } else {
+                Ldiff += throughput * segFog.inScatter;
+            }
             throughput *= segFog.transmittance;
         }
 
@@ -182,6 +225,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                                                 payload.hitT, cloudSkyAmbient(worldPush),
                                                 showCelestial);
             L += throughput * segCloud.scatter;
+            if (channel == 2) {
+                Lspec += throughput * segCloud.scatter;
+            } else {
+                Ldiff += throughput * segCloud.scatter;
+            }
             throughput *= segCloud.transmittance;
         }
 
@@ -254,6 +302,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                     mediumPop(medium);
                 }
             }
+            // A dielectric interface IS the specular event for this path: from here on everything
+            // belongs to the specular channel, and the next trace's hit distance is the specular hit
+            // distance REBLUR wants (measured from the interface).
+            if (channel == 0) {
+                channel = 2;
+                pendingHitChannel = 2;
+            }
             showCelestial = true; // specular interface: the continuation ray may see the sun/moon disc
             if (bounce >= rrStart) {
                 float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
@@ -269,6 +324,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // off secondary rays, so this only fires at bounce 0; they receive direct light and one diffuse
         // path continuation into the scene, but never appear in shadows/reflections/GI or emit radiance.
         if (material == MATERIAL_PARTICLE) {
+            // Particles shade diffuse-only (no specular term exists for billboards), so an
+            // unclassified path hitting one becomes a diffuse path here.
+            if (channel == 0) {
+                channel = 1;
+            }
             float3 albedo = payload.albedo;
 
             // Rain/snow sheets: deliberately UNLIT. The full particle light path below (sun NEE with a
@@ -287,6 +347,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the day, so streaks read as a light veil over the bright sky.
                 float weatherSheet = lerp(0.12, 1.9, worldPush.sunDir.w);
                 L += throughput * albedo * weatherSheet;
+                if (channel == 2) {
+                    Lspec += throughput * albedo * weatherSheet;
+                } else {
+                    Ldiff += throughput * albedo * weatherSheet;
+                }
                 break;
             }
 
@@ -314,7 +379,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                     // double-dark when ray-traced clouds were enabled.
                     vis *= cloudSunShadow(worldPush, hitPos - worldPush.camOffset, lightDir);
                     if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                        L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
+                        float3 particleNee = throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
+                        L += particleNee;
+                        if (channel == 2) {
+                            Lspec += particleNee;
+                        } else {
+                            Ldiff += particleNee;
+                        }
                     }
                 }
             }
@@ -341,8 +412,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                                 1.0, true, 0.0, seed);
                     }
                     float estimatorScale = shadeWithRestir ? restirSampleScale : 1.0;
-                    L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo,
+                    float3 particleRis = throughput * shadeReservoir(r, hitPos, n, v, rd, albedo,
                             float3(0.0, 0.0, 0.0), 1.0, true, 0.0) * estimatorScale;
+                    L += particleRis;
+                    // twoSided shading has no specular term — the whole estimate is diffuse.
+                    if (channel == 2) {
+                        Lspec += particleRis;
+                    } else {
+                        Ldiff += particleRis;
+                    }
                 }
             }
 
@@ -396,7 +474,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         bool gateEmitter = risOn && payloadEmitterInList();
         if (emission > 0.0 && (!gateEmitter || showCelestial)) {
             float emissionScale = isDynamicEntityEarly ? worldPush.lightScales.y : worldPush.lightScales.x;
-            L += throughput * albedo * emission * max(emissionScale, 0.0);
+            float3 emissive = throughput * albedo * emission * max(emissionScale, 0.0);
+            L += emissive;
+            // Emission has no lobe; REBLUR convention is to carry it in the diffuse signal (a
+            // specular bucket would mislead the hit-distance-driven specular filter).
+            if (channel == 2) {
+                Lspec += emissive;
+            } else {
+                Ldiff += emissive;
+            }
         }
 
         // NEE: direct light from the dominant celestial body (sun by day, moon by night) — Lambert
@@ -443,7 +529,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                     vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
                 }
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                    float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
+                    // Lambertian diffuse (f = albedo/PI) and Cook–Torrance specular kept as separate
+                    // terms: their sum is the brdf the combined path always used (bit-identical L), and
+                    // the split is what the NRD per-lobe signal needs.
+                    float3 brdfDiff = diffAlb * INV_PI;
                     float3 h = normalize(lightDir + v);
                     float ndh = max(0.0, dot(n, h));
                     float ndv = max(1.0e-4, dot(n, v));
@@ -451,8 +540,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                     float D = ggxD(ndh, rough);
                     float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
                     float3 F = fresnelSchlick(vdh, F0);
-                    brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
-                    L += throughput * brdf * worldPush.lightRadiance.xyz * ndl * vis;
+                    float3 brdfSpec = (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
+                    float3 brdf = brdfDiff + brdfSpec;
+                    float3 nee = throughput * brdf * worldPush.lightRadiance.xyz * ndl * vis;
+                    L += nee;
+                    if (channel == 0) {
+                        // Unclassified primary hit: split direct light by BRDF lobe.
+                        Ldiff += throughput * brdfDiff * worldPush.lightRadiance.xyz * ndl * vis;
+                        Lspec += throughput * brdfSpec * worldPush.lightRadiance.xyz * ndl * vis;
+                    } else if (channel == 1) {
+                        Ldiff += nee;
+                    } else {
+                        Lspec += nee;
+                    }
                 }
             }
         }
@@ -482,8 +582,25 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                             n, v, rd, diffAlb, F0, rough, twoSidedEmitter, activeSss, seed);
                 }
                 float estimatorScale = shadeWithRestir ? restirSampleScale : 1.0;
-                L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
+                float3 ris = throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
                         twoSidedEmitter, activeSss) * estimatorScale;
+                L += ris;
+                if (nrdEnabled()) {
+                    if (channel == 0) {
+                        // Unclassified primary hit: split the reservoir estimate by BRDF lobe. Costs a
+                        // second shadow ray, so it only runs on the NRD path.
+                        float3 risDiff;
+                        float3 risSpec;
+                        shadeReservoirSplit(r, hitPos, n, v, rd, diffAlb, F0, rough,
+                                twoSidedEmitter, activeSss, risDiff, risSpec);
+                        Ldiff += throughput * risDiff * estimatorScale;
+                        Lspec += throughput * risSpec * estimatorScale;
+                    } else if (channel == 1) {
+                        Ldiff += ris;
+                    } else {
+                        Lspec += ris;
+                    }
+                }
             }
         }
 
@@ -514,7 +631,14 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                     }
                     if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
                         float cosT = dot(lightDir, rd);
-                        L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * worldPush.lightRadiance.xyz * visB;
+                        float3 sssTerm = throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * worldPush.lightRadiance.xyz * visB;
+                        L += sssTerm;
+                        // Back-face transmission is a diffuse-scattering event.
+                        if (channel == 2) {
+                            Lspec += sssTerm;
+                        } else {
+                            Ldiff += sssTerm;
+                        }
                     }
                 }
             }
@@ -553,12 +677,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
+            // First-bounce decomposition: the lobe chosen at the unclassified primary hit decides the
+            // channel everything from here on belongs to, and the next trace's hit distance is that
+            // lobe's hit distance for REBLUR. Deeper bounces keep the channel they inherited.
+            if (channel == 0) {
+                channel = 2;
+                pendingHitChannel = 2;
+            }
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
+            if (channel == 0) {
+                channel = 1;
+                pendingHitChannel = 1;
+            }
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.
@@ -571,6 +706,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             throughput /= q;
         }
     }
+    // Every term was classified into exactly one accumulator, so the split is exact.
+    outLdiff = Ldiff;
+    outLspec = Lspec;
+    outHitDiff = hitDiff;
+    outHitSpec = hitSpec;
     return L;
 }
 
@@ -592,13 +732,32 @@ void main() {
     uint spp = max(worldPush.spp, 1u);
     ConstPtr<PackedPathSegment> queue = ConstPtr<PackedPathSegment>(pc.pathQueueAddr);
     float3 frameRadiance = float3(0.0, 0.0, 0.0);
+    float3 frameDiff = float3(0.0, 0.0, 0.0);
+    float3 frameSpec = float3(0.0, 0.0, 0.0);
+    // Per-lobe hit distance across samples: min of the finite values (NRD's own front-end averaging
+    // for specular hit distances is a min; 0 is reserved for "no data" and skipped).
+    float frameHitDiff = 0.0;
+    float frameHitSpec = 0.0;
     uint recordIndex = pixelIndex;
     for (uint leaf = 0u; leaf < MAX_PATH_SEGMENTS; ++leaf) {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
+            float3 sampleDiff;
+            float3 sampleSpec;
+            float sampleHitDiff;
+            float sampleHitSpec;
             frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp,
-                    leaf == 0u, leaf == 0u && s == 0u, float(spp), dimensions);
+                    leaf == 0u, leaf == 0u && s == 0u, float(spp), dimensions,
+                    sampleDiff, sampleSpec, sampleHitDiff, sampleHitSpec);
+            frameDiff += sampleDiff;
+            frameSpec += sampleSpec;
+            if (sampleHitDiff > 0.0) {
+                frameHitDiff = frameHitDiff > 0.0 ? min(frameHitDiff, sampleHitDiff) : sampleHitDiff;
+            }
+            if (sampleHitSpec > 0.0) {
+                frameHitSpec = frameHitSpec > 0.0 ? min(frameHitSpec, sampleHitSpec) : sampleHitSpec;
+            }
         }
         if (packed.nextRecord == PATH_NO_NEXT) {
             break;
@@ -616,4 +775,29 @@ void main() {
         }
     }
     outImage[pix] = float4(radiance, 1.0);
+
+    if (nrdEnabled()) {
+        // REBLUR front-end pack (must mirror REBLUR_FrontEnd_PackRadianceAndNormHitDist): YCoCg
+        // radiance clamped to FP16 range + normalized hit distance. Invalid (NaN/Inf) samples become
+        // black with "no data" rather than poisoning the denoiser's history. The undenoised firefly
+        // clamp above intentionally does NOT apply here — REBLUR's anti-firefly pass owns that job on
+        // the denoised path.
+        float3 diffRad = frameDiff / float(spp);
+        float3 specRad = frameSpec / float(spp);
+        if (any(isnan(diffRad)) || any(isinf(diffRad))) {
+            diffRad = float3(0.0, 0.0, 0.0);
+        }
+        if (any(isnan(specRad)) || any(isinf(specRad))) {
+            specRad = float3(0.0, 0.0, 0.0);
+        }
+        diffRad = clamp(diffRad, 0.0, 65504.0);
+        specRad = clamp(specRad, 0.0, 65504.0);
+        // viewZ + roughness were written/read at the primary hit by Pass A (sky = 1e6 = INF for NRD).
+        float viewZ = gViewZ[pix];
+        float rough = clamp(gNormal[pix].w, 0.0, 1.0);
+        float normHitDiff = frameHitDiff > 0.0 ? nrdNormHitDist(frameHitDiff, viewZ, rough) : 0.0;
+        float normHitSpec = frameHitSpec > 0.0 ? nrdNormHitDist(frameHitSpec, viewZ, rough) : 0.0;
+        gNrdDiff[pix] = float4(nrdLinearToYCoCg(diffRad), normHitDiff);
+        gNrdSpec[pix] = float4(nrdLinearToYCoCg(specRad), normHitSpec);
+    }
 }

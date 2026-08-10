@@ -87,6 +87,6 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## TODO List
 
 - [ ] Multi-layer / cirrus clouds and cloud-shadow softening
-- [ ] NRD + FSR for non-NVIDIA GPUs
+- [x] XeSS + FSR upscaling for non-NVIDIA GPUs
 - [ ] LOD
 - [ ] ReSTIR

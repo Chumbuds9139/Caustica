@@ -1,12 +1,16 @@
 package dev.comfyfluffy.caustica.client;
 
 /**
- * Sub-pixel camera jitter for DLSS Ray Reconstruction.
+ * Sub-pixel camera jitter for the temporal upscalers.
  *
- * <p>Generates a Halton(2,3) low-discrepancy sequence in render-pixel space, with the DLSS phase-count
- * rule {@code ceil(8 * (display/render)^2)} and RR's recommended floor of 32 phases.
- * {@link dev.comfyfluffy.caustica.rt.RtComposite} reads the per-frame offset, applies it to the primary ray in the
- * path-tracing shader, and reports it to DLSS-RR's evaluate.
+ * <p>Generates a Halton(2,3) low-discrepancy sequence in render-pixel space — the exact sequence
+ * both consumers want: DLSS Ray Reconstruction (with its phase-count rule
+ * {@code max(32, ceil(8 * (display/render)^2))}) and FSR 3, whose ffx_api jitter query
+ * ({@code GetJitterPhaseCount}/{@code GetJitterOffset}) evaluates to the same Halton offsets with
+ * the phase-count rule {@code int(8 * (display/render)^2)} — verified against the FSR 3.1 SDK
+ * source, so no separate sequence is needed, only the phase-count rule differs.
+ * {@link dev.comfyfluffy.caustica.rt.RtComposite} reads the per-frame offset, applies it to the
+ * primary ray in the path-tracing shader, and reports it to the active upscaler's dispatch.
  */
 public final class CausticaJitter {
 	public static final CausticaJitter INSTANCE = new CausticaJitter();
@@ -18,9 +22,25 @@ public final class CausticaJitter {
 	private CausticaJitter() {
 	}
 
-	/** Advance one frame. Call once per frame before the level projection is built. */
+	/** Advance one frame on the DLSS phase-count rule. Call once per frame before the level
+	 *  projection is built. */
 	public void prepare(int renderWidth, int renderHeight, int displayWidth) {
-		int phaseCount = jitterPhaseCount(renderWidth, displayWidth);
+		prepareWithPhaseCount(jitterPhaseCount(renderWidth, displayWidth));
+	}
+
+	/** Advance one frame on FSR 3's phase-count rule (same Halton offsets, no 32-phase floor). */
+	public void prepareFsr(int renderWidth, int displayWidth) {
+		float ratio = (float) displayWidth / Math.max(1, renderWidth);
+		prepareWithPhaseCount(Math.max(1, (int) (8.0f * ratio * ratio)));
+	}
+
+	/** Advance one frame on Intel XeSS's rule: a fixed 32-phase cycle, exactly the
+	 *  {@code GenerateHalton(2, 3, 1, 32)} sequence Intel's VK sample feeds XeSS. */
+	public void prepareXess() {
+		prepareWithPhaseCount(32);
+	}
+
+	private void prepareWithPhaseCount(int phaseCount) {
 		int index = (this.frameIndex++ % phaseCount) + 1; // Halton(0) is degenerate
 		this.pixelsX = halton(index, 2) - 0.5f;
 		this.pixelsY = halton(index, 3) - 0.5f;
