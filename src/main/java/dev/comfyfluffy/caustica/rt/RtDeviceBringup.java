@@ -503,16 +503,6 @@ public final class RtDeviceBringup {
         return XessRuntime.platformSupported();
     }
 
-    /**
-     * XeSS's features change no other behavior, so they are NOT gated on the xess.enabled config —
-     * enabling them up front is what lets the upscaler be flipped on live from Video Settings
-     * without a restart (a vkCreateDevice-time-only decision otherwise). The gates are platform
-     * (bundled Windows runtime) + device support, queried below.
-     */
-    private static boolean xessRequested() {
-        return XessRuntime.platformSupported();
-    }
-
     /** Query every feature boolean Caustica might enable in one complete Features2 chain. */
     private static FeatureSupport queryFeatureSupport(VulkanPhysicalDevice physicalDevice) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
