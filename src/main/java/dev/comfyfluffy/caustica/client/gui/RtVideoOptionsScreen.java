@@ -78,7 +78,8 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         // it rides on the selected upscaler and switches together with it.
         list.addHeader(QUALITY_HEADER);
         list.addSmall(RtVideoOptions.qualityOptions(this::rebuildForUpscalerChange));
-        net.minecraft.client.gui.components.Button frameGeneration = RtVideoOptions.frameGenerationButton();
+        net.minecraft.client.gui.components.Button frameGeneration =
+                RtVideoOptions.frameGenerationButton(this::rebuildForUpscalerChange);
         if (frameGeneration != null) {
             list.addBig(frameGeneration);
         }

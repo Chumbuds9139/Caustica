@@ -604,13 +604,17 @@ public final class RtVideoOptions {
      * gate beyond the bundled FSR runtime — Intel's own XeSS-FG is D3D12-only, so the FFX engine
      * is the frame-gen for the XeSS path too). Returns null on every other path.
      */
-    public static Button frameGenerationButton() {
+    public static Button frameGenerationButton(Runnable onChanged) {
         String mode = RtUpscalerSupport.currentUpscalerMode();
         if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
             CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.ENABLED;
             Button button = Button.builder(frameGenerationLabel(), clicked -> {
                 setting.set(!setting.value());
                 clicked.setMessage(frameGenerationLabel());
+                // The multiplier row only exists while FG is on (and the engine's cap changes with
+                // the active backend): rebuild the screen around the new state instead of making the
+                // player close and reopen the menu to see/hide it.
+                onChanged.run();
             }).width(310).build();
             button.setTooltip(Tooltip.create(
                     Component.translatable("caustica.options.rt.frameGeneration.fsr.tooltip")));
@@ -626,6 +630,7 @@ public final class RtVideoOptions {
         Button button = Button.builder(frameGenerationLabel(), clicked -> {
             setting.set(!setting.value());
             clicked.setMessage(frameGenerationLabel());
+            onChanged.run(); // same rebuild reason as above
         }).width(310).build();
         button.setTooltip(Tooltip.create(Component.translatable(supported
                 ? "caustica.options.rt.frameGeneration.tooltip"
