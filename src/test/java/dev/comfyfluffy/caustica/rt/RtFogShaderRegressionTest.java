@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Regression guards for selective cave fog and the water-edge artefact it replaced. */
+/** Regression guards for selective cave fog and one-time screen-space composition. */
 final class RtFogShaderRegressionTest {
     private static final Path REPO_ROOT = repoRoot();
     private static final Path CORE = REPO_ROOT.resolve("shaders/world/world_core.slang");
