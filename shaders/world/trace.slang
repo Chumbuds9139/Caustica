@@ -8,6 +8,14 @@ import world_core;
 
 public static const uint CULL_SECONDARY = 0x01u;
 public static const uint CULL_PRIMARY = 0x02u;
+// Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
+// viewmodel. Instance masks in play: terrain/entities/block entities 0xFF, DH LOD 0x03, particles
+// 0x02, the first-person player 0x01. Bits 2..7 keep every 0xFF occluder while matching neither
+// the viewmodel (0x01) nor particles (0x02); DH LOD drops out too, but that geometry sits beyond
+// the vanilla render distance, where the short-range held light neither reaches nor gets blocked
+// by it. Without the exclusion the captured arm/item floats a phantom shadow inside the very beam
+// it casts (the visible hand is vanilla's screen-space overlay, not the captured pose).
+public static const uint CULL_HAND_LIGHT = 0xFCu;
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
@@ -90,6 +98,12 @@ public Payload makeShadowPayload() {
 }
 
 public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
+    return visibilityCulled(origin, dir, tmax, CULL_SECONDARY);
+}
+
+// Explicit instance-cull variant of visibility(); the held-item light uses CULL_HAND_LIGHT so the
+// first-person viewmodel cannot occlude the very light it carries (see the constant's comment).
+public VisibilityResult visibilityCulled(float3 origin, float3 dir, float tmax, uint cullMask) {
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
     // path uses only albedo as accumulated transmittance and hitT as the nearest-water crossing.
     Payload shadowPayload = makeShadowPayload();
@@ -99,7 +113,7 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     // needs only ordinary TraceRay and no invocation-reorder capability.
     TraceRay(topLevelAS,
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-            CULL_SECONDARY, SBT_SHADOW, SBT_STRIDE_BUCKET, MISS_GUIDE,
+            cullMask, SBT_SHADOW, SBT_STRIDE_BUCKET, MISS_GUIDE,
             makeRay(origin, RAY_TMIN, dir, tmax), shadowPayload);
     VisibilityResult result;
     result.transmittance = shadowPayload.flags == 0u
