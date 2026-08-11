@@ -89,6 +89,8 @@
 	"caustica.options.rt.blockEmissiveIntensity.tooltip": "Scales light emitted by blocks placed in the world, including torches, glowstone, lanterns, lava and other emissive surfaces.",
 	"caustica.options.rt.dynamicIntensity": "Held Item Light Intensity",
 	"caustica.options.rt.dynamicIntensity.tooltip": "Scales light emitted by luminous items held in hand, such as torches, lanterns and lava buckets, and by other dynamic emitters. Higher values brighten the area around you.",
+	"caustica.options.rt.heldItemLight": "Held Item Light",
+	"caustica.options.rt.heldItemLight.tooltip": "Cast a dynamic light from luminous items held in hand, such as torches, lanterns and lava buckets. Each item lights the world in its own colour. Turn off to stop held items lighting the world.",
 	"caustica.options.rt.tonemapOperator": "Tonemap Operator",
 	"caustica.options.rt.tonemapOperator.tooltip": "Selects the HDR-to-SDR tonemapping curve used after exposure.",
 	"caustica.options.rt.tonemapOperator.agx": "AgX",

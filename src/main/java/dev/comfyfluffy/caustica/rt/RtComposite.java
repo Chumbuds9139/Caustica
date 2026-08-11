@@ -1462,6 +1462,9 @@ public final class RtComposite {
             SkyPush sky = skyPush(dimension, weather);
             // Two lanes, resolved together from the same weather + camera state the sky above used.
             CloudPush clouds = cloudState(dimension, weather, camY);
+            // Analytic held-item light: position + intensity lane and the item's RGB tint; w == 0
+            // disables the shader term (toggle off, no luminous item, or no player).
+            HandLightState hand = handLightState(terrain);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -1511,8 +1514,10 @@ public final class RtComposite {
                     parallaxParams(),
                     dimension,
                     featureFlags(),
-                    // Analytic held-item light: xyz rebased position, w intensity (0 = none held).
-                    handLight(terrain)
+                    // Analytic held-item light: xyz rebased position, w intensity (0 = none held),
+                    // then the item's RGB tint lane.
+                    hand.light(),
+                    hand.color()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {
@@ -1931,26 +1936,59 @@ public final class RtComposite {
      * held-item slider (lights.dynamic-intensity / {@code lightScales.y}) scales it live. */
     private static final float HAND_LIGHT_POWER = 0.6f;
 
+    /** Per-item held-light tints (linear RGB). Mirrors and extends the well-known luminous sprite list
+     * in {@code RtEntityCollector.itemSpriteEmission}, so the analytic light matches the colour the
+     * captured item geometry already suggests. */
+    private static final float[] TINT_SOUL = {0.35f, 0.85f, 1.0f};        // soul torch / lantern / campfire
+    private static final float[] TINT_REDSTONE = {1.0f, 0.25f, 0.15f};    // redstone torch
+    private static final float[] TINT_AQUA = {0.65f, 0.90f, 1.0f};        // sea lantern
+    private static final float[] TINT_PICKLE = {0.75f, 0.95f, 0.55f};     // sea pickle
+    private static final float[] TINT_TORCH = {1.0f, 0.62f, 0.30f};       // torch / lantern / campfire / candles
+    private static final float[] TINT_LAVA = {1.0f, 0.35f, 0.10f};        // lava, magma
+    private static final float[] TINT_GLOWSTONE = {1.0f, 0.78f, 0.50f};
+    private static final float[] TINT_SHROOMLIGHT = {1.0f, 0.55f, 0.35f};
+    private static final float[] TINT_VERDANT = {0.70f, 1.0f, 0.60f};     // verdant froglight
+    private static final float[] TINT_PEARLESCENT = {0.95f, 0.70f, 1.0f}; // pearlescent froglight
+    private static final float[] TINT_OCHRE = {1.0f, 0.85f, 0.50f};       // ochre froglight
+    private static final float[] TINT_END_ROD = {1.0f, 0.95f, 0.85f};
+    private static final float[] TINT_BEACON = {0.85f, 0.95f, 1.0f};
+    private static final float[] TINT_AMBER = {1.0f, 0.60f, 0.30f};       // redstone lamp, jack o'lantern
+    private static final float[] TINT_CRYING = {0.70f, 0.40f, 1.0f};      // crying obsidian
+    private static final float[] TINT_BLAZE = {1.0f, 0.50f, 0.20f};
+    private static final float[] TINT_DEFAULT = {1.0f, 0.75f, 0.55f};     // any other luminous block
+
+    /** Per-frame held-light push pair: position + intensity lane, and the item's tint. */
+    private record HandLightState(Float4 light, Float4 color) {
+        static final HandLightState NONE = new HandLightState(
+                new Float4(0.0f, 0.0f, 0.0f, 0.0f), new Float4(0.0f, 0.0f, 0.0f, 0.0f));
+    }
+
     /**
-     * The analytic point light a luminous held item casts (WorldPush.handLight). Held-item geometry
-     * never enters the RIS emitter light buffer — that buffer collects terrain quads only — so its
-     * captured flame would light the scene through rare indirect bounce hits alone: a torch in hand
-     * barely brightened the blocks right in front of it. The shader therefore NEE-samples this light
-     * at every diffuse receiver, exactly like the celestial light.
+     * The analytic point light a luminous held item casts (WorldPush.handLight +
+     * WorldPush.handLightColor). Held-item geometry never enters the RIS emitter light buffer —
+     * that buffer collects terrain quads only — so its captured flame would light the scene through
+     * rare indirect bounce hits alone: a torch in hand barely brightened the blocks right in front
+     * of it. The shader therefore NEE-samples this light at every diffuse receiver, exactly like
+     * the celestial light.
      *
      * <p>Position follows the player's (partial-tick interpolated) view, pushed forward and slightly
-     * below eye level — roughly where the held item sits in both first and third person. Intensity is
-     * the best luminous item in either hand; {@code w == 0} disables the shader term entirely.
+     * below eye level — roughly where the held item sits in both first and third person. Intensity
+     * and tint come from the brighter of main/off hand. The feature toggle, a missing player or no
+     * luminous item all push {@code w == 0}, which disables the shader term entirely.
      */
-    private static Float4 handLight(RtTerrain terrain) {
+    private static HandLightState handLightState(RtTerrain terrain) {
+        if (!CausticaConfig.Rt.Lights.HELD_ITEM_LIGHT.value()) {
+            return HandLightState.NONE;
+        }
         var player = Minecraft.getInstance().player;
         if (player == null) {
-            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return HandLightState.NONE;
         }
-        int level = Math.max(heldLightLevel(player.getMainHandItem()),
-                heldLightLevel(player.getOffhandItem()));
-        if (level <= 0) {
-            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        HeldLight main = heldLight(player.getMainHandItem());
+        HeldLight off = heldLight(player.getOffhandItem());
+        HeldLight best = off.level() > main.level() ? off : main;
+        if (best.level() <= 0) {
+            return HandLightState.NONE;
         }
         float partial = Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
         Vec3 eye = player.getEyePosition(partial);
@@ -1958,29 +1996,95 @@ public final class RtComposite {
         double hx = eye.x + look.x * 0.7;
         double hy = eye.y + look.y * 0.7 - 0.35;
         double hz = eye.z + look.z * 0.7;
-        float intensity = (level / 15.0f) * HAND_LIGHT_POWER;
-        return new Float4((float) (hx - terrain.blockX), (float) (hy - terrain.blockY),
-                (float) (hz - terrain.blockZ), intensity);
+        float intensity = (best.level() / 15.0f) * HAND_LIGHT_POWER;
+        return new HandLightState(
+                new Float4((float) (hx - terrain.blockX), (float) (hy - terrain.blockY),
+                        (float) (hz - terrain.blockZ), intensity),
+                new Float4(best.r(), best.g(), best.b(), 0.0f));
     }
 
-    /** Vanilla block-light level of a held item: block items carry their state's emission; the few
-     * luminous non-block items mirror {@code RtEntityCollector.itemSpriteEmission}'s well-known list
-     * so the analytic light matches what the captured item geometry already suggests. */
-    private static int heldLightLevel(ItemStack stack) {
+    /** A held item's light: vanilla block-light level plus the flame's tint. Block items carry their
+     * state's emission; the few luminous non-block items mirror
+     * {@code RtEntityCollector.itemSpriteEmission}'s well-known list. */
+    private record HeldLight(int level, float r, float g, float b) {
+        static final HeldLight NONE = new HeldLight(0, 0.0f, 0.0f, 0.0f);
+    }
+
+    private static HeldLight heldLight(ItemStack stack) {
         if (stack.isEmpty()) {
-            return 0;
-        }
-        if (stack.getItem() instanceof BlockItem blockItem) {
-            return blockItem.getBlock().defaultBlockState().getLightEmission();
+            return HeldLight.NONE;
         }
         String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
-        if (path.contains("lava")) {
-            return 15; // lava bucket
+        int level;
+        if (stack.getItem() instanceof BlockItem blockItem) {
+            level = blockItem.getBlock().defaultBlockState().getLightEmission();
+        } else if (path.contains("lava")) {
+            level = 15; // lava bucket
+        } else if (path.contains("blaze_rod")) {
+            level = 10;
+        } else {
+            level = 0;
+        }
+        if (level <= 0) {
+            return HeldLight.NONE;
+        }
+        float[] tint = heldLightTint(path);
+        return new HeldLight(level, tint[0], tint[1], tint[2]);
+    }
+
+    /** Ordered substring matching: soul/redstone variants before the generic torch check, sea lantern
+     * before lantern, froglight variants before the ochre catch-all. */
+    private static float[] heldLightTint(String path) {
+        if (path.contains("soul_torch") || path.contains("soul_lantern")
+                || path.contains("soul_campfire")) {
+            return TINT_SOUL;
+        }
+        if (path.contains("redstone_torch")) {
+            return TINT_REDSTONE;
+        }
+        if (path.contains("sea_lantern")) {
+            return TINT_AQUA;
+        }
+        if (path.contains("sea_pickle")) {
+            return TINT_PICKLE;
+        }
+        if (path.contains("torch") || path.contains("lantern") || path.contains("campfire")) {
+            return TINT_TORCH;
+        }
+        if (path.contains("lava") || path.contains("magma")) {
+            return TINT_LAVA;
+        }
+        if (path.contains("glowstone")) {
+            return TINT_GLOWSTONE;
+        }
+        if (path.contains("shroomlight")) {
+            return TINT_SHROOMLIGHT;
+        }
+        if (path.contains("verdant_froglight")) {
+            return TINT_VERDANT;
+        }
+        if (path.contains("pearlescent_froglight")) {
+            return TINT_PEARLESCENT;
+        }
+        if (path.contains("froglight")) { // ochre
+            return TINT_OCHRE;
+        }
+        if (path.contains("end_rod")) {
+            return TINT_END_ROD;
+        }
+        if (path.contains("beacon")) {
+            return TINT_BEACON;
+        }
+        if (path.contains("crying_obsidian")) {
+            return TINT_CRYING;
+        }
+        if (path.contains("redstone_lamp") || path.contains("jack_o_lantern")) {
+            return TINT_AMBER;
         }
         if (path.contains("blaze_rod")) {
-            return 10;
+            return TINT_BLAZE;
         }
-        return 0;
+        return TINT_DEFAULT;
     }
 
     /**

@@ -181,12 +181,13 @@ public final class RtVideoOptions {
     }
 
     /**
-     * Light-emission and sampling options. {@code dynamicIntensity} scales the lights created from
-     * luminous held items (torches, lanterns, lava buckets, ...) and other dynamic emitters; it starts
-     * at the shipped 1.0 default and the new scale takes effect the frame after the slider moves.
+     * Light-emission and sampling options. {@code heldItemLight} toggles the analytic light a luminous
+     * held item casts; {@code dynamicIntensity} scales that light and other dynamic emitters. Both take
+     * effect the frame after they change.
      */
     public static OptionInstance<?>[] lightOptions() {
         return new OptionInstance<?>[] {
+            heldItemLight(),
             blockEmissiveIntensity(),
             dynamicIntensity(),
             restirSampling(),
@@ -291,6 +292,11 @@ public final class RtVideoOptions {
     private static OptionInstance<Integer> dynamicIntensity() {
         return multiplier("caustica.options.rt.dynamicIntensity",
                 CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY, 0, 160);
+    }
+
+    /** Master toggle for the analytic light a luminous held item casts (torch in a cave, ...). */
+    private static OptionInstance<Boolean> heldItemLight() {
+        return bool("caustica.options.rt.heldItemLight", CausticaConfig.Rt.Lights.HELD_ITEM_LIGHT);
     }
 
     private static OptionInstance<Boolean> restirSampling() {

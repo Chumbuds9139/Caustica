@@ -772,8 +772,9 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
     if (max(vis.r, max(vis.g, vis.b)) <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
-    // Near-distance clamp keeps the estimate finite when the receiver practically touches the flame.
-    return vis * (ndl * intensity / max(d2, 0.25));
+    // Per-item tint (torch warm, soul torch cyan, lava orange-red...); near-distance clamp keeps
+    // the estimate finite when the receiver practically touches the flame.
+    return vis * (worldPush.handLightColor.xyz * ndl * intensity / max(d2, 0.25));
 }
 
 // TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):

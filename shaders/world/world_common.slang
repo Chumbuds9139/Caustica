@@ -124,6 +124,9 @@ public struct WorldPush {
     // every diffuse receiver in world.rgen and scaled by lightScales.y — held items never enter
     // the RIS emitter buffer, so this term is what makes a torch in hand actually light a cave.
     public float4   handLight;
+    // Linear RGB tint of the held light, resolved per item on the CPU (RtComposite.heldLight):
+    // torch warm orange, soul torch cyan, lava deep orange-red... Only read when handLight.w > 0.
+    public float4   handLightColor;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
