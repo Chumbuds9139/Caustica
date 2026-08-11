@@ -26,10 +26,11 @@ import world_common;
 [[vk::binding(9, 0)]]  [format("r32f")]    public RWTexture2D<float>  gViewZ;    // linear view depth, primary hit (sky = large)
 [[vk::binding(10, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdDiff;  // YCoCg diffuse radiance, w = normalized hit distance
 [[vk::binding(11, 0)]] [format("rgba16f")] public RWTexture2D<float4> gNrdSpec;  // YCoCg specular radiance, w = normalized hit distance
-// FSR reactive mask: 1.0 where the pixel's content moves independently of the camera (dynamic
-// entities) or is transmissive — FSR must not lock its temporal history on those pixels or they
-// ghost behind their own motion. Written unconditionally in Pass A; only the FSR path consumes it.
-[[vk::binding(12, 0)]] [format("r16f")]    public RWTexture2D<float>  gReactive;
+// Per-pixel selective-fog texture. Pass A stores the camera-to-first-hit depth multiplied by a
+// deterministic sky-exposure mask; Pass B consumes it once after path aggregation. A covered pixel
+// stores zero, which keeps caves/interiors clear and prevents emissive fog from being sampled inside
+// stochastic water/refraction branches.
+[[vk::binding(12, 0)]] [format("r16f")]    public RWTexture2D<float>  gFogDepthMask;
 
 // Per-frame push data loaded once from the BDA buffer at the top of main() (same pattern as the GLSL
 // `worldPush` global). Layout constants generated from this module's SPIR-V — see world_common.WorldPush.
@@ -78,6 +79,7 @@ public bool restirEnabled() {
             && pc.restirPreviousAddr != 0 && pc.restirCurrentAddr != 0;
 }
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }
+public bool fogEnabled() { return worldFeature(worldPush, FEATURE_FOG); }
 public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED); }
 
 /** SSS strength after the player toggle: the material value, or a hard zero when SSS is disabled. */

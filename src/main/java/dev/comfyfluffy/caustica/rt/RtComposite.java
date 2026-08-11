@@ -126,7 +126,7 @@ public final class RtComposite {
     // Hot addresses/frameIndex and raygen's debugView avoid unnecessary global-memory dereferences;
     // WorldPushConstantsData is generated from the same Slang module and owns this second ABI as well.
     // RR guide buffers (bindings 3..8) + NRD signals (bindings 9..11: viewZ + per-lobe radiance/hit
-    // distance) + the FSR reactive mask (binding 12). The NRD images are only written when
+    // distance) + the selective fog depth mask (binding 12). The NRD images are only written when
     // FEATURE_NRD is on, but the bindings always exist.
     private static final int GUIDE_COUNT = 10;
     private static final long PATH_RECORD_BYTES = 48L;
@@ -169,6 +169,7 @@ public final class RtComposite {
     // it is simply never set anymore (the shader's nrdEnabled() is always false).
     private static final int FEATURE_NRD = 64;
     private static final int FEATURE_TAA = 128;
+    private static final int FEATURE_FOG = 256;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -189,6 +190,9 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
+        }
+        if (CausticaConfig.Rt.Composite.FOG.value()) {
+            flags |= FEATURE_FOG;
         }
         if (CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value()) {
             flags |= FEATURE_RESTIR;
@@ -469,9 +473,8 @@ public final class RtComposite {
     private RtImage gViewZ;
     private RtImage gNrdDiff;
     private RtImage gNrdSpec;
-    // FSR reactive mask (dynamic entities + transmissive surfaces) — written unconditionally by the
-    // tracer, consumed only by the FSR upscale path.
-    private RtImage gReactive;
+    // R16 per-pixel effective fog depth: primary camera depth multiplied by the sky-exposure mask.
+    private RtImage gFogDepthMask;
     // Temporal accumulation ping-pong over the trace radiance; alpha channel carries the per-pixel
     // frame count. Swapped every frame.
     private RtImage taaPing;
@@ -954,8 +957,8 @@ public final class RtComposite {
         worldPipeline.setExtraStorageImage(6, gViewZ.view);
         worldPipeline.setExtraStorageImage(7, gNrdDiff.view);
         worldPipeline.setExtraStorageImage(8, gNrdSpec.view);
-        // FSR reactive mask: always written by the tracer, consumed by the FSR path.
-        worldPipeline.setExtraStorageImage(9, gReactive.view);
+        // Selective fog depth mask: written in Pass A and consumed in Pass B.
+        worldPipeline.setExtraStorageImage(9, gFogDepthMask.view);
     }
 
     private void destroyGuideImages() {
@@ -995,9 +998,9 @@ public final class RtComposite {
             gNrdSpec.destroy();
             gNrdSpec = null;
         }
-        if (gReactive != null) {
-            gReactive.destroy();
-            gReactive = null;
+        if (gFogDepthMask != null) {
+            gFogDepthMask.destroy();
+            gFogDepthMask = null;
         }
         if (taaPing != null) {
             taaPing.destroy();
@@ -1221,7 +1224,7 @@ public final class RtComposite {
         gViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "nrd viewZ " + renderW + "x" + renderH);
         gNrdDiff = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd diffuse radiance+hitdist " + renderW + "x" + renderH);
         gNrdSpec = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd specular radiance+hitdist " + renderW + "x" + renderH);
-        gReactive = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16_SFLOAT, "fsr reactive mask " + renderW + "x" + renderH);
+        gFogDepthMask = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16_SFLOAT, "fog depth mask " + renderW + "x" + renderH);
         // Temporal accumulation history over the trace radiance.
         if (taaEnabled) {
             taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
@@ -2108,21 +2111,25 @@ public final class RtComposite {
     }
 
     /**
-     * Uniform, self-illuminated ambient medium for the dimension ({@code WorldPush.ambientFog}: rgb
-     * in-scatter radiance, w extinction per block). {@code medium.slang} integrates it over every path
-     * segment, so it reaches reflections, refractions and indirect bounces — not just primary rays.
+     * Outdoor distance-medium parameters ({@code WorldPush.ambientFog}: rgb in-scatter radiance, w
+     * extinction per block). Pass A combines primary depth with a sky-visibility test into a per-pixel
+     * mask texture; Pass B composites this medium once after path aggregation. It is therefore absent
+     * from caves/interiors and stable across water/glass Fresnel branches instead of being injected
+     * uniformly into every path segment.
      *
-     * <p>The Nether gets a thick warm haze: it is what makes the dimension read as enclosed and is a
-     * large part of its ambient light, since a Nether cave has no sky to gather from. The End gets a
-     * very thin violet dust that only becomes visible across the long sight lines of the outer islands.
-     * The Overworld's air is resolved by {@link #overworldFog}, which keys a permanent distance haze to
-     * the render distance and thickens it for rain and night.
+     * <p>The Nether is roofed by construction and is treated as one cave, so its former glowing haze is
+     * explicitly removed. The End retains a very thin violet dust over exposed outer-island sight lines.
+     * The Overworld keys its outdoor haze to render distance and thickens it for rain and night.
+     * Disabling the live fog option zeros the parameters as well as its shader feature bit.
      *
-     * <p>Densities are per block: 0.012 halves radiance at ~58 blocks, 0.0016 at ~430.
+     * <p>The End density 0.0016 halves radiance at roughly 430 blocks.
      */
     private static Float4 ambientFog(int dimension, WeatherState weather, float dayFactor) {
+        if (!CausticaConfig.Rt.Composite.FOG.value()) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
         return switch (dimension) {
-            case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);
+            case DIMENSION_NETHER -> new Float4(0.0f, 0.0f, 0.0f, 0.0f);
             case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);
             default -> overworldFog(weather, dayFactor);
         };

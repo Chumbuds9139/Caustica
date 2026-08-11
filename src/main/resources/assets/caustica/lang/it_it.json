@@ -30,6 +30,8 @@
 	"caustica.options.rt.sss.tooltip": "Consente alla luce di diffondersi attraverso superfici sottili come foglie ed erba, così il fogliame si illumina quando lo si guarda in controluce. Interessa solo i materiali che forniscono dati di sottosuperficie e costa un raggio d'ombra aggiuntivo dove viene applicata.",
 	"caustica.options.rt.weatherLighting": "Illuminazione meteorologica",
 	"caustica.options.rt.weatherLighting.tooltip": "Attenua la luce del sole e della luna e scurisce il cielo durante pioggia e temporali, nascondendo sole, luna e stelle dietro le nuvole. Disattivato, mantiene l'illuminazione a cielo sereno con qualsiasi meteo.",
+	"caustica.options.rt.fog": "Nebbia mascherata",
+	"caustica.options.rt.fog.tooltip": "Applica selettivamente la nebbia in distanza usando profondità e visibilità del cielo. Grotte e interni coperti restano limpidi, mentre gli esterni mantengono la foschia meteo e dell’orizzonte. Disattivarla non modifica i cieli delle dimensioni.",
 	"caustica.options.rt.denoiser": "Filtro di riduzione del rumore",
 	"caustica.options.rt.denoiser.tooltip": "Applica il filtro di riduzione del rumore di DLSS Ray Reconstruction all'immagine in path tracing. Disattivato, mostra il tracciamento grezzo e rumoroso a piena risoluzione: utile come vista di riferimento, ma molto più granuloso con pochi campioni. Richiede il supporto a DLSS Ray Reconstruction.",
 	"caustica.options.rt.handFov": "FOV della mano",

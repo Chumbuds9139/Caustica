@@ -16,6 +16,9 @@ public static float3 gv_normal = float3(0.0, 0.0, 0.0);
 public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
 public static float gv_rough = 0.0;
 public static float3 gv_hitCamRel = float3(0.0, 0.0, 0.0);       // primary-surface hit position relative to the current camera
+// Camera depth after the per-pixel sky-exposure mask. This is deliberately captured at the FIRST
+// interface, before a water/glass guide follows transmission to a more distant destination.
+public static float gv_fogDepth = 0.0;
 public static bool gv_motionUseRefracted = false; // true when the MV tracks the refracted hit (its own reprojection delta)
 // World-space displacement of the motion-guide surface since the previous frame (0 for static
 // terrain/sky, an entity's per-vertex/object motion for a dynamic hit).
@@ -33,6 +36,22 @@ public struct SpecSurface {
     public float3 albedo;         // specular albedo fed to DLSS-RR for demodulation (0 = pure diffuse)
 };
 public static SpecSurface gv_spec = {};
+
+// Build the selective fog texture from camera depth and a deterministic vertical visibility query.
+// Covered receivers (caves, rooms, overhangs) store zero; an exposed receiver stores its full primary
+// depth, with glass/water tint naturally producing a partial mask. The Nether is one roofed cave by
+// construction, so skip a ray there and keep it clear. Atmospheric fog is also suppressed while the
+// camera is underwater: the dielectric medium already owns that extinction and in-scatter.
+public float maskedFogDepth(float3 hitPos, float hitDepth) {
+    if (!fogEnabled() || cameraSubmerged() || worldPush.dimension == DIMENSION_NETHER) {
+        return 0.0;
+    }
+    float3 up = float3(0.0, 1.0, 0.0);
+    VisibilityResult sky = visibility(hitPos + up * (2.0 * SURF_BIAS), up, 1024.0);
+    float exposure = smoothstep(0.02, 0.98,
+            clamp(luminance(sky.transmittance), 0.0, 1.0));
+    return max(hitDepth, 0.0) * exposure;
+}
 
 // Static surfaces reuse one normal for all three roles. Water overrides them (wave-displaced shading
 // normal now and last frame, flat geometric normal for the bias) via the six-argument form.
@@ -291,11 +310,9 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gMotion[pix] = motion;
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
     gSpecMotion[pix] = specMotion;
-    // gReactive (binding 12) is deliberately NOT written: the FSR reactive-mask experiment
-    // (marking moving entities/transmission so FSR would not lock its history there) did not reduce
-    // the ghosting and introduced shimmer regressions, so it was reverted. The image stays allocated
-    // because removing the binding would re-shift the guide block and the celestials-atlas binding
-    // in world.rmiss again; nothing samples it.
+    // R16 is ample for the ray tracer's 10,000-block finite trace range. Writing this in the primary
+    // pass makes the fog mask a stable screen texture shared by every Pass B SPP/path leaf.
+    gFogDepthMask[pix] = gv_fogDepth;
 }
 
 // 48-byte queue record. float3 + uint intentionally share the first 16-byte lane; every remaining

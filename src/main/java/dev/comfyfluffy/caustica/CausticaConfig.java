@@ -57,7 +57,7 @@ public final class CausticaConfig {
         @SuppressWarnings("unused")
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
-            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
+            Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
@@ -606,6 +606,16 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting SSS =
                     bool("caustica.rt.sss", "composite.subsurface-scattering", true);
+            /**
+             * Depth-masked outdoor distance fog. The primary pass writes a per-pixel effective fog
+             * depth after testing whether the visible point has an unobstructed path to the sky, so
+             * covered cave and indoor pixels remain clear instead of receiving uniform emissive haze.
+             *
+             * <p>This is shader-only and takes effect on the next frame. Off skips both the sky-mask
+             * visibility query and the final fog composite; dimension skyboxes are left untouched.
+             */
+            public static final BooleanSetting FOG =
+                    bool("caustica.rt.fog", "composite.fog", true);
             /**
              * Weather-driven lighting. Rain and thunderstorms attenuate the sun/moon NEE radiance,
              * darken and desaturate the sky toward an overcast grey, hide the celestial discs and the

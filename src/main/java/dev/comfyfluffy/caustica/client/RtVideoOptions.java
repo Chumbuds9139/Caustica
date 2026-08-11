@@ -62,6 +62,7 @@ public final class RtVideoOptions {
             // Grouped: the three new effect/quality toggles sit together, and OptionsList.addSmall
             // pairs them two per row, so they read as one block rather than scattered checkboxes.
             subsurfaceScattering(),
+            fog(),
             weatherLighting(),
             // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
             // the other two reads immediately before them.
@@ -135,6 +136,7 @@ public final class RtVideoOptions {
     public static OptionInstance<?>[] effectsOptions() {
         return new OptionInstance<?>[] {
             subsurfaceScattering(),
+            fog(),
             weatherLighting(),
         };
     }
@@ -380,6 +382,11 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> subsurfaceScattering() {
         return bool("caustica.options.rt.sss", CausticaConfig.Rt.Composite.SSS);
+    }
+
+    /** Selective outdoor distance fog; cave and indoor pixels are excluded by a depth/sky mask. */
+    private static OptionInstance<Boolean> fog() {
+        return bool("caustica.options.rt.fog", CausticaConfig.Rt.Composite.FOG);
     }
 
     /** Rain/thunderstorm sun-and-sky dimming. Off keeps clear-sky lighting in every weather state. */

@@ -1,0 +1,113 @@
+package dev.comfyfluffy.caustica.rt;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/** Regression guards for selective cave fog and the water-edge artefact it replaced. */
+final class RtFogShaderRegressionTest {
+    private static final Path REPO_ROOT = repoRoot();
+    private static final Path CORE = REPO_ROOT.resolve("shaders/world/world_core.slang");
+    private static final Path GUIDES = REPO_ROOT.resolve("shaders/world/guides.slang");
+    private static final Path PRIMARY = REPO_ROOT.resolve("shaders/world/world_primary.rgen.slang");
+    private static final Path WORLD = REPO_ROOT.resolve("shaders/world/world.rgen.slang");
+    private static final Path MISS = REPO_ROOT.resolve("shaders/world/world.rmiss.slang");
+
+    @Test
+    void primaryPassWritesDepthAndSkyVisibilityIntoFogMaskTexture() throws IOException {
+        String core = Files.readString(CORE);
+        String guides = Files.readString(GUIDES);
+        String primary = Files.readString(PRIMARY);
+
+        assertTrue(core.contains("RWTexture2D<float>  gFogDepthMask"),
+                "fog needs a dedicated per-pixel mask texture");
+        String maskFunction = slice(guides, "public float maskedFogDepth", "// Static surfaces");
+        assertTrue(maskFunction.contains("visibility("),
+                "the selective mask must test sky exposure instead of applying uniform fog");
+        assertTrue(maskFunction.contains("cameraSubmerged()"),
+                "atmospheric fog must not stack on the underwater medium");
+        assertTrue(maskFunction.contains("worldPush.dimension == DIMENSION_NETHER"),
+                "the roofed Nether must be treated as cave space without spending a visibility ray");
+        assertTrue(guides.contains("gFogDepthMask[pix] = gv_fogDepth;"),
+                "Pass A must materialize the selective depth mask for Pass B");
+        assertInOrder(primary,
+                "float3 hitPos = ro + rd * payload.hitT;",
+                "gv_fogDepth = maskedFogDepth(hitPos, payload.hitT);",
+                "uint material = payloadMaterial();");
+    }
+
+    @Test
+    void fogIsCompositedOnceAfterStochasticPathAggregation() throws IOException {
+        String world = Files.readString(WORLD);
+
+        assertEquals(1, occurrences(world, "evalAmbientFog(worldPush.ambientFog"),
+                "fog must not return to dielectric prefixes or per-bounce path segments");
+        assertFalse(world.contains("AmbientFog preFog"),
+                "split water/glass prefixes must not independently add emissive fog");
+        assertFalse(world.contains("AmbientFog segFog"),
+                "secondary path segments must not independently add emissive fog");
+        assertInOrder(world,
+                "float3 radiance = frameRadiance / float(spp);",
+                "float fogDepth = fogEnabled() ? max(gFogDepthMask[pix], 0.0) : 0.0;",
+                "AmbientFog screenFog = evalAmbientFog(worldPush.ambientFog, fogDepth);",
+                "radiance = radiance * screenFog.transmittance + screenFog.inScatter;");
+        assertTrue(world.contains("diffRad = diffRad * screenFog.transmittance + screenFog.inScatter;")
+                        && world.contains("specRad *= screenFog.transmittance;"),
+                "optional per-lobe denoiser signals must still sum to the fogged combined image");
+    }
+
+    @Test
+    void fogToggleCannotFlattenDimensionSkyboxes() throws IOException {
+        String miss = Files.readString(MISS);
+
+        String dimensionMiss = slice(miss,
+                "if (worldPush.dimension != DIMENSION_OVERWORLD)", "float day = worldPush.sunDir.w;");
+        assertFalse(dimensionMiss.contains("ambientFog"),
+                "the fog parameters/toggle must not recolor Nether or End far-field skyboxes");
+        assertTrue(dimensionMiss.contains("netherSky(dir)") && dimensionMiss.contains("endSky(dir)"));
+    }
+
+    private static int occurrences(String source, String needle) {
+        int count = 0;
+        int at = 0;
+        while ((at = source.indexOf(needle, at)) >= 0) {
+            count++;
+            at += needle.length();
+        }
+        return count;
+    }
+
+    private static String slice(String source, String startNeedle, String endNeedle) {
+        int start = source.indexOf(startNeedle);
+        assertTrue(start >= 0, "missing shader snippet start: " + startNeedle);
+        int end = source.indexOf(endNeedle, start);
+        assertTrue(end > start, "missing shader snippet end: " + endNeedle);
+        return source.substring(start, end);
+    }
+
+    private static void assertInOrder(String source, String... needles) {
+        int at = -1;
+        for (String needle : needles) {
+            int next = source.indexOf(needle, at + 1);
+            assertTrue(next > at, "expected snippet after index " + at + ": " + needle);
+            at = next;
+        }
+    }
+
+    private static Path repoRoot() {
+        Path dir = Path.of("").toAbsolutePath();
+        for (Path candidate = dir; candidate != null; candidate = candidate.getParent()) {
+            if (Files.isDirectory(candidate.resolve("shaders/world"))
+                    && Files.isDirectory(candidate.resolve("src/main/java"))) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("could not locate the repository root from " + dir);
+    }
+}

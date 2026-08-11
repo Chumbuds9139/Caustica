@@ -96,8 +96,8 @@ public struct WorldPush {
     // single source of truth for how much the weather dims things, so Java's NEE radiance and the sky
     // shader can never disagree about how dark a storm is.
     public float4   weather;          // x rain 0..1, y thunder 0..1, z sky darkening, w light attenuation
-    // Uniform ambient in-scattering along every path segment: the Nether's thick haze, the End's void
-    // dust, and the Overworld's rain murk all reduce to one colour + one per-block density.
+    // Outdoor atmospheric medium composited from the per-pixel primary depth/sky mask. Covered caves
+    // store zero effective depth; the Nether has zero density; sky misses are never flattened.
     public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
     // Flat vanilla-style cloud deck (clouds.slang). Coverage already folds in the weather on the Java
     // side (RtComposite.cloudState), so the shader reads one resolved state rather than re-deriving the
@@ -131,7 +131,7 @@ public struct WorldPush {
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
 // Rayleigh/Mie/ozone atmosphere with the sun/moon cycle; the other two dimensions have no celestial
-// cycle at all, so they draw their own skybox and get their ambient light from it plus ambientFog.
+// cycle at all, so they draw their own skybox. The skybox colours are independent of ambientFog.
 public static const uint DIMENSION_OVERWORLD = 0u;
 public static const uint DIMENSION_NETHER = 1u;
 public static const uint DIMENSION_END = 2u;
@@ -147,6 +147,7 @@ public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marc
 public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial emitter-reservoir reuse
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_TAA = 128u;             // renderer temporal accumulation needs gViewZ (its sky cutoff)
+public static const uint FEATURE_FOG = 256u;             // depth/sky-masked outdoor distance fog
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume

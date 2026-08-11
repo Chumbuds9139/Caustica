@@ -42,6 +42,8 @@
 	"caustica.options.rt.sss.tooltip": "Let light scatter through thin surfaces such as leaves and grass, so foliage glows when you look through it toward the sun. Only affects materials that provide subsurface data; costs an extra shadow ray where it applies.",
 	"caustica.options.rt.weatherLighting": "Weather Lighting",
 	"caustica.options.rt.weatherLighting.tooltip": "Dim sunlight and moonlight and darken the sky during rain and thunderstorms, and hide the sun, moon and stars behind the clouds. Off keeps clear-sky lighting in all weather.",
+	"caustica.options.rt.fog": "Masked Fog",
+	"caustica.options.rt.fog.tooltip": "Apply distance fog selectively using primary depth and sky visibility. Covered cave and indoor pixels stay clear, while exposed outdoor terrain keeps weather and horizon haze. Off disables fog without changing dimension skyboxes.",
 	"caustica.options.rt.clouds": "Ray-Traced Clouds",
 	"caustica.options.rt.clouds.tooltip": "Draw a cloud deck in the ray-traced sky. Caustica replaces the vanilla world renderer, which is where vanilla's own clouds are drawn, so this is what puts clouds back in the sky. The deck is visible in reflections and can shadow the world below.",
 	"caustica.options.rt.cloudStyle": "Cloud Style",

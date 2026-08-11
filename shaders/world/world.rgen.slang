@@ -75,21 +75,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         float3 toStart = ro - worldPush.camOffset;
         float prefixDist = length(toStart);
         if (prefixDist > 1.0e-4) {
-            // The ambient fog over this prefix was skipped for exactly the same reason the cloud was:
-            // pass A carries only a throughput and has no radiance accumulator to add the medium's own
-            // glow into, so it deliberately left both halves to whoever owns one. This pass does.
-            //
-            // Without this, a water or glass surface reflected and refracted a fully fogged storm scene
-            // while the camera -> interface segment itself stayed perfectly clear — so lakes and windows
-            // read as crisp holes punched through the weather. That is the "water is not affected by the
-            // rain/fog" case. The split-branch accounting is exact for the same reason as the cloud: the
-            // two branches' Fresnel throughputs sum to one, so the prefix is counted once, not twice.
-            // Prefix segments only exist behind a dielectric split — specular channel.
-            AmbientFog preFog = evalAmbientFog(worldPush.ambientFog, prefixDist);
-            L += throughput * preFog.inScatter;
-            Lspec += throughput * preFog.inScatter;
-            throughput *= preFog.transmittance;
-
+            // Ambient fog is not integrated here. Pass A wrote one first-interface depth/sky mask and
+            // Pass B composites that deterministic screen-space medium after all Fresnel branches and
+            // SPP samples have been aggregated. Keeping emissive fog out of split branches removes the
+            // bright/noisy fringe that used to form around thin falling-water columns.
             CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
                                            prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
             L += throughput * pre.scatter;
@@ -193,20 +182,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             throughput *= exp(-medium.current.extinction * payload.hitT);
         }
 
-        // Dimension-wide ambient fog over the same segment. Independent of the dielectric medium above:
-        // that one describes what the path is submerged in (water, glass), this one the air of the
-        // dimension itself, so a ray inside a Nether lava-lit cave picks up both. Added into L rather
-        // than only attenuating, because the medium glows.
-        {
-            AmbientFog segFog = evalAmbientFog(worldPush.ambientFog, payload.hitT);
-            L += throughput * segFog.inScatter;
-            if (channel == 2) {
-                Lspec += throughput * segFog.inScatter;
-            } else {
-                Ldiff += throughput * segFog.inScatter;
-            }
-            throughput *= segFog.transmittance;
-        }
+        // Dimension fog is intentionally absent from individual path segments. It is a selective
+        // camera-depth effect now, composited once from gFogDepthMask after path aggregation below.
+        // Dielectric extinction above remains physical and continues through reflections/refractions.
 
         // Cloud crossed on the way to this hit. The deck is a real volume in the world, so a ray that
         // ends on GEOMETRY can still pass through cloud before it gets there — looking down at the
@@ -799,6 +777,16 @@ void main() {
         recordIndex = packed.nextRecord;
     }
     float3 radiance = frameRadiance / float(spp);
+
+    // Selective screen-space fog: Pass A stored first-interface depth multiplied by deterministic sky
+    // exposure in an R16 texture. Composite exactly once AFTER all stochastic path leaves and SPP have
+    // converged into one pixel. Besides excluding covered caves/interiors, this prevents each Fresnel
+    // branch around a thin waterfall from independently sampling emissive in-scatter (the old bright,
+    // noisy outline). Miss pixels store zero, so dimension skyboxes remain untouched.
+    float fogDepth = fogEnabled() ? max(gFogDepthMask[pix], 0.0) : 0.0;
+    AmbientFog screenFog = evalAmbientFog(worldPush.ambientFog, fogDepth);
+    radiance = radiance * screenFog.transmittance + screenFog.inScatter;
+
     // Firefly clamp for the raw (undenoised) view only — see UNDENOISED_FIREFLY_MAX_LUMINANCE. Scaling
     // the whole colour by the luminance ratio preserves hue and saturation, so a clamped highlight
     // desaturates toward nothing rather than shifting colour.
@@ -818,6 +806,10 @@ void main() {
         // the denoised path.
         float3 diffRad = frameDiff / float(spp);
         float3 specRad = frameSpec / float(spp);
+        // Keep the retired/optional NRD lobe contract equal to the combined output: atmospheric
+        // in-scatter is diffuse, while both underlying lobes receive the same camera-segment extinction.
+        diffRad = diffRad * screenFog.transmittance + screenFog.inScatter;
+        specRad *= screenFog.transmittance;
         if (any(isnan(diffRad)) || any(isinf(diffRad))) {
             diffRad = float3(0.0, 0.0, 0.0);
         }
