@@ -223,9 +223,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // pushes or pops a participating medium, and the segment travelled inside it is attenuated by
         // that medium's extinction rather than by a tint multiply at the interface.
         //
-        // Water additionally applies the animated wave normal, stabilizes the artificial vertical
-        // closure faces of falling voxels, and marks its medium for the caustic term. Which side of the
-        // face we are on comes from the geometry
+        // Water is the only material that adds anything: the animated wave normal, and a medium marked
+        // for the caustic term. Which side of the face we are on comes from the geometry
         // (payloadDielectricEntering), so a stray or missing face cannot desync the medium for the rest
         // of the path.
         if (material == MATERIAL_WATER || material == MATERIAL_DIELECTRIC) {
@@ -259,9 +258,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             float cosI = clamp(dot(-rd, n), 0.0, 1.0);
             float F = fresnelDielectric(cosI, etaI, etaT);
             float3 transmittedDir = refract(rd, n, etaI / etaT);
-            if (isWater) {
-                F = stabilizeFallingWaterFresnel(F, geometricNormal, transmittedDir);
-            }
             // The translucent terrain layer is recessed by TRANSLUCENT_INSET (RtTerrainMesher), so a
             // glass/ice face touching a slab or stair sits a hair behind that neighbour's surface. A full
             // SURF_BIAS would restart the transmitted ray past the neighbour and see through it. Water

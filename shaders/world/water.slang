@@ -112,21 +112,6 @@ public float3 applyWaterWaves(float3 nGeo, float2 worldXZ, float t, float footpr
     return nGeo.y >= 0.0 ? up : -up;
 }
 
-// Minecraft closes every falling-water voxel with perfectly vertical, block-aligned side quads. They
-// are necessary for medium entry/exit, but treating those artificial closure walls as optically smooth
-// free surfaces turns each silhouette into a one-pixel delta mirror. Nearby emissive blocks then produce
-// the reported bright outline, and stochastic secondary reflection choices make it sparkle. Preserve full
-// Fresnel on the real horizontal/sloped free surface and on total internal reflection, but continuously
-// remove the mirror lobe as the geometric face becomes vertical. Its energy moves to transmission via the
-// existing (1-F) branch, so waterfall sides remain tinted/refractive without a glowing reflected border.
-public float stabilizeFallingWaterFresnel(float fresnel, float3 nGeo, float3 transmittedDir) {
-    if (dot(transmittedDir, transmittedDir) <= 0.0) {
-        return 1.0; // total internal reflection has no transmissive branch to receive the energy
-    }
-    float freeSurface = smoothstep(0.45, 0.75, abs(nGeo.y));
-    return fresnel * freeSurface;
-}
-
 // ---- Water caustics. Sunlight refracting through the waved surface converges/diverges before it
 // reaches an underwater receiver; the analytic wave field makes the true focusing factor computable
 // instead of faked with a scrolling texture. Where the shadow ray of an underwater NEE vertex crossed
