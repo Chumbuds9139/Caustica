@@ -181,13 +181,15 @@ public final class RtVideoOptions {
     }
 
     /**
-     * Light-emission and sampling options. Held-item dynamic lighting keeps working exactly as Caustica
-     * ships it — its multiplier ({@code CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY}) is simply not given a
-     * slider here and stays at the config/system-property default.
+     * Light-emission and sampling options. {@code heldItemLight} toggles the analytic light a luminous
+     * held item casts; {@code dynamicIntensity} scales that light and other dynamic emitters. Both take
+     * effect the frame after they change.
      */
     public static OptionInstance<?>[] lightOptions() {
         return new OptionInstance<?>[] {
+            heldItemLight(),
             blockEmissiveIntensity(),
+            dynamicIntensity(),
             restirSampling(),
         };
     }
@@ -284,6 +286,17 @@ public final class RtVideoOptions {
     private static OptionInstance<Integer> blockEmissiveIntensity() {
         return multiplier("caustica.options.rt.blockEmissiveIntensity",
                 CausticaConfig.Rt.Lights.BLOCK_INTENSITY, 0, 160);
+    }
+
+    /** Held-item / dynamic emitter brightness. Same 0x..16x domain as the block-emissive slider. */
+    private static OptionInstance<Integer> dynamicIntensity() {
+        return multiplier("caustica.options.rt.dynamicIntensity",
+                CausticaConfig.Rt.Lights.DYNAMIC_INTENSITY, 0, 160);
+    }
+
+    /** Master toggle for the analytic light a luminous held item casts (torch in a cave, ...). */
+    private static OptionInstance<Boolean> heldItemLight() {
+        return bool("caustica.options.rt.heldItemLight", CausticaConfig.Rt.Lights.HELD_ITEM_LIGHT);
     }
 
     private static OptionInstance<Boolean> restirSampling() {

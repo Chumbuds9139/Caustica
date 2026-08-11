@@ -62,7 +62,7 @@ public final class CausticaConfig {
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
             Rt.Nrd.ENABLED,
-            Rt.Reflex.ENABLED, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
+            Rt.Reflex.ENABLED, Rt.Lights.HELD_ITEM_LIGHT, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
@@ -127,11 +127,12 @@ public final class CausticaConfig {
                         + " configured FOV instead, so raising the FOV pushes the arm away and lowering it pulls\n"
                         + " the arm closer, the way the rest of the scene reacts.");
         FILE.setComment("lights",
-                " Direct lighting controls. dynamic-intensity scales analytic lights created from luminous\n"
-                        + " held items (torches, lanterns, lava buckets, ...) and is config-only — the Video\n"
-                        + " Settings screen exposes block-emissive-intensity and ReSTIR sampling.\n"
+                " Direct lighting controls. held-item-light toggles the analytic light a luminous held\n"
+                        + " item casts (torch in hand lighting up a cave); each item casts its own colour.\n"
+                        + " dynamic-intensity scales that held-item light and other dynamic emitters;\n"
                         + " block-emissive-intensity scales emissive blocks placed in the world, both their\n"
-                        + " direct-hit emission and sampled area-light contribution. restir-sampling reuses\n"
+                        + " direct-hit emission and sampled area-light contribution. The toggle, both intensity\n"
+                        + " sliders and ReSTIR sampling are exposed in the Video Settings screen. restir-sampling reuses\n"
                         + " validated light reservoirs across frames and nearby pixels; off keeps the original\n"
                         + " independent RIS estimator. ris-candidates = 0 disables emitter NEE entirely\n"
                         + " (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
@@ -772,9 +773,17 @@ public final class CausticaConfig {
         /** Runtime light scaling and RIS block-emitter lights. {@code ris-candidates = 0} disables RIS. */
         public static final class Lights {
             /**
-             * Scales the analytic lights created from luminous held items. Caustica's stock held-item
-             * dynamic lighting stays on and unchanged at the default 1.0; this remains a config/system-property
-             * knob only — the Video Settings screen intentionally exposes just {@link #BLOCK_INTENSITY}.
+             * Master toggle for the analytic light a luminous held item casts (WorldPush.handLight).
+             * Default ON; OFF zeroes the pushed light, so the shader term costs nothing. Gated on the
+             * CPU side — dynamic entity emission (flames, glowing items) is untouched by this toggle.
+             */
+            public static final BooleanSetting HELD_ITEM_LIGHT =
+                    bool("caustica.rt.heldItemLight", "lights.held-item-light", true);
+            /**
+             * Scales the analytic lights created from luminous held items (torches, lanterns, lava
+             * buckets, ...) and other dynamic emitters. The default 1.0 keeps Caustica's stock held-item
+             * dynamic lighting unchanged; the Video Settings screen exposes it alongside
+             * {@link #BLOCK_INTENSITY} so the light a held item casts can be brightened (or dimmed) live.
              */
             public static final FloatSetting DYNAMIC_INTENSITY =
                     lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);

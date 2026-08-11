@@ -739,7 +739,49 @@ public void shadeReservoirSplit(Reservoir s, float3 hitPos, float3 n, float3 v, 
     }
 }
 
+// Analytic held-item light (WorldPush.handLight): xyz position in the rebased space, w packed
+// intensity (radiance*area product of the equivalent emitter; 0 = no luminous held item this
+// frame). Held-item geometry never enters the RIS emitter light buffer — that buffer collects
+// terrain quads only — so without this term a torch in hand lights the scene through rare
+// indirect bounce hits alone and reads as a faint glow at best. This gives it the same direct
+// treatment the celestial light gets: one visibility ray per receiver, inverse-square falloff,
+// Lambertian irradiance for the caller to multiply by brdf and throughput. Runtime scale is
+// lightScales.y (the Video Settings held-item intensity slider).
+public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool twoSided) {
+    float intensity = worldPush.handLight.w * max(worldPush.lightScales.y, 0.0);
+    if (intensity <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 toL = worldPush.handLight.xyz - hitPos;
+    float d2 = dot(toL, toL);
+    if (d2 < 1.0e-4) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float dist = sqrt(d2);
+    float3 ldir = toL / dist;
+    float ndl = twoSided ? abs(dot(n, ldir)) : max(0.0, dot(n, ldir));
+    if (ndl <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    // Stop well short of the light centre: geometry near the flame (another player's held item, the
+    // local player's own body in third person) would otherwise occlude the very light it carries.
+    // The floor keeps tmax strictly above RAY_TMIN so the degenerate close-range ray stays valid.
+    float tmax = max(dist - 0.25, 2.0 * RAY_TMIN);
+    // CULL_HAND_LIGHT: ordinary occluders except the first-person viewmodel — its captured arm/item
+    // sits at the light position and otherwise floats a phantom shadow in the middle of the beam.
+    VisibilityResult shadow = visibilityCulled(origin, ldir, tmax, CULL_HAND_LIGHT);
+    float3 vis = shadow.transmittance;
+    if (max(vis.r, max(vis.g, vis.b)) <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    // Per-item tint (torch warm, soul torch cyan, lava orange-red...); near-distance clamp keeps
+    // the estimate finite when the receiver practically touches the flame.
+    return vis * (worldPush.handLightColor.xyz * ndl * intensity / max(d2, 0.25));
+}
+
 // TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):
 //   bit 0 (0x01) — secondary rays: shadows, GI bounces, reflections.
 //   bit 1 (0x02) — the primary camera ray.
-// Terrain / entities / block entities keep 0xFF (both bits). Particles use 0x02: primary-visible
+// Terrain / entities / block entities keep 0xFF (both bits). Particles use 0x02: primary-visible.
+// The held-item light traces with CULL_HAND_LIGHT (bits 2..7): everything above except the
+// first-person viewmodel (0x01), which must not shadow its own beam.
