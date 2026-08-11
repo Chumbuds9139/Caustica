@@ -187,8 +187,8 @@ static const float3 NETHER_SKY_HAZE = float3(0.052, 0.0125, 0.0065);
 float3 netherSky(float3 dir) {
     float down = smoothstep(-0.75, 0.35, -dir.y);
     float3 col = lerp(NETHER_SKY_HIGH, NETHER_SKY_LOW, down);
-    // The far-field skybox is independent of the player-facing fog toggle. Caves lose the camera-depth
-    // medium, not their authored dimension background.
+    // Keep the authored far-field background independent of the player-facing fog toggle. The matching
+    // warm distance medium is composited separately over geometry and can still be switched off.
     return lerp(col, col * 0.5 + NETHER_SKY_HAZE * 0.6, 0.5);
 }
 

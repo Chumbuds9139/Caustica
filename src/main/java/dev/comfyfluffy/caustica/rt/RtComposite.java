@@ -2111,25 +2111,25 @@ public final class RtComposite {
     }
 
     /**
-     * Outdoor distance-medium parameters ({@code WorldPush.ambientFog}: rgb in-scatter radiance, w
-     * extinction per block). Pass A combines primary depth with a sky-visibility test into a per-pixel
-     * mask texture; Pass B composites this medium once after path aggregation. It is therefore absent
-     * from caves/interiors and stable across water/glass Fresnel branches instead of being injected
-     * uniformly into every path segment.
+     * Distance-medium parameters ({@code WorldPush.ambientFog}: rgb in-scatter radiance, w extinction
+     * per block). Pass A writes a per-pixel effective depth; Pass B composites the medium once after path
+     * aggregation, keeping it stable across water/glass Fresnel branches instead of injecting it into
+     * every path segment.
      *
-     * <p>The Nether is roofed by construction and is treated as one cave, so its former glowing haze is
-     * explicitly removed. The End retains a very thin violet dust over exposed outer-island sight lines.
-     * The Overworld keys its outdoor haze to render distance and thickens it for rain and night.
-     * Disabling the live fog option zeros the parameters as well as its shader feature bit.
+     * <p>Overworld and End depth is multiplied by sky visibility so caves/interiors remain clear. The
+     * Nether intentionally keeps its original thick warm haze at full primary depth: that dimension-wide
+     * atmosphere is part of its authored look rather than Overworld-style outdoor fog. Disabling the live
+     * fog option still zeros every dimension's parameters as well as the shader feature bit.
      *
-     * <p>The End density 0.0016 halves radiance at roughly 430 blocks.
+     * <p>Densities are per block: the Nether's 0.012 halves radiance at roughly 58 blocks, while the End's
+     * 0.0016 does so at roughly 430 blocks.
      */
     private static Float4 ambientFog(int dimension, WeatherState weather, float dayFactor) {
         if (!CausticaConfig.Rt.Composite.FOG.value()) {
             return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
         }
         return switch (dimension) {
-            case DIMENSION_NETHER -> new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+            case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);
             case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);
             default -> overworldFog(weather, dayFactor);
         };

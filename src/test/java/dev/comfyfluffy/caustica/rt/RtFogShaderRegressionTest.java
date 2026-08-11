@@ -18,6 +18,8 @@ final class RtFogShaderRegressionTest {
     private static final Path PRIMARY = REPO_ROOT.resolve("shaders/world/world_primary.rgen.slang");
     private static final Path WORLD = REPO_ROOT.resolve("shaders/world/world.rgen.slang");
     private static final Path MISS = REPO_ROOT.resolve("shaders/world/world.rmiss.slang");
+    private static final Path JAVA =
+            REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java");
 
     @Test
     void primaryPassWritesDepthAndSkyVisibilityIntoFogMaskTexture() throws IOException {
@@ -32,14 +34,26 @@ final class RtFogShaderRegressionTest {
                 "the selective mask must test sky exposure instead of applying uniform fog");
         assertTrue(maskFunction.contains("cameraSubmerged()"),
                 "atmospheric fog must not stack on the underwater medium");
-        assertTrue(maskFunction.contains("worldPush.dimension == DIMENSION_NETHER"),
-                "the roofed Nether must be treated as cave space without spending a visibility ray");
+        assertInOrder(maskFunction,
+                "float depth = max(hitDepth, 0.0);",
+                "if (worldPush.dimension == DIMENSION_NETHER)",
+                "return depth;",
+                "VisibilityResult sky = visibility");
         assertTrue(guides.contains("gFogDepthMask[pix] = gv_fogDepth;"),
                 "Pass A must materialize the selective depth mask for Pass B");
         assertInOrder(primary,
                 "float3 hitPos = ro + rd * payload.hitT;",
                 "gv_fogDepth = maskedFogDepth(hitPos, payload.hitT);",
                 "uint material = payloadMaterial();");
+    }
+
+    @Test
+    void netherRetainsItsAuthoredWarmDistanceHaze() throws IOException {
+        String java = Files.readString(JAVA);
+
+        assertTrue(java.contains(
+                        "case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);"),
+                "the Nether's original warm fog colour and density must not be cleared with cave fog");
     }
 
     @Test
