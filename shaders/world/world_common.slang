@@ -97,7 +97,7 @@ public struct WorldPush {
     // shader can never disagree about how dark a storm is.
     public float4   weather;          // x rain 0..1, y thunder 0..1, z sky darkening, w light attenuation
     // Atmospheric medium composited from a per-pixel effective primary depth. Sky visibility clears
-    // covered Overworld/End caves; the Nether retains its authored full-depth haze; misses stay untouched.
+    // covered Overworld caves; Nether/End retain their authored full-depth haze; misses stay untouched.
     public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
     // Flat vanilla-style cloud deck (clouds.slang). Coverage already folds in the weather on the Java
     // side (RtComposite.cloudState), so the shader reads one resolved state rather than re-deriving the
@@ -147,7 +147,7 @@ public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marc
 public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial emitter-reservoir reuse
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_TAA = 128u;             // renderer temporal accumulation needs gViewZ (its sky cutoff)
-public static const uint FEATURE_FOG = 256u;             // masked distance fog (authored full-depth haze in Nether)
+public static const uint FEATURE_FOG = 256u;             // masked distance fog (authored full-depth Nether/End haze)
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume

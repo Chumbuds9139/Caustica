@@ -2116,10 +2116,10 @@ public final class RtComposite {
      * aggregation, keeping it stable across water/glass Fresnel branches instead of injecting it into
      * every path segment.
      *
-     * <p>Overworld and End depth is multiplied by sky visibility so caves/interiors remain clear. The
-     * Nether intentionally keeps its original thick warm haze at full primary depth: that dimension-wide
-     * atmosphere is part of its authored look rather than Overworld-style outdoor fog. Disabling the live
-     * fog option still zeros every dimension's parameters as well as the shader feature bit.
+     * <p>Overworld depth is multiplied by sky visibility so caves/interiors remain clear. The Nether and
+     * End intentionally keep their original haze at full primary depth: those dimension-wide atmospheres
+     * are part of their authored looks rather than Overworld-style outdoor fog. Disabling the live fog
+     * option still zeros every dimension's parameters as well as the shader feature bit.
      *
      * <p>Densities are per block: the Nether's 0.012 halves radiance at roughly 58 blocks, while the End's
      * 0.0016 does so at roughly 430 blocks.

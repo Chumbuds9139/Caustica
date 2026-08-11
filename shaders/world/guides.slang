@@ -38,17 +38,17 @@ public struct SpecSurface {
 public static SpecSurface gv_spec = {};
 
 // Build the selective fog texture from camera depth and a deterministic vertical visibility query.
-// Covered Overworld/End receivers (caves, rooms, overhangs) store zero; an exposed receiver stores its
-// full primary depth, with glass/water tint naturally producing a partial mask. The Nether deliberately
-// keeps its authored warm, dimension-wide haze and therefore uses full depth without spending a vertical
-// ray. Atmospheric fog is suppressed while the camera is underwater: the dielectric medium already owns
-// that extinction and in-scatter.
+// Covered Overworld receivers (caves, rooms, overhangs) store zero; an exposed receiver stores its full
+// primary depth, with glass/water tint naturally producing a partial mask. The Nether and End deliberately
+// keep their authored dimension-wide haze and therefore use full depth without spending a vertical ray.
+// Atmospheric fog is suppressed while the camera is underwater: the dielectric medium already owns that
+// extinction and in-scatter.
 public float maskedFogDepth(float3 hitPos, float hitDepth) {
     if (!fogEnabled() || cameraSubmerged()) {
         return 0.0;
     }
     float depth = max(hitDepth, 0.0);
-    if (worldPush.dimension == DIMENSION_NETHER) {
+    if (worldPush.dimension != DIMENSION_OVERWORLD) {
         return depth;
     }
     float3 up = float3(0.0, 1.0, 0.0);

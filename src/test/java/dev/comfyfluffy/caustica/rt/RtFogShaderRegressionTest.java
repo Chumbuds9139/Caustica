@@ -36,7 +36,7 @@ final class RtFogShaderRegressionTest {
                 "atmospheric fog must not stack on the underwater medium");
         assertInOrder(maskFunction,
                 "float depth = max(hitDepth, 0.0);",
-                "if (worldPush.dimension == DIMENSION_NETHER)",
+                "if (worldPush.dimension != DIMENSION_OVERWORLD)",
                 "return depth;",
                 "VisibilityResult sky = visibility");
         assertTrue(guides.contains("gFogDepthMask[pix] = gv_fogDepth;"),
@@ -48,12 +48,15 @@ final class RtFogShaderRegressionTest {
     }
 
     @Test
-    void netherRetainsItsAuthoredWarmDistanceHaze() throws IOException {
+    void netherAndEndRetainTheirAuthoredDistanceHaze() throws IOException {
         String java = Files.readString(JAVA);
 
         assertTrue(java.contains(
                         "case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);"),
                 "the Nether's original warm fog colour and density must not be cleared with cave fog");
+        assertTrue(java.contains(
+                        "case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);"),
+                "the End's original violet fog colour and density must not be cleared with cave fog");
     }
 
     @Test
