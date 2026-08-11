@@ -128,10 +128,10 @@ public final class CausticaConfig {
                         + " the arm closer, the way the rest of the scene reacts.");
         FILE.setComment("lights",
                 " Direct lighting controls. dynamic-intensity scales analytic lights created from luminous\n"
-                        + " held items (torches, lanterns, lava buckets, ...) and is config-only — the Video\n"
-                        + " Settings screen exposes block-emissive-intensity and ReSTIR sampling.\n"
+                        + " held items (torches, lanterns, lava buckets, ...) and other dynamic emitters;\n"
                         + " block-emissive-intensity scales emissive blocks placed in the world, both their\n"
-                        + " direct-hit emission and sampled area-light contribution. restir-sampling reuses\n"
+                        + " direct-hit emission and sampled area-light contribution. Both intensity sliders and\n"
+                        + " ReSTIR sampling are exposed in the Video Settings screen. restir-sampling reuses\n"
                         + " validated light reservoirs across frames and nearby pixels; off keeps the original\n"
                         + " independent RIS estimator. ris-candidates = 0 disables emitter NEE entirely\n"
                         + " (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
@@ -772,9 +772,10 @@ public final class CausticaConfig {
         /** Runtime light scaling and RIS block-emitter lights. {@code ris-candidates = 0} disables RIS. */
         public static final class Lights {
             /**
-             * Scales the analytic lights created from luminous held items. Caustica's stock held-item
-             * dynamic lighting stays on and unchanged at the default 1.0; this remains a config/system-property
-             * knob only — the Video Settings screen intentionally exposes just {@link #BLOCK_INTENSITY}.
+             * Scales the analytic lights created from luminous held items (torches, lanterns, lava
+             * buckets, ...) and other dynamic emitters. The default 1.0 keeps Caustica's stock held-item
+             * dynamic lighting unchanged; the Video Settings screen exposes it alongside
+             * {@link #BLOCK_INTENSITY} so the light a held item casts can be brightened (or dimmed) live.
              */
             public static final FloatSetting DYNAMIC_INTENSITY =
                     lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);
