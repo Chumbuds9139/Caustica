@@ -739,6 +739,43 @@ public void shadeReservoirSplit(Reservoir s, float3 hitPos, float3 n, float3 v, 
     }
 }
 
+// Analytic held-item light (WorldPush.handLight): xyz position in the rebased space, w packed
+// intensity (radiance*area product of the equivalent emitter; 0 = no luminous held item this
+// frame). Held-item geometry never enters the RIS emitter light buffer — that buffer collects
+// terrain quads only — so without this term a torch in hand lights the scene through rare
+// indirect bounce hits alone and reads as a faint glow at best. This gives it the same direct
+// treatment the celestial light gets: one visibility ray per receiver, inverse-square falloff,
+// Lambertian irradiance for the caller to multiply by brdf and throughput. Runtime scale is
+// lightScales.y (the Video Settings held-item intensity slider).
+public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool twoSided) {
+    float intensity = worldPush.handLight.w * max(worldPush.lightScales.y, 0.0);
+    if (intensity <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 toL = worldPush.handLight.xyz - hitPos;
+    float d2 = dot(toL, toL);
+    if (d2 < 1.0e-4) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float dist = sqrt(d2);
+    float3 ldir = toL / dist;
+    float ndl = twoSided ? abs(dot(n, ldir)) : max(0.0, dot(n, ldir));
+    if (ndl <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    // Stop well short of the light centre: the held item's own captured flame/item geometry sits
+    // there and would otherwise occlude the very light it creates whenever the receiver is close.
+    // The floor keeps tmax strictly above RAY_TMIN so the degenerate close-range ray stays valid.
+    float tmax = max(dist - 0.25, 2.0 * RAY_TMIN);
+    VisibilityResult shadow = visibility(origin, ldir, tmax);
+    float3 vis = shadow.transmittance;
+    if (max(vis.r, max(vis.g, vis.b)) <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    // Near-distance clamp keeps the estimate finite when the receiver practically touches the flame.
+    return vis * (ndl * intensity / max(d2, 0.25));
+}
+
 // TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):
 //   bit 0 (0x01) — secondary rays: shadows, GI bounces, reflections.
 //   bit 1 (0x02) — the primary camera ray.

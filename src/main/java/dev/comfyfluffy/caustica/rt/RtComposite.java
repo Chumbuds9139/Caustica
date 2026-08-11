@@ -27,15 +27,19 @@ import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.ARGB;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
@@ -1506,7 +1510,9 @@ public final class RtComposite {
                     // Shader-only POM: x relief depth (blocks), y fixed layer count, w fade distance.
                     parallaxParams(),
                     dimension,
-                    featureFlags()
+                    featureFlags(),
+                    // Analytic held-item light: xyz rebased position, w intensity (0 = none held).
+                    handLight(terrain)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {
@@ -1918,6 +1924,63 @@ public final class RtComposite {
         float rainSky = 1.0f - 0.55f * rain;
         float stormSky = 1.0f - 0.45f * thunder;
         return new WeatherState(rain, thunder, rainSky * stormSky, rainLight * stormLight);
+    }
+
+    /** Baseline radiance*area product of the analytic held-item light at light level 15. Calibrated so
+     * a default-scale torch in hand reads close to a placed torch on nearby blocks; the Video Settings
+     * held-item slider (lights.dynamic-intensity / {@code lightScales.y}) scales it live. */
+    private static final float HAND_LIGHT_POWER = 0.6f;
+
+    /**
+     * The analytic point light a luminous held item casts (WorldPush.handLight). Held-item geometry
+     * never enters the RIS emitter light buffer — that buffer collects terrain quads only — so its
+     * captured flame would light the scene through rare indirect bounce hits alone: a torch in hand
+     * barely brightened the blocks right in front of it. The shader therefore NEE-samples this light
+     * at every diffuse receiver, exactly like the celestial light.
+     *
+     * <p>Position follows the player's (partial-tick interpolated) view, pushed forward and slightly
+     * below eye level — roughly where the held item sits in both first and third person. Intensity is
+     * the best luminous item in either hand; {@code w == 0} disables the shader term entirely.
+     */
+    private static Float4 handLight(RtTerrain terrain) {
+        var player = Minecraft.getInstance().player;
+        if (player == null) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        int level = Math.max(heldLightLevel(player.getMainHandItem()),
+                heldLightLevel(player.getOffhandItem()));
+        if (level <= 0) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        float partial = Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
+        Vec3 eye = player.getEyePosition(partial);
+        Vec3 look = player.getViewVector(partial);
+        double hx = eye.x + look.x * 0.7;
+        double hy = eye.y + look.y * 0.7 - 0.35;
+        double hz = eye.z + look.z * 0.7;
+        float intensity = (level / 15.0f) * HAND_LIGHT_POWER;
+        return new Float4((float) (hx - terrain.blockX), (float) (hy - terrain.blockY),
+                (float) (hz - terrain.blockZ), intensity);
+    }
+
+    /** Vanilla block-light level of a held item: block items carry their state's emission; the few
+     * luminous non-block items mirror {@code RtEntityCollector.itemSpriteEmission}'s well-known list
+     * so the analytic light matches what the captured item geometry already suggests. */
+    private static int heldLightLevel(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return 0;
+        }
+        if (stack.getItem() instanceof BlockItem blockItem) {
+            return blockItem.getBlock().defaultBlockState().getLightEmission();
+        }
+        String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+        if (path.contains("lava")) {
+            return 15; // lava bucket
+        }
+        if (path.contains("blaze_rod")) {
+            return 10;
+        }
+        return 0;
     }
 
     /**

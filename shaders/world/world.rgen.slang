@@ -390,6 +390,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 }
             }
 
+            // Same analytic held-item light as surfaces. Billboards are two-sided receivers; bias
+            // the shadow origin toward the light's side, exactly like the celestial NEE above does.
+            if (worldPush.handLight.w > 0.0) {
+                float3 toHand = worldPush.handLight.xyz - hitPos;
+                float3 handOrigin = hitPos + (dot(n, toHand) >= 0.0 ? n : -n) * SURF_BIAS;
+                float3 particleHandIrr = handLightIrradiance(handOrigin, hitPos, n, true);
+                if (max(particleHandIrr.x, max(particleHandIrr.y, particleHandIrr.z)) > 0.0) {
+                    float3 particleHand = throughput * albedo * INV_PI * particleHandIrr;
+                    L += particleHand;
+                    if (channel == 2) {
+                        Lspec += particleHand;
+                    } else {
+                        Ldiff += particleHand;
+                    }
+                }
+            }
+
             float3 v = -rd;
 
             // RIS direct lighting from block emitters (lava, glowstone, torches, ...) — same reservoir
@@ -554,6 +571,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                         Lspec += nee;
                     }
                 }
+            }
+        }
+
+        // Analytic held-item light: direct NEE toward the luminous item in the player's hand
+        // (WorldPush.handLight). Held items never enter the RIS emitter buffer, so without this
+        // term their captured flame lights the scene through rare indirect bounce hits only —
+        // a torch in hand would barely brighten the blocks in front of it. Lambertian only; the
+        // flame itself still gathers as ordinary emissive geometry on direct hit. Two-sided for
+        // dynamic entities, mirroring the celestial NDL convention above.
+        float3 handIrr = handLightIrradiance(p, hitPos, n, isDynamicEntityEarly);
+        if (max(handIrr.x, max(handIrr.y, handIrr.z)) > 0.0) {
+            float3 handNee = throughput * diffAlb * INV_PI * handIrr;
+            L += handNee;
+            if (channel == 2) {
+                Lspec += handNee;
+            } else {
+                Ldiff += handNee;
             }
         }
 
