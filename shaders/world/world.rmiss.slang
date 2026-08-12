@@ -183,19 +183,23 @@ float3 stars(float3 dir, float starBrightness, float VdotS, float4 celestial) {
 
 static const float3 NETHER_SKY_LOW  = float3(0.36, 0.085, 0.030);
 static const float3 NETHER_SKY_HIGH = float3(0.085, 0.024, 0.020);
-float3 netherSky(float3 dir, float3 fogColor) {
+static const float3 NETHER_SKY_HAZE = float3(0.052, 0.0125, 0.0065);
+float3 netherSky(float3 dir) {
     float down = smoothstep(-0.75, 0.35, -dir.y);
     float3 col = lerp(NETHER_SKY_HIGH, NETHER_SKY_LOW, down);
-    return lerp(col, col * 0.5 + fogColor * 0.6, 0.5);
+    // Keep the authored far-field background independent of the player-facing fog toggle. The matching
+    // warm distance medium is composited separately over geometry and can still be switched off.
+    return lerp(col, col * 0.5 + NETHER_SKY_HAZE * 0.6, 0.5);
 }
 
 static const float3 END_SKY_DEEP  = float3(0.020, 0.010, 0.035);
 static const float3 END_SKY_BAND  = float3(0.055, 0.028, 0.080);
+static const float3 END_SKY_HAZE  = float3(0.010, 0.0055, 0.016);
 static const float  END_STAR_BRIGHTNESS = 0.55;
-float3 endSky(float3 dir, float3 fogColor) {
+float3 endSky(float3 dir) {
     float band = 1.0 - abs(dir.y);
     float3 col = lerp(END_SKY_DEEP, END_SKY_BAND, band * band);
-    col = lerp(col, fogColor * 0.35, 0.35);
+    col = lerp(col, END_SKY_HAZE * 0.35, 0.35);
     float3 a = abs(dir);
     float2 uv;
     float face;
@@ -240,8 +244,8 @@ void main(inout Payload payload) {
 
     if (worldPush.dimension != DIMENSION_OVERWORLD) {
         writeSkyMiss(payload, worldPush.dimension == DIMENSION_NETHER
-                ? netherSky(dir, worldPush.ambientFog.xyz)
-                : endSky(dir, worldPush.ambientFog.xyz));
+                ? netherSky(dir)
+                : endSky(dir));
         return;
     }
 

@@ -27,18 +27,15 @@ public float3 volumeExtinction(float3 tint, float transmission) {
     return -log(blockTransmittance) / VOLUME_TINT_REFERENCE_DISTANCE;
 }
 
-// ---- Global ambient fog (worldPush.ambientFog): a uniform, self-illuminated participating medium
-// filling the whole dimension, on top of whatever volume dielectric the path happens to be inside.
+// ---- Masked atmospheric fog (worldPush.ambientFog).
 //
-// This is what gives the Nether its deep, enclosing haze and the End its faint void dust, and what
-// makes distant terrain wash out in heavy rain. It is a single-scatter, homogeneous approximation:
-// over a segment of length d the path keeps exp(-sigma*d) of its radiance and picks up the fog's own
-// emission over the part it lost. That is exact for a uniform emissive medium, costs one exp per
-// segment, and — unlike a screen-space depth fade — automatically applies to reflections, refractions
-// and every indirect bounce, because it lives in the path integral rather than at the display seam.
+// The parameters still describe a homogeneous emissive medium: over effective depth d, radiance keeps
+// exp(-sigma*d) and picks up the fog colour over the part it lost. The caller supplies d from the
+// per-pixel primary-depth/sky-exposure texture, rather than integrating this at every stochastic path
+// segment. That makes the medium selective (covered caves/interiors have d=0), preserves far-field
+// skyboxes, and keeps fog stable around split water/glass branches.
 //
-// density (w) is per block and zero in the clear Overworld, where the whole thing compiles down to one
-// comparison per segment.
+// Density (w) is per block. A zero density or masked depth is the exact identity operation.
 public struct AmbientFog {
     public float3 inScatter;   // radiance added over the segment
     public float3 transmittance; // what survives of the radiance coming from beyond it
