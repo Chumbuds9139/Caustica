@@ -84,8 +84,12 @@ final class RtDenoiserShaderRegressionTest {
 
         assertFalse(denoiser.contains("nrdViewToClip.m11(-"),
                 "NRD converts handedness itself; pre-flipping the projection makes it flip twice");
+        // The depth row is still sanitized, but with the CORRECT element names: JOML's mNM is
+        // column N, row M, so the near plane belongs in m32 (row2.w) and the 1 in m23 (row3.z).
+        // The transposed spelling this assertion used to pin is what produced a degenerate matrix
+        // and the shim's "non-finite matrix" rejection; nrdDepthRowIsNotTransposed covers it.
         assertTrue(denoiser.contains("nrdViewToClip.m22(0f)")
-                        && denoiser.contains("nrdViewToClip.m23(NRD_PROJECTION_NEAR)"),
+                        && denoiser.contains("nrdViewToClip.m32(NRD_PROJECTION_NEAR)"),
                 "the degenerate float-Z depth row must still be sanitized for NRD's world-space scales");
     }
 
