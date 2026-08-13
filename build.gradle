@@ -535,36 +535,40 @@ publishing {
 }
 
 // TEMPORARY (remove before merge): the Actions log-archive host is unreachable
-// from the environment this branch is developed in, so compiler and test
-// failures are re-emitted as GitHub workflow annotations, which ARE readable
-// through the API. Active only under GITHUB_ACTIONS.
+// from the environment this branch is developed in, so failures are re-emitted
+// as GitHub workflow annotations, which ARE readable through the API.
+// Active only under GITHUB_ACTIONS.
 if (System.getenv("GITHUB_ACTIONS") != null) {
+	def diagDir = new File(rootProject.projectDir, "build/compile-diagnostics")
 	tasks.withType(JavaCompile).configureEach { t ->
-		def diag = layout.buildDirectory.file("compile-diagnostics/${t.name}.txt").get().asFile
 		t.options.fork = true
-		t.options.compilerArgs.addAll(["-Xmaxerrs", "500", "-Xstdout", diag.absolutePath])
-		t.doFirst { diag.parentFile.mkdirs() }
-		def emit = tasks.register("emit${t.name.capitalize()}Diagnostics") {
-			doLast {
-				if (diag.exists()) {
-					diag.readLines().findAll { it.contains("error:") || it.contains(".java:") }
-						.take(60).each { println "::error::${it}" }
-				}
-			}
-		}
-		t.finalizedBy(emit)
+		t.doFirst { diagDir.mkdirs() }
+		t.options.compilerArgs.addAll(["-Xmaxerrs", "500",
+			"-Xstdout", new File(diagDir, "${t.name}.txt").absolutePath])
 	}
 	tasks.withType(Test).configureEach { t ->
-		t.testLogging {
-			exceptionFormat = "full"
-			showStackTraces = true
-			events "failed"
-		}
+		t.testLogging { exceptionFormat = "full"; showStackTraces = true; events "failed" }
+		t.ignoreFailures = false
 		t.afterTest { desc, result ->
 			if (result.resultType.toString() == "FAILURE") {
-				def msg = (result.exception?.toString() ?: "test failed").replaceAll("\r?\n", "%0A")
-				println "::error::TEST ${desc.className}.${desc.name}: ${msg}"
+				def ex = result.exceptions ? result.exceptions[0].toString() : "test failed"
+				println "::error::TEST ${desc.className}.${desc.name}: ${ex.replaceAll('\r?\n', ' | ')}"
 			}
+		}
+	}
+	gradle.taskGraph.afterTask { Task t, TaskState state ->
+		if (!state.failure) return
+		println "::error::TASK FAILED ${t.path}"
+		def f = new File(diagDir, "${t.name}.txt")
+		if (f.exists()) {
+			f.readLines().findAll { it.contains("error") || it.contains(".java:") }
+				.take(60).each { println "::error::${it.replaceAll('\r?\n', ' ')}" }
+		}
+		def c = state.failure
+		int guard = 0
+		while (c != null && guard++ < 8) {
+			println "::error::CAUSE ${c.class.simpleName}: ${String.valueOf(c.message).replaceAll('\r?\n', ' | ').take(700)}"
+			c = c.cause
 		}
 	}
 }
