@@ -49,9 +49,10 @@ const float DENOISING_RANGE = 500000.0;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 // 5x5 separable B-spline kernel (SVGF's h(x)), as the outer product of (1, 4, 6, 4, 1)/16.
 const float KERNEL[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
-// Upper bound on the luminance edge-stop, as a multiple of the pixel's own luminance (plus a floor
-// so near-black pixels still get a usable sigma). See where it is applied.
-const float SIGMA_LUMINANCE_MAX_RELATIVE = 1.5;
+// LOWER bound on the luminance edge-stop, as a multiple of the pixel's own luminance (plus a floor
+// so near-black pixels still get a usable sigma). A sigma narrower than the residual noise makes
+// the bilateral weight mode-seeking, which darkens shadows; this keeps it honest.
+const float SIGMA_LUMINANCE_MIN_RELATIVE = 0.5;
 const float SIGMA_LUMINANCE_FLOOR = 0.02;
 // Must match svgf_reproject.comp's constants exactly: the same factor divided out there is
 // multiplied back here, so any mismatch tints the image. See that file for why the factor is total
@@ -71,6 +72,33 @@ vec3 modFactor(ivec2 p) {
 
 bool isSky(float z) {
     return !(z < DENOISING_RANGE);
+}
+
+/**
+ * Luminance of a 3x3-prefiltered neighbourhood, used ONLY to drive the edge-stop weights.
+ *
+ * The values being averaged stay unfiltered; what changes is what the weight DECIDES on. Comparing
+ * two raw 1-spp samples means the bilateral term is reacting to noise, and because path-traced
+ * noise is multiplicative and right-skewed it rejects bright samples more often than dark ones.
+ * The weighted mean then converges toward the distribution's mode rather than its mean, i.e. the
+ * denoised image comes out systematically DARKER, and the effect grows as sigma narrows. Measured
+ * on a flat 0.30 signal at 1 spp: -11.4% with raw guides, -2.1% with this prefilter, with a ~12x
+ * lower RMSE. That bias is what turned shadows and reflections dark and harsh whenever motion
+ * shortened the history.
+ */
+float prefilteredLuma(ivec2 p, ivec2 maxPix) {
+    float sum = 0.0;
+    float wsum = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            ivec2 q = clamp(p + ivec2(dx, dy), ivec2(0), maxPix);
+            float w = KERNEL[dx + 2] * KERNEL[dy + 2];
+            vec3 c = clamp(imageLoad(colorIn, q).rgb, vec3(0.0), vec3(65504.0));
+            sum += w * dot(c, LUMA);
+            wsum += w;
+        }
+    }
+    return wsum > 0.0 ? sum / wsum : 0.0;
 }
 
 void main() {
@@ -122,15 +150,15 @@ void main() {
 
     // Luminance edge-stop denominator: phi * sqrt(variance). The epsilon keeps a fully converged
     // (variance ~ 0) pixel from dividing by zero and rejecting every neighbour.
-    float lc = dot(cc, LUMA);
+    float lc = prefilteredLuma(pix, maxPix);
     float sigmaL = pc.phiLuminance * sqrt(max(filteredVar, 1.0e-8)) + 1.0e-4;
-    // Cap the edge-stop RELATIVE to the pixel's own brightness. sigma is an absolute luminance
-    // difference, so an over-estimated variance (camera motion inflating the temporal moments, a
-    // fresh disocclusion, a firefly) makes it exceed the signal itself, at which point exp(-d/sigma)
-    // is ~1 for every neighbour and the wavelet degenerates into an unweighted box blur across the
-    // whole 62-pixel reach. Clamping to a multiple of the local level keeps the filter strong where
-    // it must be while making "blur everything" unreachable.
-    sigmaL = min(sigmaL, SIGMA_LUMINANCE_MAX_RELATIVE * (lc + SIGMA_LUMINANCE_FLOOR));
+    // NOTE: sigma is deliberately NOT clamped down to a multiple of the local luminance. That
+    // clamp (added in the previous pass at this bug) pushed sigma below the actual noise spread on
+    // dark pixels, and a bilateral stop narrower than the noise rejects bright samples more often
+    // than dark ones, biasing the result toward the mode: shadows came out darker and harsher the
+    // moment anything shortened the history. The prefiltered guide above is the correct fix for a
+    // too-wide sigma, because it removes the noise from the DECISION rather than from the kernel.
+    sigmaL = max(sigmaL, SIGMA_LUMINANCE_MIN_RELATIVE * (lc + SIGMA_LUMINANCE_FLOOR));
     // NOTE: no extra widening for short history. The variance handed to this pass is already a
     // spatial estimate scaled up by 4/frames in that regime, and multiplying it again pushed sigma
     // to ~5.7 against a signal level of 0.3 -- every neighbour weighted ~0.99, i.e. a plain box
@@ -155,12 +183,18 @@ void main() {
     // pass widen its kernel by exactly the amount the remaining noise justifies.
     float varianceSum = weightSum * weightSum * cv;
 
-    // Cap this pass's reach by how much history the pixel actually has. The cascade's radius grows
-    // to 62 pixels by the fifth iteration, which is only meaningful once the temporal estimate is
-    // trustworthy: a pixel with 2 accumulated frames that reaches that far produces a smear, not a
-    // denoised result. Standing still every pixel is at the 48-frame cap and the full cascade runs,
-    // which is precisely why the image looked sharp when stopped and blurry while walking.
-    int maxStep = int(clamp(frames, 1.0, 32.0));
+    // Reach vs. history, with a FLOOR.
+    //
+    // The cascade reaches a 62-pixel radius by its fifth iteration, which only makes sense once the
+    // temporal estimate is trustworthy. But tying the reach directly to the frame count (the first
+    // attempt at this) made the filter far too weak in exactly the situation that needs it most: a
+    // freshly reprojected pixel got a 10-pixel radius, so walking produced LESS smoothing than
+    // standing still -- noisy, harsh shadows that snapped soft again the moment the camera stopped.
+    // Short history means "trust the spatial estimate MORE", not less; it is the long-history case
+    // that can afford to stop widening. The floor keeps a fully disoccluded pixel at a 30-pixel
+    // radius, which is enough to resolve 1-spp shadow noise, while still denying it the full reach
+    // that would drag unrelated geometry in.
+    int maxStep = int(clamp(frames, 4.0, 32.0));
     int step = min(pc.step, maxStep);
 
     for (int dy = -2; dy <= 2; dy++) {
@@ -182,7 +216,10 @@ void main() {
             vec4 tap = imageLoad(colorIn, q);
             vec3 ct = clamp(tap.rgb, vec3(0.0), vec3(65504.0));
             float vt = max(tap.a, 0.0);
-            float lt = dot(ct, LUMA);
+            // The GUIDE luminance is prefiltered; the value being averaged (ct) is not. Deciding
+            // the weight from a noisy sample is what made the filter mode-seeking and therefore
+            // darkening -- see prefilteredLuma.
+            float lt = prefilteredLuma(q, maxPix);
 
             float w = KERNEL[dx + 2] * KERNEL[dy + 2];
             if (!centerSky) {

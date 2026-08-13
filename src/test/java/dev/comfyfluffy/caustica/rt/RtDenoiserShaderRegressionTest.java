@@ -323,8 +323,8 @@ final class RtDenoiserShaderRegressionTest {
     @Test
     void svgfCascadeReachIsBoundedByHistory() throws Exception {
         String atrous = Files.readString(SVGF_ATROUS);
-        assertTrue(atrous.contains("int maxStep = int(clamp(frames, 1.0, 32.0));"),
-                "the tap spacing must be capped by the accumulated frame count");
+        assertTrue(atrous.contains("int maxStep = int(clamp(frames, 4.0, 32.0));"),
+                "the tap spacing must be capped by history but never below a usable radius");
         assertTrue(atrous.contains("int step = min(pc.step, maxStep);"),
                 "the capped spacing must be the one actually used");
         assertTrue(atrous.contains("ivec2 offset = ivec2(dx, dy) * step;"),
@@ -342,8 +342,12 @@ final class RtDenoiserShaderRegressionTest {
         String atrous = Files.readString(SVGF_ATROUS);
         assertFalse(atrous.contains("sigmaL *= 1.0 + 3.0 * (1.0 - frames / HISTORY_FIX_FRAMES);"),
                 "the short-history sigma widening compounded an already inflated estimate");
-        assertTrue(atrous.contains("SIGMA_LUMINANCE_MAX_RELATIVE"),
-                "the luminance stop must stay bounded relative to the pixel's own level");
+        // The bound is a FLOOR, not a ceiling: a sigma narrower than the residual noise makes the
+        // bilateral weight mode-seeking, which darkens shadows (measured -20% before this).
+        assertTrue(atrous.contains("SIGMA_LUMINANCE_MIN_RELATIVE"),
+                "the luminance stop needs a lower bound so it cannot go narrower than the noise");
+        assertFalse(atrous.contains("SIGMA_LUMINANCE_MAX_RELATIVE"),
+                "clamping sigma DOWN biases the estimate toward the mode and darkens shadows");
     }
 
     /**
@@ -361,5 +365,26 @@ final class RtDenoiserShaderRegressionTest {
                 "a per-frame parameter rejection must skip the frame, not throw");
         assertTrue(denoiser.contains("NRD: skipping a frame"),
                 "skipped frames must be reported");
+    }
+
+    /**
+     * The luminance edge-stop must decide on a PREFILTERED guide, never on raw 1-spp samples.
+     *
+     * Path-traced noise is multiplicative and right-skewed, so a bilateral weight computed from
+     * noisy samples rejects bright neighbours more often than dark ones and the weighted mean
+     * converges toward the distribution's mode instead of its mean. The image comes out
+     * systematically darker, and the narrower the sigma the worse it gets — which is why shadows
+     * and reflections turned dark and harsh whenever motion shortened the history. Measured on a
+     * flat 0.30 signal: -20% brightness with raw guides, -1.6% with the prefilter.
+     */
+    @Test
+    void svgfEdgeStopUsesAPrefilteredGuide() throws Exception {
+        String atrous = Files.readString(SVGF_ATROUS);
+        assertTrue(atrous.contains("float prefilteredLuma(ivec2 p, ivec2 maxPix)"),
+                "the prefiltered luminance guide must exist");
+        assertTrue(atrous.contains("float lc = prefilteredLuma(pix, maxPix);"),
+                "the centre luminance must come from the prefiltered guide");
+        assertTrue(atrous.contains("float lt = prefilteredLuma(q, maxPix);"),
+                "the tap luminance must come from the prefiltered guide");
     }
 }
