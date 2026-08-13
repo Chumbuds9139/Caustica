@@ -339,8 +339,8 @@ public final class RtNrdDenoiser {
                 MemorySegment w2v = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 MemorySegment w2vPrev = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 // JOML's buffer store is column-major, exactly NRD's "vector is a column" layout.
-                nrdViewToClip.get(v2c.asByteBuffer().asFloatBuffer());
-                worldToView.get(w2v.asByteBuffer().asFloatBuffer());
+                copyInto(nrdViewToClip, v2c);
+                copyInto(worldToView, w2v);
                 // A stored previous projection that is not finite (it was captured from a frame
                 // the game had already mangled) must not be handed to NRD; drop to the
                 // no-history path for this frame instead, which is always safe.
@@ -356,16 +356,24 @@ public final class RtNrdDenoiser {
                     // delta from the difference of the two translations, so if the previous matrix
                     // still carried the previous anchor, every rebase would show up as a jump of up
                     // to a chunk and throw the history away in the middle of movement.
-                    new Matrix4f(prevViewRotation)
+                    Matrix4f worldToViewPrev = new Matrix4f(prevViewRotation)
                             .translate((float) (anchorX - prevCamWorldX),
                                     (float) (anchorY - prevCamWorldY),
-                                    (float) (anchorZ - prevCamWorldZ))
-                            .get(w2vPrev.asByteBuffer().asFloatBuffer());
+                                    (float) (anchorZ - prevCamWorldZ));
+                    if (!isFinite(worldToViewPrev)) {
+                        warnOnce("NRD: previous worldToView was not finite; restarting history");
+                        useHistory = false;
+                        hasPrev = false;
+                        copyInto(nrdViewToClip, v2cPrev);
+                        copyInto(worldToView, w2vPrev);
+                    } else {
+                        copyInto(worldToViewPrev, w2vPrev);
+                    }
                 } else {
                     // No history to reproject: "previous" equals "current" so NRD cannot chase a
                     // reprojection that does not exist.
-                    nrdViewToClip.get(v2cPrev.asByteBuffer().asFloatBuffer());
-                    worldToView.get(w2vPrev.asByteBuffer().asFloatBuffer());
+                    copyInto(nrdViewToClip, v2cPrev);
+                    copyInto(worldToView, w2vPrev);
                 }
                 // cameraJitterPrev must be the jitter the HISTORY was rendered with; feeding the
                 // current jitter there de-jitters history by the wrong sub-pixel offset every frame,
@@ -480,6 +488,23 @@ public final class RtNrdDenoiser {
     private void warnOnce(String message) {
         if (warned.add(message)) {
             CausticaMod.LOGGER.warn(message);
+        }
+    }
+
+    /**
+     * Write a matrix into native memory in COLUMN-MAJOR order and NATIVE byte order.
+     *
+     * Deliberately not {@code matrix.get(segment.asByteBuffer().asFloatBuffer())}: the FFM spec says
+     * {@link MemorySegment#asByteBuffer()} returns a buffer in BIG_ENDIAN order, so on x86 every
+     * float reached the shim byte-reversed. The failure was almost invisible because zeros survive a
+     * byte swap unchanged -- the matrix kept its shape, and only the non-zero entries turned into
+     * garbage. The logged m33 of 4.6006e-41 is exactly the bit pattern of 1.0f read backwards.
+     */
+    private static void copyInto(Matrix4fc src, MemorySegment dst) {
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                dst.setAtIndex(ValueLayout.JAVA_FLOAT, col * 4 + row, src.get(col, row));
+            }
         }
     }
 

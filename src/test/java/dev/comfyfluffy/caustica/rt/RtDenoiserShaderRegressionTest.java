@@ -387,4 +387,55 @@ final class RtDenoiserShaderRegressionTest {
         assertTrue(atrous.contains("float lt = prefilteredLuma(q, maxPix);"),
                 "the tap luminance must come from the prefiltered guide");
     }
+
+    /**
+     * Matrices must reach the shim in NATIVE byte order.
+     *
+     * {@code MemorySegment.asByteBuffer()} is specified to return a BIG_ENDIAN buffer, so writing a
+     * matrix through {@code matrix.get(segment.asByteBuffer().asFloatBuffer())} byte-reverses every
+     * float on x86. The failure is nearly invisible: zeros survive a byte swap unchanged, so the
+     * matrix keeps its shape and only the non-zero entries become garbage — REBLUR ran for a while
+     * on a nonsense camera before one of them happened to decode as NaN. The smoking gun in the
+     * game log was m33 = 4.6006e-41, which is exactly the bit pattern of 1.0f read backwards.
+     */
+    @Test
+    void nrdMatricesAreWrittenInNativeByteOrder() throws Exception {
+        String denoiser = Files.readString(NRD_DENOISER);
+        // Match the CALL, not the word: the fix's own Javadoc names the method it replaced.
+        assertFalse(denoiser.contains(".get(v2c.asByteBuffer()")
+                        || denoiser.contains(".get(w2v.asByteBuffer()")
+                        || denoiser.contains(".get(v2cPrev.asByteBuffer()")
+                        || denoiser.contains(".get(w2vPrev.asByteBuffer()"),
+                "asByteBuffer() is BIG_ENDIAN; matrices must be written with setAtIndex");
+        assertTrue(denoiser.contains("private static void copyInto(Matrix4fc src, MemorySegment dst)"),
+                "the native-order matrix writer must exist");
+        assertTrue(denoiser.contains("dst.setAtIndex(ValueLayout.JAVA_FLOAT, col * 4 + row, src.get(col, row));"),
+                "the writer must store column-major floats at native endianness");
+
+        // The bit pattern that identified the bug, kept here so the reasoning stays verifiable.
+        int oneBits = Float.floatToRawIntBits(1.0f);
+        int reversed = Integer.reverseBytes(oneBits);
+        assertEquals(4.6006e-41f, Float.intBitsToFloat(reversed), 1.0e-45f,
+                "byte-reversed 1.0f is the value the game log reported");
+    }
+
+    /**
+     * A pixel with no surviving history must not be displayed as a raw 1-spp sample.
+     *
+     * At a shadow level of 0.05 with multiplicative path-tracing noise, a single sample reaches
+     * ~13x the correct value in the tail, next to neighbours that DO have history and show the
+     * right value — isolated bright specks popping in shadow while moving. Bounding the fresh
+     * sample by its spatial neighbourhood cuts the peak roughly in half while shifting the mean by
+     * under 5%, and it only applies where there is no temporal information to contradict it.
+     */
+    @Test
+    void svgfBoundsHistorylessSamples() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertTrue(reproject.contains("const float FIREFLY_CLAMP_SIGMA = 2.0;"),
+                "history-less samples need a neighbourhood bound");
+        assertTrue(reproject.contains("vec3 clamped = min(cur, mean + FIREFLY_CLAMP_SIGMA * sigma);"),
+                "the fresh sample must be clamped to its neighbourhood");
+        assertFalse(reproject.contains("histColor = cur;\n        histMoments = vec2(lum, lum * lum);"),
+                "the unclamped raw-sample fallback is what produced the specks");
+    }
 }
