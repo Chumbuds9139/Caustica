@@ -237,6 +237,14 @@ public final class RtComposite {
     // GEOMETRY rather than thrown away on motion: a long window no longer means ghosting, it means
     // a converged image. The exponential tail after the 1/n phase still tracks lighting changes.
     private static final float SVGF_MAX_FRAMES = 48.0f;
+    /**
+     * Debug-view ids that inspect SVGF's internal state instead of the tracer's guides. Unlike the
+     * guide views these leave the denoiser enabled, because the point is to see what it is doing.
+     * 10 = history length (black means the reprojection threw the history away), 11 = variance,
+     * 12 = luminance sigma (bright means the bilateral has degenerated into a box blur).
+     */
+    private static final int SVGF_DEBUG_FIRST = 10;
+    private static final int SVGF_DEBUG_LAST = 12;
     // Luminance edge-stop, in estimated standard deviations. This is the knob that decides how much
     // the wavelet trusts its own variance estimate: 4 sigma filters the 1-spp signal hard while
     // still stopping at genuine luminance edges (SVGF's paper uses 4 as well).
@@ -1366,8 +1374,13 @@ public final class RtComposite {
             // fails this frame, the gate below (svgfPath && !nrdDone) lets SVGF take the slot
             // instead of presenting the raw trace. Its resources are allocated whenever
             // RtNrdDenoiser.active() is false, which includes the latched-off case.
+            // Debug views 10-12 inspect the SVGF denoiser's own internal state (history length,
+            // variance, luminance sigma), so unlike the guide views they must keep it RUNNING.
+            // They exist because four rounds of fixes reasoned from the source produced no visible
+            // change for the user; the filter's state has to be measured in the actual frame.
+            boolean svgfDebugView = debugView >= SVGF_DEBUG_FIRST && debugView <= SVGF_DEBUG_LAST;
             boolean svgfPath = !rrPath && CausticaConfig.Rt.Denoise.ENABLED.value()
-                    && debugView == 0;
+                    && (debugView == 0 || svgfDebugView);
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
@@ -1602,7 +1615,11 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     restirPreviousAddress(), restirCurrentAddress(),
-                    (int) frameCounter, debugView, terrain.lightGeneration(), restirMode()).write(pushConstants);
+                    // The SVGF debug ids are consumed by the denoiser, not the tracer: forwarding
+                    // them would make the raygen paint a guide overlay over the very image we are
+                    // trying to inspect. The tracer sees 0 (normal shading) for those.
+                    (int) frameCounter, svgfDebugView ? 0 : debugView,
+                    terrain.lightGeneration(), restirMode()).write(pushConstants);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
@@ -1747,7 +1764,7 @@ public final class RtComposite {
                                 src.view, dst.view, gViewZ.view, gNormal.view, momentsOut.view,
                                 gAlbedo.view,
                                 SVGF_PHI_LUMINANCE, SVGF_PHI_NORMAL, SVGF_PHI_DEPTH,
-                                extraSkySmooth, lastPass);
+                                extraSkySmooth, lastPass, svgfDebugView ? debugView : 0);
                         VulkanCommandEncoder.memoryBarrier(cmd, stack);
                         if (pass == RtSvgfDenoiser.HISTORY_FEEDBACK_PASS) {
                             // Copy this iteration's colour into the history the next frame reads.

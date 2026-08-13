@@ -43,6 +43,13 @@ layout(push_constant) uniform Push {
     float phiDepth;     // depth edge-stop scale (multiplied by the local depth gradient)
     int extraSkySmooth; // 1 = frame generation is presenting; smooth the sky harder (see below)
     int modulate;       // 1 = final pass: multiply the albedo guide back into the result
+    // Diagnostic overlay, applied on the FINAL pass only so the filter itself is untouched:
+    //   0 = off, 10 = history length, 11 = variance, 12 = luminance sigma.
+    // These exist because every fix so far was reasoned from the source and none of them changed
+    // what the user sees; the denoiser's internal state has to be observed directly rather than
+    // deduced. Unlike the guide debug views (pc.debugView in the tracer) these run with the
+    // denoiser ENABLED, which is the whole point -- the guide views disable it.
+    int debugMode;
 } pc;
 
 const float DENOISING_RANGE = 500000.0;
@@ -271,6 +278,27 @@ void main() {
         // the kernels never averaged across texture detail; putting the albedo back now restores it
         // at full contrast, undimmed by the filter's reach.
         filtered *= modFactor(pix);
+    }
+    // ---- Diagnostic overlay. Final pass only, so nothing above is perturbed.
+    if (pc.modulate != 0 && pc.debugMode != 0) {
+        vec3 dbg = filtered;
+        if (pc.debugMode == 10) {
+            // History length, normalized by the 48-frame cap. Black = no history (the pixel is
+            // being rebuilt from scratch this frame), white = fully converged. If walking turns
+            // the screen dark here, the reprojection is rejecting history and THAT is the bug.
+            float f = clamp(imageLoad(moments, pix).z / 48.0, 0.0, 1.0);
+            dbg = vec3(f);
+        } else if (pc.debugMode == 11) {
+            // Variance driving the edge stop, on a log scale so both tails are readable.
+            float v = max(filteredVar, 0.0);
+            dbg = vec3(clamp(log2(1.0 + v * 1000.0) / 10.0, 0.0, 1.0));
+        } else if (pc.debugMode == 12) {
+            // The luminance sigma actually used. Bright = the bilateral is accepting everything,
+            // i.e. this pixel is being box-blurred.
+            dbg = vec3(clamp(sigmaL * 4.0, 0.0, 1.0));
+        }
+        imageStore(colorOut, pix, vec4(dbg, outVar));
+        return;
     }
     imageStore(colorOut, pix, vec4(max(filtered, vec3(0.0)), outVar));
 }

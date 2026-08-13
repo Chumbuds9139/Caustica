@@ -130,8 +130,18 @@ final class RtDenoiserShaderRegressionTest {
         // The wavelet no longer reads the count at all: its only consumer was the per-pixel reach
         // cap, which was the mutating-footprint bug (see svgfCascadeReachIsUniform). The count is
         // still produced here because the reprojection itself needs it to drive alpha.
-        assertFalse(atrous.contains("imageLoad(moments, pix).z"),
-                "the wavelet must not reintroduce a per-pixel reach decision from the frame count");
+        // The wavelet may read the count ONLY to draw the diagnostic overlay, never to shape the
+        // filter: a per-pixel reach driven by the frame count was the mutating-footprint bug (see
+        // svgfCascadeReachIsUniform). Pin that structurally -- every read must sit after the
+        // debug-mode branch, which runs once at the very end and returns immediately.
+        int momentsRead = atrous.indexOf("imageLoad(moments");
+        if (momentsRead >= 0) {
+            int debugBranch = atrous.indexOf("pc.debugMode != 0");
+            assertTrue(debugBranch >= 0 && momentsRead > debugBranch,
+                    "the wavelet may only read the frame count inside the diagnostic overlay");
+            assertTrue(atrous.indexOf("imageLoad(moments", momentsRead + 1) < 0,
+                    "exactly one frame-count read is allowed, the diagnostic one");
+        }
         assertFalse(atrous.contains("histLen"),
                 "the frame count no longer travels in the history image's alpha channel");
     }
