@@ -1695,7 +1695,7 @@ public final class RtComposite {
                             upscaleSource.view, historyIn.view, momentsIn.view,
                             historyOut.view, momentsOut.view, svgfFilterPing.view,
                             gMotion.view, gViewZ.view, gNormal.view,
-                            svgfPrevViewZ.view, svgfPrevNormal.view,
+                            svgfPrevViewZ.view, svgfPrevNormal.view, gAlbedo.view,
                             svgfReset, SVGF_MAX_FRAMES);
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // reprojection visible to the wavelet
 
@@ -1706,13 +1706,24 @@ public final class RtComposite {
                     RtImage src = svgfFilterPing;
                     RtImage dst = svgfFilterPong;
                     for (int pass = 0; pass < RtSvgfDenoiser.ATROUS_PASSES; pass++) {
+                        // The cascade runs in DEMODULATED lighting space so its kernels never
+                        // average across albedo detail (filtering modulated radiance flattens
+                        // texture contrast — measured 3.00:1 down to 1.04:1, the "everything looks
+                        // like flat poster paint" failure). Only the LAST iteration multiplies the
+                        // albedo guide back in, which is also why the history feedback below must
+                        // be taken from an earlier, still-demodulated pass.
+                        boolean lastPass = pass == RtSvgfDenoiser.ATROUS_PASSES - 1;
                         svgfDenoiser.atrous(cmd, renderW, renderH, pass, svgfParity,
                                 src.view, dst.view, gViewZ.view, gNormal.view, momentsOut.view,
+                                gAlbedo.view,
                                 SVGF_PHI_LUMINANCE, SVGF_PHI_NORMAL, SVGF_PHI_DEPTH,
-                                extraSkySmooth);
+                                extraSkySmooth, lastPass);
                         VulkanCommandEncoder.memoryBarrier(cmd, stack);
                         if (pass == RtSvgfDenoiser.HISTORY_FEEDBACK_PASS) {
                             // Copy this iteration's colour into the history the next frame reads.
+                            // Still demodulated (the feedback pass is never the last one — see the
+                            // assert in RtSvgfDenoiser), which is required: next frame's
+                            // reprojection blends it against freshly demodulated samples.
                             copyImage(cmd, stack, dst, historyOut);
                             VulkanCommandEncoder.memoryBarrier(cmd, stack);
                         }

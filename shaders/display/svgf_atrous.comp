@@ -32,6 +32,7 @@ layout(binding = 1, set = 0, rgba16f) uniform writeonly image2D colorOut; // rgb
 layout(binding = 2, set = 0, r32f)    uniform readonly  image2D viewZ;    // linear view depth
 layout(binding = 3, set = 0, rgba16f) uniform readonly  image2D normal;   // world normal (xyz) + roughness (w)
 layout(binding = 4, set = 0, rgba16f) uniform readonly  image2D moments;  // z = accumulated frame count
+layout(binding = 5, set = 0, rgba16f) uniform readonly  image2D albedo;   // diffuse albedo guide (re-modulation)
 
 layout(push_constant) uniform Push {
     int width;
@@ -41,6 +42,7 @@ layout(push_constant) uniform Push {
     float phiNormal;    // normal edge-stop exponent
     float phiDepth;     // depth edge-stop scale (multiplied by the local depth gradient)
     int extraSkySmooth; // 1 = frame generation is presenting; smooth the sky harder (see below)
+    int modulate;       // 1 = final pass: multiply the albedo guide back into the result
 } pc;
 
 const float DENOISING_RANGE = 500000.0;
@@ -50,6 +52,9 @@ const float KERNEL[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
 // Below this many accumulated frames a pixel is treated as freshly disoccluded and filtered harder:
 // its temporal estimate is still unreliable, so spatial filtering is all it has.
 const float HISTORY_FIX_FRAMES = 4.0;
+// Must match svgf_reproject.comp's ALBEDO_FLOOR exactly: the same factor divided out there is
+// multiplied back here, so any mismatch tints the image.
+const float ALBEDO_FLOOR = 0.04;
 
 bool isSky(float z) {
     return !(z < DENOISING_RANGE);
@@ -163,10 +168,30 @@ void main() {
     }
 
     if (weightSum <= 1.0e-6) {
-        imageStore(colorOut, pix, vec4(cc, cv)); // degenerate: pass the pixel through untouched
+        // Degenerate: pass the pixel through untouched, but still leave lighting space on the
+        // final pass or this pixel would come out unlit against its re-modulated neighbours.
+        vec3 passthrough = cc;
+        if (pc.modulate != 0) {
+            vec3 a = imageLoad(albedo, pix).rgb;
+            if (any(isnan(a)) || any(isinf(a))) {
+                a = vec3(1.0);
+            }
+            passthrough *= max(clamp(a, vec3(0.0), vec3(1.0)), vec3(ALBEDO_FLOOR));
+        }
+        imageStore(colorOut, pix, vec4(passthrough, cv));
         return;
     }
     vec3 filtered = colorSum / weightSum;
     float outVar = varianceSum / (weightSum * weightSum);
+    if (pc.modulate != 0) {
+        // Final iteration: leave lighting space. Everything above filtered demodulated radiance so
+        // the kernels never averaged across texture detail; putting the albedo back now restores it
+        // at full contrast, undimmed by the filter's reach.
+        vec3 a = imageLoad(albedo, pix).rgb;
+        if (any(isnan(a)) || any(isinf(a))) {
+            a = vec3(1.0);
+        }
+        filtered *= max(clamp(a, vec3(0.0), vec3(1.0)), vec3(ALBEDO_FLOOR));
+    }
     imageStore(colorOut, pix, vec4(max(filtered, vec3(0.0)), outVar));
 }

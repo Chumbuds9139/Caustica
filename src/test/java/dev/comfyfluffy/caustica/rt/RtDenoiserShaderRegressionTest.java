@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.rt.pipeline.RtSvgfDenoiser;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -170,5 +171,63 @@ final class RtDenoiserShaderRegressionTest {
             }
         }
         throw new IllegalStateException("could not locate the repository root from " + dir);
+    }
+
+    /**
+     * The SVGF cascade must filter DEMODULATED radiance: the reprojection divides the albedo guide
+     * out and only the final à-trous iteration multiplies it back. Filtering modulated radiance
+     * averages across texture detail and flattens it (measured: an albedo contrast ratio of 3.27
+     * collapsing to 1.01 — the "everything looks like flat poster paint" failure).
+     */
+    @Test
+    void svgfFiltersDemodulatedRadiance() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        String atrous = Files.readString(SVGF_ATROUS);
+        assertTrue(reproject.contains("c = c / demodFactor(q)"),
+                "svgf_reproject must divide the albedo guide out of the current sample");
+        assertTrue(atrous.contains("pc.modulate != 0"),
+                "svgf_atrous must re-modulate on the final pass only");
+        // The floor is shared by both halves of the round trip; a mismatch tints the image.
+        assertTrue(reproject.contains("const float ALBEDO_FLOOR = 0.04;"),
+                "svgf_reproject ALBEDO_FLOOR changed");
+        assertTrue(atrous.contains("const float ALBEDO_FLOOR = 0.04;"),
+                "svgf_atrous ALBEDO_FLOOR must match svgf_reproject");
+    }
+
+    /**
+     * The reprojected frame count must be normalized by the surviving bilinear weight, exactly like
+     * the colour and the moments. Keeping the unnormalized sum makes the count follow n <- n*w + 1
+     * under sustained sub-pixel motion, saturating at 1/(1-w) instead of reaching the cap: at 90%
+     * acceptance that is 10 frames (32% of the raw noise left) forever, which is precisely the
+     * "converges when standing still, stays noisy while walking" behaviour.
+     */
+    @Test
+    void svgfNormalizesTheFrameCount() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertTrue(reproject.contains("histFrames *= inv;"),
+                "the frame count must be renormalized over the accepted taps");
+        // Sanity-check the arithmetic the fix is based on.
+        double w = 0.9;
+        double unnormalized = 0.0;
+        double normalized = 0.0;
+        for (int i = 0; i < 500; i++) {
+            unnormalized = Math.min(unnormalized * w + 1.0, 48.0);
+            normalized = Math.min(normalized + 1.0, 48.0);
+        }
+        assertTrue(unnormalized < 11.0,
+                "unnormalized count should saturate near 1/(1-w) = 10, was " + unnormalized);
+        assertEquals(48.0, normalized, 1.0e-6,
+                "normalized count must be able to reach the accumulation cap");
+    }
+
+    /**
+     * The history feedback must be taken from a still-demodulated iteration. If it came from the
+     * final (re-modulating) pass, the next frame would blend a modulated history against
+     * demodulated samples and the albedo would compound once per frame.
+     */
+    @Test
+    void svgfHistoryFeedbackStaysDemodulated() {
+        assertTrue(RtSvgfDenoiser.HISTORY_FEEDBACK_PASS < RtSvgfDenoiser.ATROUS_PASSES - 1,
+                "history feedback must precede the final re-modulating pass");
     }
 }

@@ -66,9 +66,9 @@ public final class RtSvgfDenoiser {
     /** Reproject push: int width, height, reset; float maxFrames. */
     private static final int REPROJECT_PUSH_BYTES = 4 * Integer.BYTES;
     /** À-trous push: int width, height, step; float phiLuminance, phiNormal, phiDepth; int extraSkySmooth. */
-    private static final int ATROUS_PUSH_BYTES = 7 * Integer.BYTES;
-    private static final int REPROJECT_BINDINGS = 11;
-    private static final int ATROUS_BINDINGS = 5;
+    private static final int ATROUS_PUSH_BYTES = 8 * Integer.BYTES;
+    private static final int REPROJECT_BINDINGS = 12;
+    private static final int ATROUS_BINDINGS = 6;
 
     /**
      * Number of à-trous iterations. Each doubles the tap spacing, so the reach is
@@ -84,6 +84,16 @@ public final class RtSvgfDenoiser {
      * feeding it back compounds that blur every frame into permanent smearing.
      */
     public static final int HISTORY_FEEDBACK_PASS = 0;
+    static {
+        // The cascade filters DEMODULATED radiance and only the final iteration multiplies the
+        // albedo back in, so the history feedback must be taken from an earlier iteration or the
+        // next frame would blend a modulated history against demodulated samples — the albedo would
+        // compound once per frame and the image would run away.
+        if (HISTORY_FEEDBACK_PASS >= ATROUS_PASSES - 1) {
+            throw new IllegalStateException(
+                    "HISTORY_FEEDBACK_PASS must be before the final (re-modulating) a-trous pass");
+        }
+    }
     /** Ping-pong parities; see {@link Stage} for why the descriptor sets are keyed on them. */
     private static final int PARITIES = 2;
 
@@ -255,11 +265,11 @@ public final class RtSvgfDenoiser {
                           long currentView, long historyView, long momentsInView,
                           long histOutView, long momentsOutView, long filterOutView,
                           long motionView, long viewZView, long normalView,
-                          long prevViewZView, long prevNormalView,
+                          long prevViewZView, long prevNormalView, long albedoView,
                           boolean reset, float maxFrames) {
         long set = reproject.setImages(ctx, parity, new long[] {
                 currentView, historyView, momentsInView, histOutView, momentsOutView, filterOutView,
-                motionView, viewZView, normalView, prevViewZView, prevNormalView,
+                motionView, viewZView, normalView, prevViewZView, prevNormalView, albedoView,
         });
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "svgf reproject")) {
@@ -283,14 +293,14 @@ public final class RtSvgfDenoiser {
      */
     public void atrous(VkCommandBuffer cmd, int width, int height, int pass, int parity,
                        long colorInView, long colorOutView, long viewZView, long normalView,
-                       long momentsView,
+                       long momentsView, long albedoView,
                        float phiLuminance, float phiNormal, float phiDepth,
-                       int extraSkySmooth) {
+                       int extraSkySmooth, boolean modulate) {
         // Each (iteration, parity) pair owns a descriptor set, so every dispatch reads exactly the
         // images it was recorded with and no set is rewritten under an in-flight frame (see Stage).
         int step = 1 << pass;
         long set = atrous.setImages(ctx, pass * PARITIES + parity,
-                new long[] {colorInView, colorOutView, viewZView, normalView, momentsView});
+                new long[] {colorInView, colorOutView, viewZView, normalView, momentsView, albedoView});
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "svgf a-trous step " + step)) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, atrous.pipeline);
@@ -304,6 +314,7 @@ public final class RtSvgfDenoiser {
             push.putFloat(16, phiNormal);
             push.putFloat(20, phiDepth);
             push.putInt(24, extraSkySmooth);
+            push.putInt(28, modulate ? 1 : 0);
             VK10.vkCmdPushConstants(cmd, atrous.pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
         }
