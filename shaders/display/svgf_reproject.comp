@@ -46,6 +46,11 @@ layout(push_constant) uniform Push {
     int height;
     int reset;         // 1 = discard history everywhere (FOV change, rebase jump, toggle, first frame)
     float maxFrames;   // accumulation window cap: alpha never falls below 1 / maxFrames
+    // How much closer (positive) a static surface got along the view axis since the previous frame,
+    // i.e. the camera's forward travel projected on the previous view direction. Used to predict
+    // what a surviving surface's PREVIOUS view depth should have been, so ordinary movement is not
+    // mistaken for a disocclusion. Zero when the camera did not move.
+    float camForwardDelta;
 } pc;
 
 // Matches the viewZ the tracer writes for sky/miss pixels (RtComposite.NRD_DENOISING_RANGE):
@@ -129,7 +134,7 @@ bool isSky(float z) {
  * Geometry answers this far more reliably than colour: a disocclusion changes depth or normal
  * discontinuously, while noise leaves both untouched.
  */
-bool reprojectionValid(ivec2 prevPix, float z, vec3 n, bool sky) {
+bool reprojectionValid(ivec2 prevPix, float z, vec3 n, bool sky, float expectedZPrev) {
     if (prevPix.x < 0 || prevPix.y < 0 || prevPix.x >= pc.width || prevPix.y >= pc.height) {
         return false;
     }
@@ -139,7 +144,14 @@ bool reprojectionValid(ivec2 prevPix, float z, vec3 n, bool sky) {
         // Sky has no surface: the only test that means anything is that it was sky before too.
         return sky && skyPrev;
     }
-    if (abs(z - zPrev) > DEPTH_TOLERANCE * max(z, 1.0)) {
+    // Compare against the depth this surface is EXPECTED to have had last frame, not against this
+    // frame's depth. View depth changes legitimately as the camera moves, and comparing z to zPrev
+    // directly made ordinary walking look like a disocclusion: at 36 fps the camera advances
+    // ~0.12 blocks per frame, which already exceeds the 5% tolerance for anything closer than
+    // ~2.5 blocks, so every nearby surface reset its history EVERY frame while moving. That is
+    // both halves of the report at once -- no accumulation (noise) and a permanently short history
+    // that forces the wide fallback filter (blur) -- and it disappeared when standing still.
+    if (abs(expectedZPrev - zPrev) > DEPTH_TOLERANCE * max(expectedZPrev, 1.0)) {
         return false;
     }
     vec3 nPrev = imageLoad(prevNormal, prevPix).xyz;
@@ -177,6 +189,11 @@ void main() {
             frac.x * frac.y);
     ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
 
+    // A static surface seen at view depth z now was at z + camForwardDelta last frame (the camera
+    // moved camForwardDelta towards it). Predicting this is what lets the depth gate stay tight
+    // enough to catch real disocclusion while ignoring the camera's own motion.
+    float expectedZPrev = z + pc.camForwardDelta;
+
     vec3 histColor = vec3(0.0);
     vec2 histMoments = vec2(0.0);
     float histFrames = 0.0;
@@ -184,7 +201,7 @@ void main() {
     if (pc.reset == 0) {
         for (int i = 0; i < 4; i++) {
             ivec2 q = ivec2(base) + offsets[i];
-            if (bilinear[i] <= 0.0 || !reprojectionValid(q, z, n, sky)) {
+            if (bilinear[i] <= 0.0 || !reprojectionValid(q, z, n, sky, expectedZPrev)) {
                 continue;
             }
             vec3 hc = imageLoad(history, q).rgb;

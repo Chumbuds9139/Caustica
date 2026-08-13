@@ -263,4 +263,50 @@ final class RtDenoiserShaderRegressionTest {
         assertTrue(reproject.contains("const float NORMAL_TOLERANCE = 0.70;"),
                 "the normal gate must stay loose enough to accept unchanged geometry");
     }
+
+    /**
+     * The reprojection's depth gate must compare against the depth a static surface is PREDICTED to
+     * have had last frame, not against this frame's depth. View depth changes legitimately as the
+     * camera moves: at 36 fps walking advances ~0.12 blocks per frame, which already exceeds the 5%
+     * tolerance for anything closer than ~2.5 blocks, so the naive comparison reset the history of
+     * every nearby surface on every frame while moving — noise (nothing accumulates) and blur (the
+     * short-history fallback filter widens) at the same time, both vanishing when standing still.
+     */
+    @Test
+    void svgfDepthGateAccountsForCameraTravel() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertTrue(reproject.contains("float expectedZPrev = z + pc.camForwardDelta;"),
+                "the gate must predict the previous depth from the camera's forward travel");
+        assertTrue(reproject.contains("abs(expectedZPrev - zPrev)"),
+                "the depth comparison must use the predicted previous depth");
+        assertFalse(reproject.contains("abs(z - zPrev) >"),
+                "the naive current-vs-previous depth comparison must be gone");
+    }
+
+    /**
+     * NRD's projection depth row, in JOML's column-major mNM naming. Getting m23 and m32 the wrong
+     * way round builds a degenerate matrix whose decomposition is non-finite; the shim rejects it
+     * with "set_settings: non-finite matrix", REBLUR never runs, and the UI toggle looks inert.
+     */
+    @Test
+    void nrdDepthRowIsNotTransposed() throws Exception {
+        String denoiser = Files.readString(NRD_DENOISER);
+        assertTrue(denoiser.contains("nrdViewToClip.m32(NRD_PROJECTION_NEAR);"),
+                "row2.w (JOML m32) must carry the near plane");
+        assertTrue(denoiser.contains("nrdViewToClip.m23(1f);"),
+                "row3.z (JOML m23) must be 1 so clipW = z_view");
+        assertFalse(denoiser.contains("nrdViewToClip.m23(NRD_PROJECTION_NEAR);"),
+                "the transposed depth row is what disabled REBLUR");
+    }
+
+    /** A failed NRD frame must be retryable by toggling, not latched off for the whole session. */
+    @Test
+    void nrdFailureIsRecoverable() throws Exception {
+        String denoiser = Files.readString(NRD_DENOISER);
+        int reset = denoiser.indexOf("public void resetHistory()");
+        assertTrue(reset > 0, "resetHistory must exist");
+        String body = denoiser.substring(reset, Math.min(denoiser.length(), reset + 400));
+        assertTrue(body.contains("failed = false;"),
+                "resetHistory must clear the failure latch so the toggle retries");
+    }
 }

@@ -276,11 +276,18 @@ public final class RtNrdDenoiser {
             // effective near plane that shrinks all of them (see the class docs). A clean reverse-Z
             // infinite row with vanilla's near plane restores NRD's design point. The Y row is NOT
             // touched: NRD's DecomposeProjection handles handedness itself.
+            // JOML names elements mNM = COLUMN N, ROW M, so the depth row (row 2) is
+            // m02/m12/m22/m32 and the w row (row 3) is m03/m13/m23/m33. Writing near into m23 and
+            // 1 into m32 -- the obvious-looking but transposed choice -- builds row2 = (0,0,0,1)
+            // and row3 = (0,0,near,0), i.e. clipZ = w_in and clipW = near*z. NRD's
+            // DecomposeProjection then divides by a zero/degenerate term and hands back non-finite
+            // values, which the shim rejects with "set_settings: non-finite matrix" -- the exact
+            // error that disabled REBLUR for the whole session and made the toggle look inert.
             Matrix4f nrdViewToClip = new Matrix4f(viewToClip);
-            nrdViewToClip.m22(0f);
-            nrdViewToClip.m23(NRD_PROJECTION_NEAR);
-            nrdViewToClip.m32(1f);
-            nrdViewToClip.m33(0f);
+            nrdViewToClip.m22(0f);                     // row2.z
+            nrdViewToClip.m32(NRD_PROJECTION_NEAR);    // row2.w  -> clipZ = near
+            nrdViewToClip.m23(1f);                     // row3.z  -> clipW = z_view
+            nrdViewToClip.m33(0f);                     // row3.w
 
             // ---- worldToView in the rebased terrain space the signals live in.
             Matrix4f worldToView = new Matrix4f(viewRotation)
@@ -372,8 +379,12 @@ public final class RtNrdDenoiser {
             hasPrev = true;
             return true;
         } catch (Throwable t) {
+            // Latch off, but allow the player to retry by flipping the toggle: resetHistory()
+            // clears this, so turning NRD off and on again re-attempts instead of forcing a
+            // restart. SVGF owns the slot in the meantime (RtComposite keys on active()).
             failed = true;
-            CausticaMod.LOGGER.error("NRD denoise failed; the renderer's own denoiser takes over", t);
+            CausticaMod.LOGGER.error("NRD denoise failed; the renderer's own denoiser takes over. "
+                    + "Toggle NRD off and on again to retry.", t);
             return false;
         }
     }
@@ -410,6 +421,10 @@ public final class RtNrdDenoiser {
     /** Drop the temporal history without tearing the runtime down (toggle flips, resolution change). */
     public void resetHistory() {
         hasPrev = false;
+        // Clearing the failure latch here is what makes the UI toggle a real retry: ensureOutput
+        // calls this whenever the NRD path is (re)selected or the resolution changes.
+        failed = false;
+        appliedAccumulatedFrames = -1;
     }
 
     public void destroy() {

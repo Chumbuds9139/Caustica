@@ -502,6 +502,9 @@ public final class RtComposite {
     private RtImage svgfPrevNormal;
     private boolean svgfWriteToPing;
     private boolean svgfHasHistory;
+    private double svgfPrevCamX;
+    private double svgfPrevCamY;
+    private double svgfPrevCamZ;
     private RtSvgfDenoiser svgfDenoiser;
     /** Sky-mask pass over FSR FG's generated frames (see RtFgSkyMaskPipeline); created lazily. */
     private RtFgSkyMaskPipeline fgSkyMaskPipeline;
@@ -1693,6 +1696,25 @@ public final class RtComposite {
                 // Camera MOVEMENT deliberately does not: the whole point of validating history
                 // against geometry is that motion no longer costs the history.
                 boolean svgfReset = projectionChanged || !svgfHasHistory;
+                // How far the camera travelled ALONG THE VIEW AXIS since the previous frame. The
+                // reprojection gate uses it to predict what a static surface's previous view depth
+                // should have been; without it, walking forward changes every nearby surface's
+                // depth by more than the 5% tolerance and the gate throws the history away every
+                // frame (at 36 fps, ~0.12 blocks/frame already exceeds the tolerance inside
+                // ~2.5 blocks), which is both the noise and the blur reported while moving.
+                float svgfCamForwardDelta = 0.0f;
+                if (svgfHasHistory && !svgfReset) {
+                    // Row 2 of the rotation-only view matrix is the camera's forward axis.
+                    double fx = frameViewRotation.m02();
+                    double fy = frameViewRotation.m12();
+                    double fz = frameViewRotation.m22();
+                    svgfCamForwardDelta = (float) ((camX - svgfPrevCamX) * fx
+                            + (camY - svgfPrevCamY) * fy
+                            + (camZ - svgfPrevCamZ) * fz);
+                    if (!Float.isFinite(svgfCamForwardDelta)) {
+                        svgfCamForwardDelta = 0.0f;
+                    }
+                }
                 // FG amplifies residual per-frame sky noise into visible flicker (it interpolates
                 // between presented frames), so the sky smooths harder while it is presenting.
                 int extraSkySmooth = RtFramePresenter.INSTANCE.isActive() ? 1 : 0;
@@ -1704,7 +1726,7 @@ public final class RtComposite {
                             historyOut.view, momentsOut.view, svgfFilterPing.view,
                             gMotion.view, gViewZ.view, gNormal.view,
                             svgfPrevViewZ.view, svgfPrevNormal.view, gAlbedo.view,
-                            svgfReset, SVGF_MAX_FRAMES);
+                            svgfReset, SVGF_MAX_FRAMES, svgfCamForwardDelta);
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // reprojection visible to the wavelet
 
                     // À-trous cascade with doubling tap spacing. The first iteration's output is
@@ -1751,6 +1773,10 @@ public final class RtComposite {
                 svgfWriteToPing = !svgfWriteToPing;
                 svgfHasHistory = true;
                 svgfRan = true;
+                // Camera snapshot for next frame's forward-travel prediction (see above).
+                svgfPrevCamX = camX;
+                svgfPrevCamY = camY;
+                svgfPrevCamZ = camZ;
             }
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
