@@ -165,7 +165,13 @@ public final class RtNrdDenoiser {
     private boolean hasPrev;
     private int appliedAccumulatedFrames = -1;
     private final float[] prevViewToClip = new float[16];
-    private final float[] prevWorldToView = new float[16];
+    /**
+     * Previous frame's rotation-only view matrix. The full {@code worldToViewPrev} NRD receives is
+     * rebuilt from this plus the previous camera position against the CURRENT anchor every frame —
+     * storing the assembled matrix instead would freeze the anchor it was built with, which is
+     * exactly the rebase bug this integration exists to fix.
+     */
+    private final Matrix4f prevViewRotation = new Matrix4f();
     /**
      * Previous frame's camera position in ABSOLUTE world coordinates (not the rebased terrain
      * space). Keeping it absolute is what lets a terrain rebase be compensated: the previous camera
@@ -285,7 +291,16 @@ public final class RtNrdDenoiser {
                 worldToView.get(w2v.asByteBuffer().asFloatBuffer());
                 if (useHistory) {
                     copyInto(prevViewToClip, v2cPrev);
-                    copyInto(prevWorldToView, w2vPrev);
+                    // THE rebase fix: the previous camera is re-expressed against the CURRENT
+                    // anchor, so both matrices describe the same world space. NRD reads its camera
+                    // delta from the difference of the two translations, so if the previous matrix
+                    // still carried the previous anchor, every rebase would show up as a jump of up
+                    // to a chunk and throw the history away in the middle of movement.
+                    new Matrix4f(prevViewRotation)
+                            .translate((float) (anchorX - prevCamWorldX),
+                                    (float) (anchorY - prevCamWorldY),
+                                    (float) (anchorZ - prevCamWorldZ))
+                            .get(w2vPrev.asByteBuffer().asFloatBuffer());
                 } else {
                     // No history to reproject: "previous" equals "current" so NRD cannot chase a
                     // reprojection that does not exist.
@@ -322,20 +337,17 @@ public final class RtNrdDenoiser {
                 throw new IllegalStateException("nrdshim_denoise failed: " + rc + " last=" + lib.lastResult());
             }
 
-            // Remember this frame's state for the next reprojection. The matrices are stored AFTER a
-            // successful denoise so a failed frame cannot leave a half-updated history behind.
-            //
-            // The stored worldToView is rebuilt against the CURRENT anchor every frame from the
-            // absolute camera position, so when the anchor moves the "previous" matrix NRD receives
-            // is already expressed in the new coordinate system: the rebase becomes invisible to the
-            // denoiser instead of looking like a teleport.
+            // Remember this frame's state for the next reprojection, AFTER a successful denoise so a
+            // failed frame cannot leave a half-updated history behind. Note what is stored: the
+            // camera in ABSOLUTE world coordinates and the rotation-only view matrix, never the
+            // assembled worldToView — the next frame rebuilds it against ITS anchor (see above).
             prevCamWorldX = camWorldX;
             prevCamWorldY = camWorldY;
             prevCamWorldZ = camWorldZ;
             prevJitterX = jitterPixelsX;
             prevJitterY = jitterPixelsY;
             nrdViewToClip.get(prevViewToClip);
-            worldToView.get(prevWorldToView);
+            prevViewRotation.set(viewRotation);
             lastWidth = renderWidth;
             lastHeight = renderHeight;
             hasPrev = true;
@@ -348,9 +360,11 @@ public final class RtNrdDenoiser {
     }
 
     /**
-     * Re-express the PREVIOUS frame's stored view matrix against the current anchor. Called by
-     * {@link #denoise} implicitly through the stored matrix being rebuilt each frame; exposed as a
-     * separate step here only for the frame-rate estimate.
+     * REBLUR's history length for this frame, derived from a target accumulation TIME rather than a
+     * fixed frame count. NRD recommends exactly this ("recalculate the number of accumulated frames
+     * from the accumulation time ... it allows to minimize lags if FPS is low and maximize IQ if FPS
+     * is high"), and it is what makes the denoiser behave the same at 30 and at 120 fps instead of
+     * accumulating twice as long a tail on a fast machine.
      */
     private int maxAccumulatedFrames() {
         long now = System.nanoTime();
