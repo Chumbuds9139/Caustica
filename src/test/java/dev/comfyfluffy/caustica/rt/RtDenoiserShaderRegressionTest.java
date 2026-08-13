@@ -127,8 +127,11 @@ final class RtDenoiserShaderRegressionTest {
 
         assertTrue(reproject.contains("imageStore(momentsOut, pix, vec4(moments, frames, 0.0));"),
                 "the reprojection must store the frame count in the moments texture");
-        assertTrue(atrous.contains("float frames = max(imageLoad(moments, pix).z, 0.0);"),
-                "the wavelet must read the frame count from the moments texture");
+        // The wavelet no longer reads the count at all: its only consumer was the per-pixel reach
+        // cap, which was the mutating-footprint bug (see svgfCascadeReachIsUniform). The count is
+        // still produced here because the reprojection itself needs it to drive alpha.
+        assertFalse(atrous.contains("imageLoad(moments, pix).z"),
+                "the wavelet must not reintroduce a per-pixel reach decision from the frame count");
         assertFalse(atrous.contains("histLen"),
                 "the frame count no longer travels in the history image's alpha channel");
     }
@@ -315,20 +318,45 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
-     * The à-trous reach must be bounded by how much history a pixel has. The cascade grows to a
-     * 62-pixel radius by its fifth iteration, which is only meaningful once the temporal estimate
-     * is trustworthy; letting a 2-frame pixel reach that far turns "slightly soft" into a smear.
-     * That is the "blurry while walking, sharp when I stop" report, with no extra noise.
+     * The à-trous reach must be UNIFORM across the image.
+     *
+     * It used to be capped per pixel by that pixel's history length, via
+     * {@code int maxStep = int(clamp(frames, 4.0, 32.0))}. Because the history length is per pixel
+     * and changes every frame while the camera moves, the integer cap gave neighbouring pixels
+     * visibly different filter radii (30px beside 46px beside 62px) and made each pixel's radius
+     * jump between discrete values frame to frame. That mutating footprint is what read as block
+     * textures whose pixels keep rearranging while walking and settle a few seconds after stopping.
+     *
+     * How much to trust a pixel is already carried, continuously, by its variance driving the
+     * luminance sigma. Encoding it a second time as a hard integer cap only adds discontinuity.
      */
     @Test
-    void svgfCascadeReachIsBoundedByHistory() throws Exception {
+    void svgfCascadeReachIsUniform() throws Exception {
         String atrous = Files.readString(SVGF_ATROUS);
-        assertTrue(atrous.contains("int maxStep = int(clamp(frames, 4.0, 32.0));"),
-                "the tap spacing must be capped by history but never below a usable radius");
-        assertTrue(atrous.contains("int step = min(pc.step, maxStep);"),
-                "the capped spacing must be the one actually used");
+        assertFalse(atrous.contains("int step = min(pc.step, maxStep);"),
+                "the per-pixel integer reach cap is the mutating-footprint bug; it must stay gone");
+        assertTrue(atrous.contains("int step = pc.step;"),
+                "every pixel must use the same tap spacing for a given iteration");
         assertTrue(atrous.contains("ivec2 offset = ivec2(dx, dy) * step;"),
-                "taps must use the capped spacing, not the raw push-constant step");
+                "taps must use that spacing");
+    }
+
+    /**
+     * The variance handed to the spatial pass must be continuous in history length.
+     *
+     * Two discontinuities used to live here: a hard if/else at 4 frames between the spatial and
+     * temporal estimates, and a {@code 4/frames} boost that scaled the spatial estimate by up to
+     * 4x (so sigma by up to 2x) purely because a pixel was new. Both made the edge-stop differ
+     * sharply between adjacent pixels, which is the same artefact as the reach cap seen through
+     * the sigma instead of the radius.
+     */
+    @Test
+    void svgfVarianceHandoverIsContinuous() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertFalse(reproject.contains("spatial * (SPATIAL_VARIANCE_FRAMES / max(frames, 1.0))"),
+                "the history-dependent variance boost must stay gone");
+        assertTrue(reproject.contains("variance = mix(spatial, temporalVar, t);"),
+                "spatial and temporal variance must blend, not switch at a threshold");
     }
 
     /**

@@ -336,10 +336,15 @@ void main() {
 
 
     // ---- Variance for the spatial pass.
+    //
+    // The temporal estimate is the honest one, but it needs a few frames before it means anything.
+    // The handover used to be a hard if/else at 4 frames, which put a visible seam wherever
+    // neighbouring pixels straddled the threshold. It is now a linear blend over the same window,
+    // so a pixel's guidance changes continuously as its history grows.
     float variance;
+    float temporalVar = max(moments.y - moments.x * moments.x, 0.0);
     if (frames >= SPATIAL_VARIANCE_FRAMES) {
-        // Temporal estimate: the honest per-pixel measure of "how much is this pixel still moving".
-        variance = max(moments.y - moments.x * moments.x, 0.0);
+        variance = temporalVar;
     } else {
         // Too little history to measure anything (fresh disocclusion): estimate the noise level
         // spatially over a 7x7 window of THIS frame instead, so freshly revealed geometry is filtered
@@ -357,9 +362,14 @@ void main() {
         }
         float mean = sum / count;
         float spatial = max(sumSq / count - mean * mean, 0.0);
-        // Boost while the history is short: the spatial estimate underestimates the true variance of
-        // a 1-spp signal, and under-filtering a disocclusion is the visible failure.
-        variance = spatial * (SPATIAL_VARIANCE_FRAMES / max(frames, 1.0));
+        // No history-dependent boost. Scaling by 4/frames made the edge-stop sigma jump by up to 2x
+        // between neighbouring pixels purely because their history lengths differed, and jump again
+        // frame to frame as those lengths changed -- a second source of the same mutating-filter
+        // artefact as the reach cap. The spatial estimate is already the right magnitude for a
+        // 1-spp signal; the smooth blend below is what carries the "trust me less" information.
+        // Blend spatial -> temporal across the window rather than switching at a threshold.
+        float t = clamp(frames / SPATIAL_VARIANCE_FRAMES, 0.0, 1.0);
+        variance = mix(spatial, temporalVar, t);
     }
 
     // histOut is the fallback history for the next frame; the à-trous pass overwrites it with its

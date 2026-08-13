@@ -114,7 +114,6 @@ void main() {
     float zc = imageLoad(viewZ, pix).r;
     vec3 nc = imageLoad(normal, pix).xyz;
     bool centerSky = isSky(zc);
-    float frames = max(imageLoad(moments, pix).z, 0.0);
 
     // ---- Sky: pass through untouched.
     //
@@ -194,8 +193,21 @@ void main() {
     // that can afford to stop widening. The floor keeps a fully disoccluded pixel at a 30-pixel
     // radius, which is enough to resolve 1-spp shadow noise, while still denying it the full reach
     // that would drag unrelated geometry in.
-    int maxStep = int(clamp(frames, 4.0, 32.0));
-    int step = min(pc.step, maxStep);
+    // The reach must NOT be quantized per pixel. An earlier version used
+    //     int maxStep = int(clamp(frames, 4.0, 32.0));
+    // which is the single worst artefact source in this filter. `frames` is a PER-PIXEL count, so
+    // while the camera moves neighbouring pixels hold different counts (the geometry gate accepts
+    // one tap and rejects the next), and int() turns that into pixels being filtered with visibly
+    // different radii side by side -- 30px next to 38px next to 46px. Worse, the count changes
+    // every frame, so each pixel's radius jumps between discrete values frame to frame. That is
+    // precisely the reported "the texture's pixels keep changing, like an AI made it": it is not
+    // texture at all, it is the filter footprint mutating under the texture.
+    //
+    // The reach is now FIXED. Whether a pixel is trusted is already expressed, continuously and
+    // correctly, by its variance driving sigmaL -- that is SVGF's actual mechanism. Encoding the
+    // same information a second time as a hard integer cap only adds spatial and temporal
+    // discontinuity on top of it.
+    int step = pc.step;
 
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
