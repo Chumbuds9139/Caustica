@@ -74,6 +74,16 @@ public final class RtNrdDenoiser {
         return CausticaConfig.Rt.Nrd.ENABLED.value() && NrdRuntime.platformSupported();
     }
 
+    /**
+     * Whether NRD is switched on AND has not fallen over. Once a denoise throws, the integration
+     * latches off for the rest of the session; the renderer must then hand the slot back to SVGF
+     * rather than presenting the raw trace, which is what "the NRD button does nothing" looks like
+     * from the player's side — the toggle appeared inert because both states ended up undenoised.
+     */
+    public static boolean active() {
+        return enabled() && !INSTANCE.failed && !NrdRuntime.INSTANCE.hasFailed();
+    }
+
     // ---- REBLUR tuning ---------------------------------------------------------------------
     //
     // nrd::HitDistanceReconstructionMode::AREA_5X5. The tracer picks ONE lobe per pixel at 1 spp
@@ -162,6 +172,7 @@ public final class RtNrdDenoiser {
     private static final float MAX_FPS = 300.0f;
 
     private boolean failed;
+    private boolean loggedFirstDispatch;
     private boolean hasPrev;
     private int appliedAccumulatedFrames = -1;
     private final float[] prevViewToClip = new float[16];
@@ -224,6 +235,14 @@ public final class RtNrdDenoiser {
         NrdLibrary lib = NrdRuntime.INSTANCE.acquire(device, renderWidth, renderHeight);
         if (lib == null) {
             return false;
+        }
+        if (!loggedFirstDispatch) {
+            loggedFirstDispatch = true;
+            // One line, once per session. "The NRD toggle does nothing" is indistinguishable from
+            // "NRD ran and its output looked the same", and the two need completely different
+            // fixes, so record that the integration really is dispatching.
+            CausticaMod.LOGGER.info("NRD/REBLUR active: {}x{}, shim version {}",
+                    renderWidth, renderHeight, lib.version());
         }
         try {
             // History length is derived from a target accumulation TIME, so the denoiser converges

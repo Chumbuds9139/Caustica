@@ -213,7 +213,7 @@ public final class RtComposite {
         if (RtDlssRr.enabled() && debugView() == 0) {
             flags |= FEATURE_DENOISER;
         } else {
-            if (RtNrdDenoiser.enabled() && debugView() == 0) {
+            if (RtNrdDenoiser.active() && debugView() == 0) {
                 // Per-lobe signal capture only runs when NRD is the active denoiser: RR denoises
                 // internally and SVGF works on the combined radiance, so capturing the split would
                 // burn an extra shadow ray plus bandwidth for buffers nothing reads.
@@ -1146,7 +1146,11 @@ public final class RtComposite {
         //   > SVGF (the renderer's own; the default for every non-DLSS path).
         // Two temporal denoisers in series would fight over the same history and reintroduce exactly
         // the ghosting this rework removes, so they are strictly exclusive.
-        boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
+        // RtNrdDenoiser.active() rather than enabled(): if the NRD integration has latched off after
+        // a failure, the slot goes back to SVGF, so SVGF's targets have to exist. Keying the
+        // allocation on the option alone left BOTH denoisers inert on a failure, which is why
+        // toggling NRD appeared to do nothing at all.
+        boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.active();
         boolean svgfEnabled = !rrEnabled && !nrdEnabled && CausticaConfig.Rt.Denoise.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
@@ -1354,8 +1358,12 @@ public final class RtComposite {
             // RR > NRD > SVGF. Both denoisers want a jittered trace — their temporal stage
             // integrates the sub-pixel sequence, which is what resolves detail below the pixel grid
             // and lets the upscaler reconstruct it — and both are told the exact jitter used.
-            boolean nrdPath = !rrPath && RtNrdDenoiser.enabled() && debugView == 0;
-            boolean svgfPath = !rrPath && !nrdPath && CausticaConfig.Rt.Denoise.ENABLED.value()
+            boolean nrdPath = !rrPath && RtNrdDenoiser.active() && debugView == 0;
+            // SVGF is the fallback as well as the primary: if NRD is selected but its denoise call
+            // fails this frame, the gate below (svgfPath && !nrdDone) lets SVGF take the slot
+            // instead of presenting the raw trace. Its resources are allocated whenever
+            // RtNrdDenoiser.active() is false, which includes the latched-off case.
+            boolean svgfPath = !rrPath && CausticaConfig.Rt.Denoise.ENABLED.value()
                     && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;

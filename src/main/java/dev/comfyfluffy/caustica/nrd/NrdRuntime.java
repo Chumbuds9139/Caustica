@@ -80,6 +80,11 @@ public final class NrdRuntime {
      * Re-init on size change is cheap enough for the rare resize path (NRD recreates its pools);
      * returns {@code null} when unavailable, and callers fall back to the undenoised image.
      */
+    /** True once init or a denoise has failed and the integration has latched off for the session. */
+    public synchronized boolean hasFailed() {
+        return failed;
+    }
+
     public synchronized NrdLibrary acquire(VulkanDevice device, int width, int height) {
         if (failed) {
             return null;

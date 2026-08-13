@@ -188,10 +188,14 @@ final class RtDenoiserShaderRegressionTest {
         assertTrue(atrous.contains("pc.modulate != 0"),
                 "svgf_atrous must re-modulate on the final pass only");
         // The floor is shared by both halves of the round trip; a mismatch tints the image.
-        assertTrue(reproject.contains("const float ALBEDO_FLOOR = 0.04;"),
+        assertTrue(reproject.contains("const float ALBEDO_FLOOR = 0.10;"),
                 "svgf_reproject ALBEDO_FLOOR changed");
-        assertTrue(atrous.contains("const float ALBEDO_FLOOR = 0.04;"),
+        assertTrue(atrous.contains("const float ALBEDO_FLOOR = 0.10;"),
                 "svgf_atrous ALBEDO_FLOOR must match svgf_reproject");
+        assertTrue(reproject.contains("const float SPECULAR_SHARE = 0.04;"),
+                "svgf_reproject SPECULAR_SHARE changed");
+        assertTrue(atrous.contains("const float SPECULAR_SHARE = 0.04;"),
+                "svgf_atrous SPECULAR_SHARE must match svgf_reproject");
     }
 
     /**
@@ -229,5 +233,34 @@ final class RtDenoiserShaderRegressionTest {
     void svgfHistoryFeedbackStaysDemodulated() {
         assertTrue(RtSvgfDenoiser.HISTORY_FEEDBACK_PASS < RtSvgfDenoiser.ATROUS_PASSES - 1,
                 "history feedback must precede the final re-modulating pass");
+    }
+
+    /**
+     * The sky must bypass both denoiser stages. It is evaluated analytically by the tracer (sky
+     * gradient, sun disc, cloud coverage) and arrives noise-free, so there is nothing to denoise —
+     * but the à-trous cascade's reach is a 62-pixel radius (five iterations of a 5x5 kernel at
+     * spacing 1,2,4,8,16), which turned the sun into a glow and melted cloud edges.
+     */
+    @Test
+    void svgfLeavesTheSkyAlone() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        String atrous = Files.readString(SVGF_ATROUS);
+        assertTrue(reproject.contains("if (sky) {"),
+                "svgf_reproject must pass sky pixels straight through");
+        assertTrue(atrous.contains("if (centerSky) {"),
+                "svgf_atrous must pass sky pixels straight through");
+    }
+
+    /**
+     * The reprojection's normal gate exists to catch disocclusion, not to measure shading detail.
+     * At 0.85 it rejected roughly a fifth of taps every frame on geometry that never moved, which
+     * shortened the history exactly where the signal is weakest (shadow) and produced flicker that
+     * settled only when the camera stopped.
+     */
+    @Test
+    void svgfNormalGateIsNotOverTight() throws Exception {
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertTrue(reproject.contains("const float NORMAL_TOLERANCE = 0.70;"),
+                "the normal gate must stay loose enough to accept unchanged geometry");
     }
 }

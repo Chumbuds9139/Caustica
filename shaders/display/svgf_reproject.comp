@@ -54,7 +54,13 @@ const float DENOISING_RANGE = 500000.0;
 // Reprojection acceptance thresholds. Depth is compared RELATIVELY (a 10 cm error means something
 // very different at 2 blocks and at 200), normals by angle.
 const float DEPTH_TOLERANCE = 0.05;   // 5% of view depth
-const float NORMAL_TOLERANCE = 0.85;  // cos of the maximum allowed normal deviation
+// cos of the maximum allowed normal deviation. Deliberately loose: this gate exists to catch
+// DISOCCLUSION (a different surface), not to measure shading detail. A tight threshold rejects taps
+// on geometry that never moved -- against a realistic normal jitter of N(0.90, 0.06) in dot space a
+// 0.85 cut throws away ~20% of taps every frame, which permanently shortens the history exactly
+// where the signal is weakest (shadowed areas), producing flicker while moving that settles the
+// moment the camera stops. 0.70 (about 45 degrees) still separates genuinely different surfaces.
+const float NORMAL_TOLERANCE = 0.70;
 // Spatial fallback radius while the temporal history is too short to carry a meaningful variance.
 const int SPATIAL_VARIANCE_RADIUS = 3;
 const float SPATIAL_VARIANCE_FRAMES = 4.0;
@@ -73,14 +79,30 @@ const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 // This is the same reason NRD demands demodulated input, and the NRD path here already does it. The
 // built-in path has to do it too. The floor keeps a near-black surface from exploding the division;
 // the guide is the tracer's own gAlbedo, so the round trip inside this pass is exact.
-const float ALBEDO_FLOOR = 0.04;
+// The demodulation floor. This is deliberately NOT tiny: the signal being demodulated is COMBINED
+// radiance (diffuse + specular + emissive), and only the diffuse part is proportional to albedo.
+// Dividing a sky reflection or a glint by a near-black albedo inflates it enormously -- at a 0.04
+// floor the same specular sample lands at 0.25 on light stone and 3.05 on coal, a 12x spread. The
+// cascade then averages neighbours living at incompatible scales and re-modulates each by ITS own
+// albedo, which is exactly the "some blocks look oversaturated" and "colour flickers in shadow while
+// moving" reports. A specular-aware factor with a 0.10 floor keeps the spread under ~2x.
+const float ALBEDO_FLOOR = 0.10;
+// Fresnel-ish share of the response that does NOT scale with diffuse albedo. Mirrors the constant
+// in svgf_atrous.comp; the two must agree or the round trip tints the image.
+const float SPECULAR_SHARE = 0.04;
 
+/**
+ * Total reflectance: the diffuse albedo blended toward a constant specular share. Demodulating by
+ * this instead of by raw albedo keeps a dark block's specular highlight at a sane magnitude, so the
+ * spatial filter compares like with like.
+ */
 vec3 demodFactor(ivec2 p) {
     vec3 a = imageLoad(albedo, p).rgb;
     if (any(isnan(a)) || any(isinf(a))) {
         return vec3(1.0);
     }
-    return max(clamp(a, vec3(0.0), vec3(1.0)), vec3(ALBEDO_FLOOR));
+    a = clamp(a, vec3(0.0), vec3(1.0));
+    return max(a * (1.0 - SPECULAR_SHARE) + SPECULAR_SHARE, vec3(ALBEDO_FLOOR));
 }
 
 // A single NaN/Inf sample would poison the history forever (it survives every blend and then spreads
@@ -202,6 +224,17 @@ void main() {
         histColor = cur;
         histMoments = vec2(lum, lum * lum);
         histFrames = 0.0;
+    }
+
+    // ---- Sky: the tracer evaluates it analytically (sky gradient, sun disc, cloud coverage), so it
+    // arrives noise-free. Accumulating it only adds reprojection resampling error and drags a
+    // one-frame-stale sun across the screen while turning, so take it straight through and let the
+    // à-trous pass skip it too. This is what keeps the sun a disc and cloud edges crisp.
+    if (sky) {
+        imageStore(histOut, pix, vec4(cur, 1.0));
+        imageStore(momentsOut, pix, vec4(lum, lum * lum, min(histFrames + 1.0, max(pc.maxFrames, 1.0)), 0.0));
+        imageStore(filterOut, pix, vec4(cur, 0.0));
+        return;
     }
 
     // ---- Accumulate. 1/n up to the window cap converges the Monte-Carlo estimate as fast as an
