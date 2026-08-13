@@ -123,12 +123,25 @@ public final class RtNrdDenoiser {
      */
     private static final float FIREFLY_SUPPRESSOR_SCALE = 1.75f;
     /**
-     * Pre-pass blur radii. NRD explicitly requires a non-zero pre-pass "in case of badly defined
-     * signals and probabilistic sampling", which is exactly this tracer, so the defaults (30 / 50)
-     * are kept rather than reduced.
+     * Pre-pass blur radii, in PIXELS, and why they are scaled by resolution.
+     *
+     * NRD requires a non-zero pre-pass "in case of badly defined signals and probabilistic
+     * sampling", which describes this tracer, so the pass stays enabled. But its defaults (30
+     * diffuse / 50 specular) are quoted for a full-resolution render: at the upscaled render size
+     * this mod actually traces at -- 640x337 for a 1920x1009 window -- a 50-pixel specular radius
+     * is 7.8% of the frame width. That is what made reflections look like flat, simplified colour
+     * (energy smeared across a large fraction of the image before any accumulation) and what turned
+     * a single firefly into a large, stretched blob: the pre-pass is anisotropic along the specular
+     * lobe, so on a slanted surface the disc becomes an ellipse.
+     *
+     * Scaling to a reference width keeps NRD's intent (the radius covers the same ANGULAR extent)
+     * without letting it eat the frame at low render resolutions.
      */
+    private static final float PREPASS_REFERENCE_WIDTH = 1920.0f;
     private static final float DIFFUSE_PREPASS_BLUR_RADIUS = 30.0f;
     private static final float SPECULAR_PREPASS_BLUR_RADIUS = 50.0f;
+    /** Never shrink the pre-pass to nothing: NRD warns it is required for probabilistic input. */
+    private static final float MIN_PREPASS_BLUR_RADIUS = 6.0f;
     /** Spatial filter radii, in pixels: NRD defaults (converged pixels shrink toward the minimum). */
     private static final float MIN_BLUR_RADIUS = 1.0f;
     private static final float MAX_BLUR_RADIUS = 30.0f;
@@ -261,7 +274,8 @@ public final class RtNrdDenoiser {
                         HISTORY_FIX_FRAMES,
                         0.0f, 0.0f, // anti-lag: NRD defaults (2.0 / 3.0) are the best balance here
                         FIREFLY_SUPPRESSOR_SCALE,
-                        DIFFUSE_PREPASS_BLUR_RADIUS, SPECULAR_PREPASS_BLUR_RADIUS,
+                        prepassRadius(DIFFUSE_PREPASS_BLUR_RADIUS, renderWidth),
+                        prepassRadius(SPECULAR_PREPASS_BLUR_RADIUS, renderWidth),
                         MIN_BLUR_RADIUS, MAX_BLUR_RADIUS,
                         LOBE_ANGLE_FRACTION, ROUGHNESS_FRACTION, PLANE_DISTANCE_SENSITIVITY,
                         FAST_HISTORY_CLAMPING_SIGMA,
@@ -464,6 +478,16 @@ public final class RtNrdDenoiser {
     }
 
     /** True when every element of the matrix is finite (no NaN, no Inf). */
+    /**
+     * NRD's pre-pass radii are quoted in pixels for a full-resolution render; scale them to the
+     * render width actually in use so the blur covers the same angular extent instead of a much
+     * larger share of a small frame. See PREPASS_REFERENCE_WIDTH.
+     */
+    private static float prepassRadius(float referenceRadius, int renderWidth) {
+        float scaled = referenceRadius * (renderWidth / PREPASS_REFERENCE_WIDTH);
+        return Math.max(scaled, MIN_PREPASS_BLUR_RADIUS);
+    }
+
     private static boolean isFinite(Matrix4fc m) {
         for (int col = 0; col < 4; col++) {
             for (int row = 0; row < 4; row++) {

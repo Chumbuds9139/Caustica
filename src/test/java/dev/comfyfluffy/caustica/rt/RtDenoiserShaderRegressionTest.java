@@ -431,12 +431,14 @@ final class RtDenoiserShaderRegressionTest {
     @Test
     void svgfBoundsHistorylessSamples() throws Exception {
         String reproject = Files.readString(SVGF_REPROJECT);
-        assertTrue(reproject.contains("const float FIREFLY_CLAMP_SIGMA = 4.0;"),
-                "the neighbourhood bound must stay loose enough not to eat real signal");
-        assertTrue(reproject.contains("cur = min(cur, mean + FIREFLY_CLAMP_SIGMA * sigma + vec3(FIREFLY_CLAMP_FLOOR));"),
-                "every sample must be bounded, not only the history-less ones");
+        // The bound that matters is the TEMPORAL one: fireflies occur every frame, yet the artefact
+        // only shows while moving, because motion is what shortens the history that was hiding them.
+        assertTrue(reproject.contains("const float FIREFLY_HISTORY_SIGMA = 3.0;"),
+                "the firefly bound must be driven by the accumulated history");
+        assertTrue(reproject.contains("cur *= bound / lum;"),
+                "rejection must scale colour, preserving hue");
         assertTrue(reproject.contains("continue; // exclude the centre: an outlier must not raise its own bound"),
-                "the centre tap must be excluded or a firefly widens its own bound");
+                "the spatial fallback must exclude the centre tap");
     }
 
     /**
@@ -459,5 +461,23 @@ final class RtDenoiserShaderRegressionTest {
         assertTrue(raygen.contains("diffRad *= maxLobe / diffLum;")
                         && raygen.contains("specRad *= maxLobe / specLum;"),
                 "both lobes must be bounded, scaling colour to preserve hue");
+    }
+
+    /**
+     * NRD's pre-pass blur radii are quoted in pixels for a full-resolution render, so they must be
+     * scaled to the render size actually in use. At 640x337 (a 1920-wide window with upscaling) the
+     * stock 50-pixel specular radius is 7.8% of the frame width: it smears reflection detail into
+     * flat colour before any accumulation happens, and because the pre-pass is anisotropic along
+     * the specular lobe it turns a single firefly into a large, stretched blob.
+     */
+    @Test
+    void nrdPrepassRadiusScalesWithRenderResolution() throws Exception {
+        String denoiser = Files.readString(NRD_DENOISER);
+        assertTrue(denoiser.contains("private static float prepassRadius(float referenceRadius, int renderWidth)"),
+                "the pre-pass radius must be resolution-scaled");
+        assertTrue(denoiser.contains("prepassRadius(SPECULAR_PREPASS_BLUR_RADIUS, renderWidth)"),
+                "the specular pre-pass must use the scaled radius");
+        assertTrue(denoiser.contains("private static final float MIN_PREPASS_BLUR_RADIUS"),
+                "the pre-pass must never scale to zero; NRD requires it for probabilistic input");
     }
 }
