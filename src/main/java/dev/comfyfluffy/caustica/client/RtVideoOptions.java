@@ -117,7 +117,7 @@ public final class RtVideoOptions {
             boolean nrdAvailable = NrdRuntime.platformSupported();
             boolean nrdActive = nrdAvailable && CausticaConfig.Rt.Nrd.ENABLED.value();
             if (!nrdActive) {
-                options.add(denoiser());
+                options.add(svgfDenoiser());
             }
             if (nrdAvailable) {
                 options.add(nrdDenoiser(upscalerChanged));
@@ -603,7 +603,7 @@ public final class RtVideoOptions {
      * re-keys {@code RtComposite.ensureOutput}, which allocates or releases the history/moment
      * targets on the rebuild, and the tracer picks the feature flag up on the next frame.
      */
-    private static OptionInstance<Boolean> denoiser() {
+    private static OptionInstance<Boolean> svgfDenoiser() {
         return bool("caustica.options.rt.denoise", CausticaConfig.Rt.Denoise.ENABLED);
     }
 
