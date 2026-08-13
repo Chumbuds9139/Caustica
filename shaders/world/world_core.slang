@@ -91,6 +91,15 @@ public float payloadActiveSss() { return sssEnabled() ? payloadSss() : 0.0; }
 // single worst artefact of the raw reference view at low SPP. Applied only when the denoiser is off,
 // which keeps the denoised path bit-identical to before this option existed.
 public static const float UNDENOISED_FIREFLY_MAX_LUMINANCE = 24.0;
+/**
+ * Firefly bound for the per-lobe signals handed to NRD, as a MULTIPLE of the pixel's own combined
+ * radiance rather than an absolute luminance. An absolute cap cannot work across a scene that spans
+ * full sun and deep shade: at a shadow level of ~0.05 a sample at luminance 5 is a 100x outlier yet
+ * sits far below any cap chosen to leave sunlit highlights alone. The floor keeps the bound usable
+ * where the combined radiance is itself near zero.
+ */
+public static const float NRD_FIREFLY_RELATIVE_MAX = 8.0;
+public static const float NRD_FIREFLY_FLOOR = 0.02;
 
 public static const float PI = 3.14159265359;
 public static const float INV_PI = 0.31830988618;

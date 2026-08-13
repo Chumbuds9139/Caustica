@@ -431,11 +431,33 @@ final class RtDenoiserShaderRegressionTest {
     @Test
     void svgfBoundsHistorylessSamples() throws Exception {
         String reproject = Files.readString(SVGF_REPROJECT);
-        assertTrue(reproject.contains("const float FIREFLY_CLAMP_SIGMA = 2.0;"),
-                "history-less samples need a neighbourhood bound");
-        assertTrue(reproject.contains("vec3 clamped = min(cur, mean + FIREFLY_CLAMP_SIGMA * sigma);"),
-                "the fresh sample must be clamped to its neighbourhood");
-        assertFalse(reproject.contains("histColor = cur;\n        histMoments = vec2(lum, lum * lum);"),
-                "the unclamped raw-sample fallback is what produced the specks");
+        assertTrue(reproject.contains("const float FIREFLY_CLAMP_SIGMA = 4.0;"),
+                "the neighbourhood bound must stay loose enough not to eat real signal");
+        assertTrue(reproject.contains("cur = min(cur, mean + FIREFLY_CLAMP_SIGMA * sigma + vec3(FIREFLY_CLAMP_FLOOR));"),
+                "every sample must be bounded, not only the history-less ones");
+        assertTrue(reproject.contains("continue; // exclude the centre: an outlier must not raise its own bound"),
+                "the centre tap must be excluded or a firefly widens its own bound");
+    }
+
+    /**
+     * The per-lobe signals handed to NRD need a firefly bound too, and it must be RELATIVE.
+     *
+     * The tracer's undenoised clamp is absolute (luminance 24), so it only ever fires in brightly
+     * lit scenes; at a shadow level of ~0.05 a low-pdf sample at luminance 5 is a 100x outlier and
+     * passes untouched. REBLUR's own suppressor works against a mean it forms after accumulation,
+     * by which point the spike has already been averaged in — which is why the same bright specks
+     * appeared with NRD and with the built-in denoiser. The cause is upstream of both.
+     */
+    @Test
+    void nrdPerLobeSignalsAreFireflyBounded() throws Exception {
+        String raygen = Files.readString(WORLD_RGEN);
+        String core = Files.readString(WORLD_CORE);
+        assertTrue(core.contains("NRD_FIREFLY_RELATIVE_MAX"),
+                "the per-lobe bound must be relative to the local light level");
+        assertTrue(raygen.contains("float maxLobe = localLevel * NRD_FIREFLY_RELATIVE_MAX;"),
+                "the bound must scale with the pixel's own combined radiance");
+        assertTrue(raygen.contains("diffRad *= maxLobe / diffLum;")
+                        && raygen.contains("specRad *= maxLobe / specLum;"),
+                "both lobes must be bounded, scaling colour to preserve hue");
     }
 }

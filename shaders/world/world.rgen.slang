@@ -819,6 +819,31 @@ void main() {
         diffRad = clamp(diffRad, 0.0, 65504.0);
         specRad = clamp(specRad, 0.0, 65504.0);
 
+        // ---- Relative firefly bound on the per-lobe signals.
+        //
+        // These used to be handed to REBLUR unclamped, on the assumption that its own anti-firefly
+        // pass owns the job. It does not catch this case: a low-pdf sample in shadow is a ~100x
+        // outlier against a surface level of ~0.05, and REBLUR's suppressor works against a local
+        // mean it forms AFTER accumulation, by which point the spike has already been averaged in
+        // and spread. The result is bright specks in shadow that appear with NRD exactly as they do
+        // with the built-in denoiser, because the cause is upstream of both.
+        //
+        // The bound is relative to this pixel's own combined radiance, so it scales with the local
+        // light level: a real highlight in a bright area keeps its energy, while a lone spike over a
+        // dark surface is cut to a multiple of what that surface is actually receiving.
+        {
+            float localLevel = luminance(radiance) + NRD_FIREFLY_FLOOR;
+            float maxLobe = localLevel * NRD_FIREFLY_RELATIVE_MAX;
+            float diffLum = luminance(diffRad);
+            if (diffLum > maxLobe) {
+                diffRad *= maxLobe / diffLum;
+            }
+            float specLum = luminance(specRad);
+            if (specLum > maxLobe) {
+                specRad *= maxLobe / specLum;
+            }
+        }
+
         // Material demodulation (NRD_MaterialFactors). NRD wants radiance with the surface material
         // divided out, so its spatial kernels never average across albedo/texture detail; the
         // combine pass multiplies the same factors back after denoising. Both sides read the factors
