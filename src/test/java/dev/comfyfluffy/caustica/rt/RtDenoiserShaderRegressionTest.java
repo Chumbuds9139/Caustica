@@ -313,4 +313,53 @@ final class RtDenoiserShaderRegressionTest {
         assertTrue(body.contains("failed = false;"),
                 "resetHistory must clear the failure latch so the toggle retries");
     }
+
+    /**
+     * The à-trous reach must be bounded by how much history a pixel has. The cascade grows to a
+     * 62-pixel radius by its fifth iteration, which is only meaningful once the temporal estimate
+     * is trustworthy; letting a 2-frame pixel reach that far turns "slightly soft" into a smear.
+     * That is the "blurry while walking, sharp when I stop" report, with no extra noise.
+     */
+    @Test
+    void svgfCascadeReachIsBoundedByHistory() throws Exception {
+        String atrous = Files.readString(SVGF_ATROUS);
+        assertTrue(atrous.contains("int maxStep = int(clamp(frames, 1.0, 32.0));"),
+                "the tap spacing must be capped by the accumulated frame count");
+        assertTrue(atrous.contains("int step = min(pc.step, maxStep);"),
+                "the capped spacing must be the one actually used");
+        assertTrue(atrous.contains("ivec2 offset = ivec2(dx, dy) * step;"),
+                "taps must use the capped spacing, not the raw push-constant step");
+    }
+
+    /**
+     * Short history must not widen the luminance sigma on top of an already inflated variance. In
+     * that regime the variance handed over is a spatial estimate scaled by 4/frames; multiplying
+     * again pushed sigma to ~5.7 against a signal level of 0.3, weighting every neighbour ~0.99 —
+     * a plain box blur over the full cascade reach.
+     */
+    @Test
+    void svgfDoesNotDoubleWidenShortHistory() throws Exception {
+        String atrous = Files.readString(SVGF_ATROUS);
+        assertFalse(atrous.contains("sigmaL *= 1.0 + 3.0 * (1.0 - frames / HISTORY_FIX_FRAMES);"),
+                "the short-history sigma widening compounded an already inflated estimate");
+        assertTrue(atrous.contains("SIGMA_LUMINANCE_MAX_RELATIVE"),
+                "the luminance stop must stay bounded relative to the pixel's own level");
+    }
+
+    /**
+     * A single bad frame must not disable NRD for the session. The game hands over the projection,
+     * and one non-finite or degenerate frame (seen ~40 s into a session, right before the pause
+     * menu) previously latched the integration off permanently — which is what "the NRD toggle
+     * does nothing" actually looked like.
+     */
+    @Test
+    void nrdSkipsBadFramesInsteadOfLatchingOff() throws Exception {
+        String denoiser = Files.readString(NRD_DENOISER);
+        assertTrue(denoiser.contains("if (!isFinite(viewToClip) || !isFinite(viewRotation))"),
+                "the incoming camera matrices must be validated before use");
+        assertTrue(denoiser.contains("rc == NRDSHIM_ERR_INVALID_ARGUMENT"),
+                "a per-frame parameter rejection must skip the frame, not throw");
+        assertTrue(denoiser.contains("NRD: skipping a frame"),
+                "skipped frames must be reported");
+    }
 }

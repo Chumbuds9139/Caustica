@@ -480,10 +480,26 @@ NRD_SHIM_EXPORT int nrdshim_set_settings(const float* viewToClip, const float* v
     if (!g_integration) {
         return NRDSHIM_ERR_NOT_INITIALIZED;
     }
-    if (!matrixIsFinite(viewToClip) || !matrixIsFinite(viewToClipPrev)
-            || !matrixIsFinite(worldToView) || !matrixIsFinite(worldToViewPrev)) {
-        nrdShimLog("set_settings: non-finite matrix");
-        return NRDSHIM_ERR_INVALID_ARGUMENT;
+    {
+        // Name the offending matrix AND dump it. "non-finite matrix" alone cost a debugging round
+        // trip: the caller could not tell which of the four was bad, nor whether the value was NaN,
+        // an infinity or an absurd-but-finite number produced upstream.
+        const char* names[4] = {"viewToClip", "viewToClipPrev", "worldToView", "worldToViewPrev"};
+        const float* mats[4] = {viewToClip, viewToClipPrev, worldToView, worldToViewPrev};
+        for (int i = 0; i < 4; i++) {
+            if (!matrixIsFinite(mats[i])) {
+                const float* m = mats[i];
+                if (m) {
+                    nrdShimLog("set_settings: non-finite %s = "
+                            "[%g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g]",
+                            names[i], m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+                            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+                } else {
+                    nrdShimLog("set_settings: %s is null", names[i]);
+                }
+                return NRDSHIM_ERR_INVALID_ARGUMENT;
+            }
+        }
     }
     // NRD asserts these in debug builds and misbehaves silently in release; catch them here where
     // the message can name the offending value.

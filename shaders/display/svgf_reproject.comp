@@ -264,6 +264,7 @@ void main() {
     vec3 accum = mix(histColor, cur, alpha);
     vec2 moments = mix(histMoments, vec2(lum, lum * lum), alpha);
 
+
     // ---- Variance for the spatial pass.
     float variance;
     if (frames >= SPATIAL_VARIANCE_FRAMES) {

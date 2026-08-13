@@ -161,6 +161,8 @@ public final class RtNrdDenoiser {
      * plane; anything larger would make NRD's derived world scales too coarse.
      */
     private static final float NRD_PROJECTION_NEAR = 0.05f;
+    /** Shim status for "a parameter was rejected"; see native/nrd_shim/nrd_shim.cpp. */
+    private static final int NRDSHIM_ERR_INVALID_ARGUMENT = -2;
     /**
      * Camera jump (in blocks, squared below) beyond which history cannot be reprojected at all: a
      * teleport, respawn or dimension change. Ordinary movement — including a terrain rebase, which
@@ -173,6 +175,7 @@ public final class RtNrdDenoiser {
 
     private boolean failed;
     private boolean loggedFirstDispatch;
+    private final java.util.Set<String> warned = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private boolean hasPrev;
     private int appliedAccumulatedFrames = -1;
     private final float[] prevViewToClip = new float[16];
@@ -283,6 +286,17 @@ public final class RtNrdDenoiser {
             // DecomposeProjection then divides by a zero/degenerate term and hands back non-finite
             // values, which the shim rejects with "set_settings: non-finite matrix" -- the exact
             // error that disabled REBLUR for the whole session and made the toggle look inert.
+            // The projection arrives from the game and is NOT always sane: a single frame with a
+            // degenerate or non-finite projection (a zero/NaN FOV during a transition, a resize
+            // mid-frame) is enough to poison everything derived from it. The log shows exactly
+            // that -- REBLUR ran fine for ~40 seconds and then one bad frame arrived. Skip that
+            // frame instead of failing, because the previous behaviour turned a one-frame glitch
+            // into "NRD is dead for the rest of the session", which is what made the toggle look
+            // like it did nothing.
+            if (!isFinite(viewToClip) || !isFinite(viewRotation)) {
+                warnOnce("NRD: skipping a frame whose camera matrices were not finite");
+                return false;
+            }
             Matrix4f nrdViewToClip = new Matrix4f(viewToClip);
             nrdViewToClip.m22(0f);                     // row2.z
             nrdViewToClip.m32(NRD_PROJECTION_NEAR);    // row2.w  -> clipZ = near
@@ -290,9 +304,21 @@ public final class RtNrdDenoiser {
             nrdViewToClip.m33(0f);                     // row3.w
 
             // ---- worldToView in the rebased terrain space the signals live in.
+            // The camera and the anchor are doubles that come from the game; a NaN camera (seen
+            // during dimension changes and respawns) turns the whole matrix non-finite. Validate
+            // the operands, not just the result, so the message says which side was bad.
+            if (!Double.isFinite(camWorldX) || !Double.isFinite(camWorldY) || !Double.isFinite(camWorldZ)
+                    || !Double.isFinite(anchorX) || !Double.isFinite(anchorY) || !Double.isFinite(anchorZ)) {
+                warnOnce("NRD: skipping a frame with a non-finite camera or terrain anchor");
+                return false;
+            }
             Matrix4f worldToView = new Matrix4f(viewRotation)
                     .translate((float) (anchorX - camWorldX), (float) (anchorY - camWorldY),
                             (float) (anchorZ - camWorldZ));
+            if (!isFinite(worldToView)) {
+                warnOnce("NRD: skipping a frame whose worldToView was not finite");
+                return false;
+            }
 
             // A teleport/respawn is the only camera discontinuity left: a rebase is compensated
             // below by re-expressing the previous camera against the CURRENT anchor, so ordinary
@@ -315,6 +341,14 @@ public final class RtNrdDenoiser {
                 // JOML's buffer store is column-major, exactly NRD's "vector is a column" layout.
                 nrdViewToClip.get(v2c.asByteBuffer().asFloatBuffer());
                 worldToView.get(w2v.asByteBuffer().asFloatBuffer());
+                // A stored previous projection that is not finite (it was captured from a frame
+                // the game had already mangled) must not be handed to NRD; drop to the
+                // no-history path for this frame instead, which is always safe.
+                if (useHistory && !isFinite(prevViewToClip)) {
+                    warnOnce("NRD: dropping a non-finite stored projection; restarting history");
+                    useHistory = false;
+                    hasPrev = false;
+                }
                 if (useHistory) {
                     copyInto(prevViewToClip, v2cPrev);
                     // THE rebase fix: the previous camera is re-expressed against the CURRENT
@@ -345,6 +379,15 @@ public final class RtNrdDenoiser {
                         DENOISING_RANGE, DISOCCLUSION_THRESHOLD,
                         frameIndex, useHistory ? 0 : 1, validationOn ? 1 : 0);
                 if (rc != 0) {
+                    // NRDSHIM_ERR_INVALID_ARGUMENT (-2) means the shim rejected this frame's
+                    // parameters. That is a per-frame condition, not a broken integration, so skip
+                    // the frame and let SVGF cover it; throwing here is what previously killed
+                    // REBLUR for the rest of the session on a single bad frame.
+                    if (rc == NRDSHIM_ERR_INVALID_ARGUMENT) {
+                        warnOnce("NRD: the shim rejected a frame's settings (rc=-2); skipping"
+                                + " those frames and continuing");
+                        return false;
+                    }
                     throw new IllegalStateException("nrdshim_set_settings failed: " + rc
                             + " last=" + lib.lastResult());
                 }
@@ -410,6 +453,34 @@ public final class RtNrdDenoiser {
         // nrd::GetMaxAccumulatedFrameNum(accumulationTime, fps).
         int frames = Math.round(ACCUMULATION_TIME_SECONDS * smoothedFps);
         return Math.clamp(frames, 8, MAX_HISTORY_FRAMES);
+    }
+
+    /** True when every element of the matrix is finite (no NaN, no Inf). */
+    private static boolean isFinite(Matrix4fc m) {
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                if (!Float.isFinite(m.get(col, row))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static boolean isFinite(float[] m) {
+        for (float v : m) {
+            if (!Float.isFinite(v)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Log a recurring condition once per session so a per-frame glitch cannot flood the log. */
+    private void warnOnce(String message) {
+        if (warned.add(message)) {
+            CausticaMod.LOGGER.warn(message);
+        }
     }
 
     private static void copyInto(float[] src, MemorySegment dst) {

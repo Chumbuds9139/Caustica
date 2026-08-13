@@ -49,9 +49,10 @@ const float DENOISING_RANGE = 500000.0;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 // 5x5 separable B-spline kernel (SVGF's h(x)), as the outer product of (1, 4, 6, 4, 1)/16.
 const float KERNEL[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
-// Below this many accumulated frames a pixel is treated as freshly disoccluded and filtered harder:
-// its temporal estimate is still unreliable, so spatial filtering is all it has.
-const float HISTORY_FIX_FRAMES = 4.0;
+// Upper bound on the luminance edge-stop, as a multiple of the pixel's own luminance (plus a floor
+// so near-black pixels still get a usable sigma). See where it is applied.
+const float SIGMA_LUMINANCE_MAX_RELATIVE = 1.5;
+const float SIGMA_LUMINANCE_FLOOR = 0.02;
 // Must match svgf_reproject.comp's constants exactly: the same factor divided out there is
 // multiplied back here, so any mismatch tints the image. See that file for why the factor is total
 // reflectance rather than raw albedo.
@@ -123,11 +124,17 @@ void main() {
     // (variance ~ 0) pixel from dividing by zero and rejecting every neighbour.
     float lc = dot(cc, LUMA);
     float sigmaL = pc.phiLuminance * sqrt(max(filteredVar, 1.0e-8)) + 1.0e-4;
-    // A pixel with almost no history has no trustworthy variance yet, so the luminance stop is
-    // loosened for it: better a briefly over-blurred disocclusion than a burst of raw noise.
-    if (frames < HISTORY_FIX_FRAMES) {
-        sigmaL *= 1.0 + 3.0 * (1.0 - frames / HISTORY_FIX_FRAMES);
-    }
+    // Cap the edge-stop RELATIVE to the pixel's own brightness. sigma is an absolute luminance
+    // difference, so an over-estimated variance (camera motion inflating the temporal moments, a
+    // fresh disocclusion, a firefly) makes it exceed the signal itself, at which point exp(-d/sigma)
+    // is ~1 for every neighbour and the wavelet degenerates into an unweighted box blur across the
+    // whole 62-pixel reach. Clamping to a multiple of the local level keeps the filter strong where
+    // it must be while making "blur everything" unreachable.
+    sigmaL = min(sigmaL, SIGMA_LUMINANCE_MAX_RELATIVE * (lc + SIGMA_LUMINANCE_FLOOR));
+    // NOTE: no extra widening for short history. The variance handed to this pass is already a
+    // spatial estimate scaled up by 4/frames in that regime, and multiplying it again pushed sigma
+    // to ~5.7 against a signal level of 0.3 -- every neighbour weighted ~0.99, i.e. a plain box
+    // blur over the full cascade reach. The reach cap below is the bounded way to handle it.
 
     // Local depth gradient (in view-Z per pixel), used to scale the depth edge-stop so slanted
     // surfaces are not read as discontinuities.
@@ -148,12 +155,20 @@ void main() {
     // pass widen its kernel by exactly the amount the remaining noise justifies.
     float varianceSum = weightSum * weightSum * cv;
 
+    // Cap this pass's reach by how much history the pixel actually has. The cascade's radius grows
+    // to 62 pixels by the fifth iteration, which is only meaningful once the temporal estimate is
+    // trustworthy: a pixel with 2 accumulated frames that reaches that far produces a smear, not a
+    // denoised result. Standing still every pixel is at the 48-frame cap and the full cascade runs,
+    // which is precisely why the image looked sharp when stopped and blurry while walking.
+    int maxStep = int(clamp(frames, 1.0, 32.0));
+    int step = min(pc.step, maxStep);
+
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             if (dx == 0 && dy == 0) {
                 continue;
             }
-            ivec2 offset = ivec2(dx, dy) * pc.step;
+            ivec2 offset = ivec2(dx, dy) * step;
             ivec2 q = pix + offset;
             if (q.x < 0 || q.y < 0 || q.x > maxPix.x || q.y > maxPix.y) {
                 continue; // no clamped duplication: it would over-weight the border pixel
