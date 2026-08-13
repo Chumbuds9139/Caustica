@@ -69,12 +69,11 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFsrUpscaler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtXessUpscaler;
-import dev.comfyfluffy.caustica.rt.pipeline.RtTaaPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFgSkyMaskPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtFgUiCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGenPipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtSpatialDenoisePipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtSvgfDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdDenoiser;
 import dev.comfyfluffy.caustica.rt.pipeline.RtNrdCombinePipeline;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
@@ -165,10 +164,12 @@ public final class RtComposite {
     private static final int FEATURE_CLOUDS = 8;
     private static final int FEATURE_CLOUDS_VOLUMETRIC = 16;
     private static final int FEATURE_RESTIR = 32;
-    // Retired with the NRD denoiser: the bit stays reserved so the other flag values never shift;
-    // it is simply never set anymore (the shader's nrdEnabled() is always false).
+    // Per-lobe NRD signal capture: only the NRD path needs it (it costs an extra shadow ray for the
+    // lobe split), so it is a feature bit rather than something the tracer always pays for.
     private static final int FEATURE_NRD = 64;
-    private static final int FEATURE_TAA = 128;
+    // gViewZ capture. Every denoised non-DLSS path needs it (SVGF's reprojection validation and
+    // sky cutoff, NRD's IN_VIEWZ), so it is set for both denoisers.
+    private static final int FEATURE_VIEWZ = 128;
     private static final int FEATURE_FOG = 256;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
@@ -213,16 +214,14 @@ public final class RtComposite {
             flags |= FEATURE_DENOISER;
         } else {
             if (RtNrdDenoiser.enabled() && debugView() == 0) {
-                // NRD signal capture (per-lobe radiance + hit distance + viewZ) only runs when RR is
-                // not already denoising: the two are mutually exclusive in the UI, and if a
-                // hand-edited config somehow enables both, RR wins — capturing the signals would burn
-                // ALU + bandwidth for buffers nothing consumes.
+                // Per-lobe signal capture only runs when NRD is the active denoiser: RR denoises
+                // internally and SVGF works on the combined radiance, so capturing the split would
+                // burn an extra shadow ray plus bandwidth for buffers nothing reads.
                 flags |= FEATURE_NRD;
-            }
-            if (CausticaConfig.Rt.Taa.ENABLED.value() && debugView() == 0) {
-                // The TAA needs gViewZ (its sky cutoff); meaningless while RR is denoising, so it
-                // shares the same exclusion.
-                flags |= FEATURE_TAA;
+                flags |= FEATURE_VIEWZ;
+            } else if (CausticaConfig.Rt.Denoise.ENABLED.value() && debugView() == 0) {
+                // SVGF needs gViewZ for its geometry-validated reprojection and its sky cutoff.
+                flags |= FEATURE_VIEWZ;
             }
         }
         return flags;
@@ -232,9 +231,21 @@ public final class RtComposite {
     // penumbrae). Radii in degrees; the real sun/moon are ~0.27°, but a touch larger reads pleasantly.
     private static final int WATER_ANCHOR_MASK = 4095;
 
-    // Temporal accumulation window: long enough to converge static noise at SPP 1, short enough
-    // that ghosting after a reset decays quickly.
-    private static final float TAA_MAX_FRAMES = 32.0f;
+    // ---- SVGF denoiser tuning (see RtSvgfDenoiser + shaders/display/svgf_*.comp).
+    //
+    // Accumulation window. Longer than the old TAA's 32 frames because history is now rejected on
+    // GEOMETRY rather than thrown away on motion: a long window no longer means ghosting, it means
+    // a converged image. The exponential tail after the 1/n phase still tracks lighting changes.
+    private static final float SVGF_MAX_FRAMES = 48.0f;
+    // Luminance edge-stop, in estimated standard deviations. This is the knob that decides how much
+    // the wavelet trusts its own variance estimate: 4 sigma filters the 1-spp signal hard while
+    // still stopping at genuine luminance edges (SVGF's paper uses 4 as well).
+    private static final float SVGF_PHI_LUMINANCE = 4.0f;
+    // Normal edge-stop exponent, the standard SVGF value: cos^128 keeps block faces separate.
+    private static final float SVGF_PHI_NORMAL = 128.0f;
+    // Depth edge-stop, as a multiple of the local screen-space depth gradient. Scaling by the
+    // gradient is what keeps slanted surfaces from reading as discontinuities.
+    private static final float SVGF_PHI_DEPTH = 2.0f;
     // Matches the viewZ cap the tracer writes for sky/miss pixels: everything beyond is passed
     // through the denoise chain raw (the sky never accumulates history).
     private static final float NRD_DENOISING_RANGE = 500000.0f;
@@ -467,29 +478,34 @@ public final class RtComposite {
     private RtImage gMotion;
     private RtImage gSpecAlbedo;
     private RtImage gSpecMotion;
-    // Primary-hit linear view depth (the TAA's sky cutoff). gNrdDiff/gNrdSpec are retired NRD
-    // signal targets: the descriptor layout still carries their bindings, so they stay allocated,
-    // but FEATURE_NRD is never set and nothing writes them anymore.
+    // Primary-hit linear view depth (the denoisers' sky cutoff + NRD's IN_VIEWZ), plus the tracer's
+    // per-lobe NRD signals (demodulated YCoCg radiance + normalized hit distance). The lobe images
+    // are written only under FEATURE_NRD, but their bindings always exist in the pipeline layout.
     private RtImage gViewZ;
     private RtImage gNrdDiff;
     private RtImage gNrdSpec;
     // R16 per-pixel effective fog depth: primary camera depth multiplied by the sky-exposure mask.
     private RtImage gFogDepthMask;
-    // Temporal accumulation ping-pong over the trace radiance; alpha channel carries the per-pixel
-    // frame count. Swapped every frame.
-    private RtImage taaPing;
-    private RtImage taaPong;
-    private boolean taaWriteToPing;
-    private boolean taaHasPrev;
-    private RtTaaPipeline taaPipeline;
-    // Edge-avoiding à-trous spatial denoise ping-pong (history-less, so motion-safe): cleans the
-    // raw trace before the temporal/upscale stages read it.
-    private RtImage spatialPing;
-    private RtImage spatialPong;
-    private RtSpatialDenoisePipeline spatialPipeline;
+    // ---- SVGF (the renderer's own denoiser for every non-DLSS path).
+    //
+    // colour/history ping-pong (rgb = colour, a = accumulated frame count), the luminance-moment
+    // ping-pong feeding the variance estimate, and the à-trous ping-pong (rgb = colour,
+    // a = variance). The reprojection also needs LAST frame's geometry to validate history against,
+    // which is what the prev-guide copies hold.
+    private RtImage svgfHistoryPing;
+    private RtImage svgfHistoryPong;
+    private RtImage svgfMomentsPing;
+    private RtImage svgfMomentsPong;
+    private RtImage svgfFilterPing;
+    private RtImage svgfFilterPong;
+    private RtImage svgfPrevViewZ;
+    private RtImage svgfPrevNormal;
+    private boolean svgfWriteToPing;
+    private boolean svgfHasHistory;
+    private RtSvgfDenoiser svgfDenoiser;
     /** Sky-mask pass over FSR FG's generated frames (see RtFgSkyMaskPipeline); created lazily. */
     private RtFgSkyMaskPipeline fgSkyMaskPipeline;
-    private boolean renderSizeSpatialEnabled;
+    private boolean renderSizeSvgfEnabled;
     // NRD/REBLUR: the denoiser's own input/output pair + the combined (decoded + summed) radiance
     // the upscale stage consumes, plus the validation overlay target and the combine pipeline.
     private RtImage nrdDiffOut;
@@ -522,9 +538,6 @@ public final class RtComposite {
     // XeSS shares that same slot (never with RR nor FSR): same keying contract.
     private boolean renderSizeXessEnabled;
     private int renderSizeXessQuality = Integer.MIN_VALUE;
-    // Temporal accumulation allocates its own history targets: its toggle joins the render-size key
-    // so flipping it at a fixed window size rebuilds exactly like the NRD/FSR toggles do.
-    private boolean renderSizeTaaEnabled;
 
     // Motion-vector reprojection state: the previous frame's camera-relative view-projection and
     // camera position, read into the push constant each frame then advanced at frame end.
@@ -651,13 +664,6 @@ public final class RtComposite {
     private double prevXessCamY;
     private double prevXessCamZ;
     private boolean xessCamValid;
-
-    // ...and for REBLUR: a teleport/respawn jump leaves its history pointing at a world that no
-    // longer matches; drop it on the jump frame instead of smearing until it decays.
-    private double prevNrdCamX;
-    private double prevNrdCamY;
-    private double prevNrdCamZ;
-    private boolean nrdCamValid;
 
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
@@ -1002,21 +1008,37 @@ public final class RtComposite {
             gFogDepthMask.destroy();
             gFogDepthMask = null;
         }
-        if (taaPing != null) {
-            taaPing.destroy();
-            taaPing = null;
+        if (svgfHistoryPing != null) {
+            svgfHistoryPing.destroy();
+            svgfHistoryPing = null;
         }
-        if (taaPong != null) {
-            taaPong.destroy();
-            taaPong = null;
+        if (svgfHistoryPong != null) {
+            svgfHistoryPong.destroy();
+            svgfHistoryPong = null;
         }
-        if (spatialPing != null) {
-            spatialPing.destroy();
-            spatialPing = null;
+        if (svgfMomentsPing != null) {
+            svgfMomentsPing.destroy();
+            svgfMomentsPing = null;
         }
-        if (spatialPong != null) {
-            spatialPong.destroy();
-            spatialPong = null;
+        if (svgfMomentsPong != null) {
+            svgfMomentsPong.destroy();
+            svgfMomentsPong = null;
+        }
+        if (svgfFilterPing != null) {
+            svgfFilterPing.destroy();
+            svgfFilterPing = null;
+        }
+        if (svgfFilterPong != null) {
+            svgfFilterPong.destroy();
+            svgfFilterPong = null;
+        }
+        if (svgfPrevViewZ != null) {
+            svgfPrevViewZ.destroy();
+            svgfPrevViewZ = null;
+        }
+        if (svgfPrevNormal != null) {
+            svgfPrevNormal.destroy();
+            svgfPrevNormal = null;
         }
         if (nrdDiffOut != null) {
             nrdDiffOut.destroy();
@@ -1118,25 +1140,21 @@ public final class RtComposite {
         // XeSS shares the slot under the same rules; if a hand-edit stacks them, RR > FSR > XeSS.
         boolean xessEnabled = !rrEnabled && !fsrEnabled && RtXessUpscaler.enabled();
         int xessQuality = xessEnabled ? RtXessUpscaler.quality() : Integer.MIN_VALUE;
-        // TAA is the temporal stage of every non-RR path, including XeSS: it converges the jitter
-        // sequence into the image BEFORE the upscaler reads it (the XeSS handoff then passes zero
-        // jitter, since the input is already jitter-integrated — two temporal layers fighting over
-        // the same jitter was the noisy/shimmery result).
-        boolean taaEnabled = !rrEnabled && CausticaConfig.Rt.Taa.ENABLED.value();
-        // NRD's denoise slot: off whenever RR is denoising, and when it is on it owns the slot —
-        // the spatial/TAA stack steps aside (two temporal layers would fight).
+        // The denoise slot. Exactly one denoiser ever runs on a frame, in this order:
+        //   DLSS-RR (denoises internally, so nothing else may touch the image)
+        //   > NRD/REBLUR (opt-in, needs bundled natives)
+        //   > SVGF (the renderer's own; the default for every non-DLSS path).
+        // Two temporal denoisers in series would fight over the same history and reintroduce exactly
+        // the ghosting this rework removes, so they are strictly exclusive.
         boolean nrdEnabled = !rrEnabled && RtNrdDenoiser.enabled();
-        // Spatial à-trous denoise: history-less noise killer over the raw trace (pairs with the TAA
-        // + upscaler stack). Steps aside under NRD — REBLUR already denoises there.
-        boolean spatialEnabled = !rrEnabled && !nrdEnabled && CausticaConfig.Rt.Spatial.ENABLED.value();
+        boolean svgfEnabled = !rrEnabled && !nrdEnabled && CausticaConfig.Rt.Denoise.ENABLED.value();
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality
                 && renderSizeFsrEnabled == fsrEnabled && renderSizeFsrQuality == fsrQuality
                 && renderSizeXessEnabled == xessEnabled && renderSizeXessQuality == xessQuality
-                && renderSizeTaaEnabled == taaEnabled
-                && renderSizeSpatialEnabled == spatialEnabled
+                && renderSizeSvgfEnabled == svgfEnabled
                 && renderSizeNrdEnabled == nrdEnabled) {
             syncRestirResources(ctx);
             return;
@@ -1193,8 +1211,7 @@ public final class RtComposite {
         renderSizeFsrQuality = fsrQuality;
         renderSizeXessEnabled = xessEnabled;
         renderSizeXessQuality = xessQuality;
-        renderSizeTaaEnabled = taaEnabled;
-        renderSizeSpatialEnabled = spatialEnabled;
+        renderSizeSvgfEnabled = svgfEnabled;
         renderSizeNrdEnabled = nrdEnabled;
 
         // RT traces into an HDR (R16G16B16A16_SFLOAT) target so radiance > 1 survives to the display
@@ -1218,23 +1235,40 @@ public final class RtComposite {
         gMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderW + "x" + renderH);
         gSpecAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderW + "x" + renderH);
         gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
-        // gViewZ is live (the TAA's sky cutoff). gNrdDiff/gNrdSpec are retired NRD targets kept only
-        // because the world pipeline's descriptor layout still carries their bindings — allocated,
-        // bound, never written (FEATURE_NRD is never set).
+        // gViewZ is live on every denoised path (SVGF's sky cutoff and NRD's IN_VIEWZ). The per-lobe
+        // signal images are bound unconditionally because the world pipeline's descriptor layout
+        // carries their bindings, but the tracer only writes them under FEATURE_NRD.
         gViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "nrd viewZ " + renderW + "x" + renderH);
         gNrdDiff = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd diffuse radiance+hitdist " + renderW + "x" + renderH);
         gNrdSpec = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "nrd specular radiance+hitdist " + renderW + "x" + renderH);
         gFogDepthMask = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16_SFLOAT, "fog depth mask " + renderW + "x" + renderH);
-        // Temporal accumulation history over the trace radiance.
-        if (taaEnabled) {
-            taaPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history ping " + renderW + "x" + renderH);
-            taaPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "taa history pong " + renderW + "x" + renderH);
-            if (taaPipeline == null) {
-                taaPipeline = RtTaaPipeline.create(ctx);
-                CausticaMod.LOGGER.info("Temporal accumulation active (window {} frames)", (int) TAA_MAX_FRAMES);
+        // SVGF working set: colour/frame-count history, luminance moments, and the à-trous
+        // ping-pong (whose alpha carries variance), plus copies of last frame's depth/normal guides
+        // so the reprojection can validate history against the geometry it came from.
+        if (svgfEnabled) {
+            svgfHistoryPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf history ping " + renderW + "x" + renderH);
+            svgfHistoryPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf history pong " + renderW + "x" + renderH);
+            // rgba16f, not rg16f: the moments texture also carries the accumulated frame count
+            // (see svgf_reproject.comp — it cannot live in the history's alpha, which the à-trous
+            // feedback copy overwrites).
+            svgfMomentsPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf moments ping " + renderW + "x" + renderH);
+            svgfMomentsPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf moments pong " + renderW + "x" + renderH);
+            svgfFilterPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf filter ping " + renderW + "x" + renderH);
+            svgfFilterPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf filter pong " + renderW + "x" + renderH);
+            svgfPrevViewZ = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "svgf prev viewZ " + renderW + "x" + renderH);
+            svgfPrevNormal = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "svgf prev normal " + renderW + "x" + renderH);
+            if (svgfDenoiser == null) {
+                svgfDenoiser = RtSvgfDenoiser.create(ctx);
+                CausticaMod.LOGGER.info("SVGF denoiser active ({} a-trous passes, {} frame window)",
+                        RtSvgfDenoiser.ATROUS_PASSES, (int) SVGF_MAX_FRAMES);
+            } else {
+                // The images above are new. A recycled view handle can compare equal to the one that
+                // was just destroyed, so the descriptor cache must be dropped rather than trusted.
+                svgfDenoiser.invalidateBindings();
             }
-            // Fresh buffers: the accumulation history no longer corresponds to anything.
-            taaHasPrev = false;
+            // Fresh buffers hold nothing the reprojection may read.
+            svgfHasHistory = false;
+            svgfWriteToPing = true;
         }
         // Denoiser outputs + the decoded/summed image the upscale stage consumes exist only while
         // NRD actually runs; the combine pipeline is created lazily with them.
@@ -1247,18 +1281,15 @@ public final class RtComposite {
             nrdValidation = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R8G8B8A8_UNORM, "nrd validation overlay " + renderW + "x" + renderH);
             if (nrdCombinePipeline == null) {
                 nrdCombinePipeline = RtNrdCombinePipeline.create(ctx);
+            } else {
+                nrdCombinePipeline.invalidateBindings(); // same recycled-handle hazard as SVGF above
             }
+            // Re-modulation reads the same guides the tracer demodulated with (see nrd_combine.comp),
+            // and the raw trace supplies the sky, which REBLUR does not denoise.
             nrdCombinePipeline.setImages(nrdDiffOut.view, nrdSpecOut.view, nrdCombined.view,
-                    gNrdDiff.view, gNrdSpec.view, gViewZ.view);
-        }
-        // Spatial à-trous ping-pong targets over the raw trace (history-less, motion-safe).
-        if (spatialEnabled) {
-            spatialPing = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "spatial denoise ping " + renderW + "x" + renderH);
-            spatialPong = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "spatial denoise pong " + renderW + "x" + renderH);
-            if (spatialPipeline == null) {
-                spatialPipeline = RtSpatialDenoisePipeline.create(ctx);
-                CausticaMod.LOGGER.info("Spatial denoiser active (2 à-trous passes)");
-            }
+                    output.view, gAlbedo.view, gViewZ.view, gSpecAlbedo.view, gNormal.view);
+            // NRD's own temporal history cannot survive a resolution change either.
+            RtNrdDenoiser.INSTANCE.resetHistory();
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
@@ -1319,13 +1350,13 @@ public final class RtComposite {
             boolean rrPath = RtDlssRr.enabled() && debugView == 0;
             boolean fsrPath = !rrPath && RtFsrUpscaler.enabled() && debugView == 0;
             boolean xessPath = !rrPath && !fsrPath && RtXessUpscaler.enabled() && debugView == 0;
-            // NRD needs a jittered trace to accumulate (its history reprojection compensates using
-            // the jitter reported in CommonSettings); when an upscaler shares the frame, both
-            // consumers get the same jitter sequence prepared above.
+            // The denoise slot, in the same priority order ensureOutput allocated for:
+            // RR > NRD > SVGF. Both denoisers want a jittered trace — their temporal stage
+            // integrates the sub-pixel sequence, which is what resolves detail below the pixel grid
+            // and lets the upscaler reconstruct it — and both are told the exact jitter used.
             boolean nrdPath = !rrPath && RtNrdDenoiser.enabled() && debugView == 0;
-            // Temporal accumulation runs on any non-RR path: accumulation over sub-pixel jitter
-            // offsets is what resolves geometry below the pixel grid.
-            boolean taaPath = !rrPath && CausticaConfig.Rt.Taa.ENABLED.value() && debugView == 0;
+            boolean svgfPath = !rrPath && !nrdPath && CausticaConfig.Rt.Denoise.ENABLED.value()
+                    && debugView == 0;
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
@@ -1342,13 +1373,11 @@ public final class RtComposite {
                 CausticaJitter.INSTANCE.prepareXess();
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
-            } else if (nrdPath) {
-                // NRD alone (no upscaler): FSR's phase-count rule, the pre-XeSS default.
+            } else if (nrdPath || svgfPath) {
+                // A denoiser with no upscaler: still jitter, because the denoiser's temporal stage
+                // integrates the sequence into sub-pixel detail. FSR's phase-count rule is the
+                // renderer's long-standing default for this case.
                 CausticaJitter.INSTANCE.prepareFsr(renderW, displayW);
-                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
-                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
-            } else if (taaPath) {
-                CausticaJitter.INSTANCE.prepare(renderW, renderH, displayW);
                 jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
@@ -1585,53 +1614,41 @@ public final class RtComposite {
             frameProjection.get(prevProjection);
             prevProjectionValid = true;
 
-            // NRD/REBLUR denoise (the STRONG temporal option): consumes the tracer's per-lobe
-            // signals + guides at render res, writes denoised YCoCg outputs, and the combine pass
-            // decodes + sums them into nrdCombined. When it runs it OWNS the denoise slot — the
-            // spatial/TAA stack steps aside below (two temporal layers would fight).
+            // ---- NRD / REBLUR (opt-in). Consumes the tracer's demodulated per-lobe signals plus
+            // the guides at render res; the combine pass re-modulates and sums the denoised pair
+            // into nrdCombined. When it runs it owns the denoise slot: SVGF steps aside below,
+            // because two temporal denoisers in series fight over the same history.
             boolean nrdDone = false;
             RtImage denoisedSource = null;
             if (nrdPath && gViewZ != null && nrdDiffOut != null) {
-                // Camera discontinuity reset (teleport / respawn / world change), same 32-block
-                // rule as the FSR/XeSS paths.
-                boolean nrdJumped = false;
-                if (nrdCamValid) {
-                    double ndx = camX - prevNrdCamX;
-                    double ndy = camY - prevNrdCamY;
-                    double ndz = camZ - prevNrdCamZ;
-                    nrdJumped = ndx * ndx + ndy * ndy + ndz * ndz > 32.0 * 32.0;
-                }
-                prevNrdCamX = camX;
-                prevNrdCamY = camY;
-                prevNrdCamZ = camZ;
-                nrdCamValid = true;
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD denoise");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrd")) {
-                    // Camera position in the rebased terrain coordinates the signals live in (same
-                    // offset pushed to the shaders): NRD derives camera motion from the worldToView
-                    // translation built from it. projectionChanged restarts REBLUR's history when
-                    // the FOV lerps (sprint/fly).
+                    // The camera goes in as ABSOLUTE world coordinates plus the terrain anchor the
+                    // signals live in. That pair is what lets the denoiser compensate a rebase
+                    // instead of seeing it as a teleport (see RtNrdDenoiser): the old code passed
+                    // only anchor-relative coordinates, so every rebase silently invalidated
+                    // REBLUR's history mid-motion. projectionChanged still restarts it on an FOV
+                    // lerp (sprint/fly), which genuinely warps the reprojection space.
                     nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
                             gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
                             nrdValidation,
                             frameProjection, frameViewRotation,
-                            (float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
-                            (float) (camZ - terrain.blockZ),
-                            jitterX, jitterY, (int) frameCounter, projectionChanged || nrdJumped);
+                            camX, camY, camZ,
+                            terrain.blockX, terrain.blockY, terrain.blockZ,
+                            jitterX, jitterY, (int) frameCounter, projectionChanged);
                 }
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
                     try (RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.nrdCombine")) {
                         nrdCombinePipeline.dispatch(cmd, renderW, renderH, NRD_DENOISING_RANGE);
                     }
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible to the upscale
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // combine output visible downstream
                     denoisedSource = nrdCombined;
                 }
             }
 
-            // Validation mode: REBLUR's 16-viewport diagnostic overlay replaces the normal image
-            // (set the upscaler to Off for a crisp readout). The spatial/TAA stages must not touch
-            // the overlay, so they are gated off below.
+            // Validation mode: REBLUR's 16-viewport diagnostic overlay replaces the image (set the
+            // upscaler to Off for a crisp readout). Nothing downstream may filter the overlay.
             boolean nrdValidationOn = nrdDone && CausticaConfig.Rt.Nrd.VALIDATION.value();
             if (nrdValidationOn) {
                 denoisedSource = nrdValidation;
@@ -1648,55 +1665,73 @@ public final class RtComposite {
                 }
             }
 
-            // FSR 3 occupies the same slot when RR is not running: same inputs minus the RR guide
-            // buffers (color + depth + motion vectors), output straight into rrOutput so the rest of
-            // the frame (exposure metering, display mapping) is untouched. The denoised NRD output
-            // or the spatial/TAA stack below may replace `output` as the source.
+            // Whatever the upscale stage will read. The denoisers replace the raw trace here.
             RtImage upscaleSource = denoisedSource != null ? denoisedSource : output;
-            // Spatial denoise (edge-avoiding à-trous over the raw trace): kills single-sample
-            // fireflies and grain BEFORE the temporal/upscale stages read the image. History-less
-            // by design, so it cannot ghost on camera motion. Steps aside when NRD ran (REBLUR
-            // already denoised) or when its validation overlay is up.
-            boolean spatialPath = !rrPath && !nrdDone && !nrdValidationOn
-                    && CausticaConfig.Rt.Spatial.ENABLED.value() && debugView == 0;
-            if (spatialPath && spatialPipeline != null && spatialPing != null) {
-                // FG amplifies residual per-frame sky noise into visible sky flicker (it
-                // interpolates between presented frames), so the sky smooths harder whenever the
-                // presenter will actually show generated frames this tick.
+
+            // ---- SVGF: the renderer's own denoiser (temporal reprojection with luminance moments,
+            // then a variance-guided à-trous cascade). Runs on every non-DLSS path unless NRD took
+            // the slot. Its temporal stage integrates the jitter sequence, so — exactly like the
+            // stack it replaces — the upscaler downstream is told the input is already converged.
+            boolean svgfRan = false;
+            if (svgfPath && !nrdDone && !nrdValidationOn
+                    && svgfDenoiser != null && svgfHistoryPing != null && gViewZ != null) {
+                int svgfParity = svgfWriteToPing ? 0 : 1;
+                RtImage historyIn = svgfWriteToPing ? svgfHistoryPong : svgfHistoryPing;
+                RtImage historyOut = svgfWriteToPing ? svgfHistoryPing : svgfHistoryPong;
+                RtImage momentsIn = svgfWriteToPing ? svgfMomentsPong : svgfMomentsPing;
+                RtImage momentsOut = svgfWriteToPing ? svgfMomentsPing : svgfMomentsPong;
+                // A projection change (FOV lerp) warps the reprojection space, and the first frame
+                // after (re)allocation has nothing to reproject; both restart the accumulation.
+                // Camera MOVEMENT deliberately does not: the whole point of validating history
+                // against geometry is that motion no longer costs the history.
+                boolean svgfReset = projectionChanged || !svgfHasHistory;
+                // FG amplifies residual per-frame sky noise into visible flicker (it interpolates
+                // between presented frames), so the sky smooths harder while it is presenting.
                 int extraSkySmooth = RtFramePresenter.INSTANCE.isActive() ? 1 : 0;
-                VulkanCommandEncoder.memoryBarrier(cmd, stack); // trace output visible to the denoise
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "spatial denoise");
-                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.spatialDenoise")) {
-                    spatialPipeline.setImages(output.view, spatialPing.view, gDepth.view, gNormal.view);
-                    spatialPipeline.dispatch(cmd, renderW, renderH, 1, extraSkySmooth);
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // pass 1 output visible to pass 2
-                    spatialPipeline.setImages(spatialPing.view, spatialPong.view, gDepth.view, gNormal.view);
-                    spatialPipeline.dispatch(cmd, renderW, renderH, 2, extraSkySmooth);
-                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // denoised output visible downstream
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // trace + guides visible to the denoiser
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "SVGF denoise");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.svgf")) {
+                    svgfDenoiser.reproject(cmd, renderW, renderH, svgfParity,
+                            upscaleSource.view, historyIn.view, momentsIn.view,
+                            historyOut.view, momentsOut.view, svgfFilterPing.view,
+                            gMotion.view, gViewZ.view, gNormal.view,
+                            svgfPrevViewZ.view, svgfPrevNormal.view,
+                            svgfReset, SVGF_MAX_FRAMES);
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack); // reprojection visible to the wavelet
+
+                    // À-trous cascade with doubling tap spacing. The first iteration's output is
+                    // what feeds next frame's temporal history (SVGF's own choice: the raw
+                    // accumulation is noisier and converges more slowly, while feeding back the
+                    // fully filtered image compounds its blur into permanent smearing).
+                    RtImage src = svgfFilterPing;
+                    RtImage dst = svgfFilterPong;
+                    for (int pass = 0; pass < RtSvgfDenoiser.ATROUS_PASSES; pass++) {
+                        svgfDenoiser.atrous(cmd, renderW, renderH, pass, svgfParity,
+                                src.view, dst.view, gViewZ.view, gNormal.view, momentsOut.view,
+                                SVGF_PHI_LUMINANCE, SVGF_PHI_NORMAL, SVGF_PHI_DEPTH,
+                                extraSkySmooth);
+                        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                        if (pass == RtSvgfDenoiser.HISTORY_FEEDBACK_PASS) {
+                            // Copy this iteration's colour into the history the next frame reads.
+                            copyImage(cmd, stack, dst, historyOut);
+                            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                        }
+                        RtImage swap = src;
+                        src = dst;
+                        dst = swap;
+                    }
+                    upscaleSource = src; // the last iteration wrote here before the final swap
+
+                    // Snapshot this frame's depth/normal guides: next frame's reprojection validates
+                    // its history against the geometry that produced it, which is what lets it
+                    // accept history under motion instead of clamping colour and smearing.
+                    copyImage(cmd, stack, gViewZ, svgfPrevViewZ);
+                    copyImage(cmd, stack, gNormal, svgfPrevNormal);
+                    VulkanCommandEncoder.memoryBarrier(cmd, stack);
                 }
-                upscaleSource = spatialPong;
-            }
-            // Temporal accumulation (own option): converges the Monte-Carlo noise + the jitter
-            // sequence at render res before the upscale stage reads it. Under XeSS the upscaler
-            // then receives the converged image with zero jitter (see the evaluate call below) so
-            // its internal temporal layer stabilizes instead of fighting this one.
-            boolean taaRan = false;
-            if (taaPath && !nrdDone && !nrdValidationOn && taaPipeline != null && taaPing != null && gViewZ != null) {
-                RtImage historyImg = taaWriteToPing ? taaPong : taaPing;
-                RtImage outImg = taaWriteToPing ? taaPing : taaPong;
-                taaPipeline.setImages(upscaleSource.view, historyImg.view, outImg.view,
-                        gMotion.view, gViewZ.view);
-                VulkanCommandEncoder.memoryBarrier(cmd, stack); // source visible to the TAA
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "TAA accumulate");
-                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.taa")) {
-                    taaPipeline.dispatch(cmd, renderW, renderH, 1.0f / renderW, 1.0f / renderH,
-                            projectionChanged || !taaHasPrev, TAA_MAX_FRAMES);
-                }
-                taaWriteToPing = !taaWriteToPing;
-                taaHasPrev = true;
-                taaRan = true;
-                VulkanCommandEncoder.memoryBarrier(cmd, stack); // TAA output visible to the upscale
-                upscaleSource = outImg;
+                svgfWriteToPing = !svgfWriteToPing;
+                svgfHasHistory = true;
+                svgfRan = true;
             }
             if (!rrDone && fsrPath && RtFsrUpscaler.INSTANCE.ensureFeature(displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "FSR upscale");
@@ -1750,12 +1785,13 @@ public final class RtComposite {
                     xessCamValid = true;
                     // XeSS takes the applied image-space jitter as-is (no negation — see
                     // RtXessUpscaler.evaluate), unlike FSR/DLSS which take the negated offsets.
-                    // EXCEPT when the TAA just ran: the image it outputs is already the integral
+                    // EXCEPT when a temporal denoiser just ran: its output is already the integral
                     // of the whole jitter sequence, so telling XeSS a per-frame jitter that is no
                     // longer in the content makes its reprojection chase a phantom offset (the
                     // noisy/shimmery output). Converged input -> zero jitter.
-                    float xessJitterX = taaRan ? 0.0f : jitterX;
-                    float xessJitterY = taaRan ? 0.0f : jitterY;
+                    boolean jitterAlreadyIntegrated = svgfRan || nrdDone;
+                    float xessJitterX = jitterAlreadyIntegrated ? 0.0f : jitterX;
+                    float xessJitterY = jitterAlreadyIntegrated ? 0.0f : jitterY;
                     rrDone = RtXessUpscaler.INSTANCE.evaluate(cmd.address(), upscaleSource, gDepth, gMotion,
                             rrOutput,
                             renderW, renderH, displayW, displayH, xessJitterX, xessJitterY);
@@ -2529,13 +2565,9 @@ public final class RtComposite {
             nrdCombinePipeline.destroy();
             nrdCombinePipeline = null;
         }
-        if (taaPipeline != null) {
-            taaPipeline.destroy();
-            taaPipeline = null;
-        }
-        if (spatialPipeline != null) {
-            spatialPipeline.destroy();
-            spatialPipeline = null;
+        if (svgfDenoiser != null) {
+            svgfDenoiser.destroy();
+            svgfDenoiser = null;
         }
         if (fgSkyMaskPipeline != null) {
             fgSkyMaskPipeline.destroy();
@@ -2545,7 +2577,7 @@ public final class RtComposite {
             fgUiCompositePipeline.destroy();
             fgUiCompositePipeline = null;
         }
-        taaHasPrev = false;
+        svgfHasHistory = false;
         prevProjectionValid = false;
         if (displayImage != null) {
             displayImage.destroy();
@@ -2938,6 +2970,23 @@ public final class RtComposite {
      * non-RR / fallback upscale so display mapping always sees a display-res RT image; a no-op stretch when
      * the two are the same size (RR disabled -> render == display).
      */
+    /**
+     * Same-size image copy between two GENERAL-layout storage images (SVGF's history feedback and
+     * its previous-frame guide snapshots). A copy rather than a ping-pong of yet more images: the
+     * two consumers need the data at a fixed binding across frames, and vkCmdCopyImage on identical
+     * formats is the cheapest way to get it without another descriptor rewrite per frame.
+     */
+    private static void copyImage(VkCommandBuffer cmd, MemoryStack stack, RtImage src, RtImage dst) {
+        VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
+        region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                .baseArrayLayer(0).layerCount(1);
+        region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                .baseArrayLayer(0).layerCount(1);
+        region.get(0).extent().set(Math.min(src.width, dst.width), Math.min(src.height, dst.height), 1);
+        VK10.vkCmdCopyImage(cmd, src.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                dst.image, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
+    }
+
     private static void blitUpscale(VkCommandBuffer cmd, MemoryStack stack, RtImage src, RtImage dst) {
         VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
         region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);

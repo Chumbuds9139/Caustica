@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
+import dev.comfyfluffy.caustica.nrd.NrdRuntime;
 import dev.comfyfluffy.caustica.compat.VoxyCompat;
 import dev.comfyfluffy.caustica.rt.terrain.RtDistantHorizonsTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
@@ -105,17 +106,25 @@ public final class RtVideoOptions {
         } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
             options.add(xessQuality());
         }
-        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — it
-        // converges the Monte-Carlo noise + jitter sequence before the upscaler reads the image
-        // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
-        // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
-        // denoises internally.
-        // NRD/REBLUR is hidden: its temporal reprojection conflicted with this renderer's motion
-        // contract (camera tremble + ghosting on every camera move, across all tuning attempts) —
-        // see RtNrdDenoiser.enabled(). The spatial denoiser + TAA pair below is the stable stack.
+        // Denoiser rows, for every path except DLSS (Ray Reconstruction denoises internally, so it
+        // owns the slot and neither row would do anything).
+        //
+        // Two denoisers, mutually exclusive: the built-in SVGF and NVIDIA's REBLUR. The NRD toggle
+        // appears only where its natives are bundled, and turning it on hands REBLUR the denoise
+        // slot — so the built-in row is hidden while it is active rather than offering a
+        // combination that cannot run (two temporal filters in series fight over one history).
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
-            options.add(spatialDenoiser());
-            options.add(temporalAccumulation());
+            boolean nrdAvailable = NrdRuntime.platformSupported();
+            boolean nrdActive = nrdAvailable && CausticaConfig.Rt.Nrd.ENABLED.value();
+            if (!nrdActive) {
+                options.add(denoiser());
+            }
+            if (nrdAvailable) {
+                options.add(nrdDenoiser(upscalerChanged));
+                if (nrdActive) {
+                    options.add(nrdValidation());
+                }
+            }
         }
         options.add(omm());
         return options.toArray(OptionInstance<?>[]::new);
@@ -590,26 +599,29 @@ public final class RtVideoOptions {
     }
 
     /**
-     * Renderer-owned temporal accumulation toggle. Live-safe like the other per-frame toggles:
-     * flipping it re-keys {@code RtComposite.ensureOutput} (the history images are allocated on the
-     * rebuild) and the tracer picks the feature flag up next frame.
+     * The built-in denoiser (SVGF) toggle. Live-safe like the other per-frame toggles: flipping it
+     * re-keys {@code RtComposite.ensureOutput}, which allocates or releases the history/moment
+     * targets on the rebuild, and the tracer picks the feature flag up on the next frame.
      */
-    private static OptionInstance<Boolean> temporalAccumulation() {
-        return bool("caustica.options.rt.temporalAccumulation", CausticaConfig.Rt.Taa.ENABLED);
-    }
-
-    /** Edge-avoiding spatial denoise — history-less, so live-safe like the other per-frame toggles. */
-    private static OptionInstance<Boolean> spatialDenoiser() {
-        return bool("caustica.options.rt.spatialDenoise", CausticaConfig.Rt.Spatial.ENABLED);
+    private static OptionInstance<Boolean> denoiser() {
+        return bool("caustica.options.rt.denoise", CausticaConfig.Rt.Denoise.ENABLED);
     }
 
     /**
-     * NRD (REBLUR) denoiser toggle: the strong temporal option. Live-safe like the other per-frame
-     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
-     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
+     * NRD (REBLUR) denoiser toggle. Flipping it swaps which denoiser owns the slot, so the screen
+     * is rebuilt afterwards: the built-in denoiser's row disappears while REBLUR is active and its
+     * validation-overlay row appears. The renderer side is live — {@code ensureOutput} re-keys on
+     * the toggle and allocates/releases the NRD targets — so no restart is needed.
      */
-    private static OptionInstance<Boolean> nrdDenoiser() {
-        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
+    private static OptionInstance<Boolean> nrdDenoiser(Runnable onChanged) {
+        return OptionInstance.createBoolean(
+            "caustica.options.rt.nrd",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.nrd.tooltip")),
+            CausticaConfig.Rt.Nrd.ENABLED.value(),
+            value -> {
+                CausticaConfig.Rt.Nrd.ENABLED.set(value);
+                onChanged.run();
+            });
     }
 
     /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */

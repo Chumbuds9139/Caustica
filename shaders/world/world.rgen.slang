@@ -799,15 +799,15 @@ void main() {
     outImage[pix] = float4(radiance, 1.0);
 
     if (nrdEnabled()) {
-        // REBLUR front-end pack (must mirror REBLUR_FrontEnd_PackRadianceAndNormHitDist): YCoCg
-        // radiance clamped to FP16 range + normalized hit distance. Invalid (NaN/Inf) samples become
-        // black with "no data" rather than poisoning the denoiser's history. The undenoised firefly
-        // clamp above intentionally does NOT apply here — REBLUR's anti-firefly pass owns that job on
-        // the denoised path.
+        // ---- REBLUR front-end pack. Mirrors REBLUR_FrontEnd_PackRadianceAndNormHitDist: DEMODULATED
+        // YCoCg radiance clamped to the FP16 range, plus the normalized hit distance. Invalid
+        // (NaN/Inf) samples become black with "no data" rather than poisoning the denoiser's history.
+        // The undenoised firefly clamp above deliberately does NOT apply here — REBLUR's own
+        // anti-firefly pass owns that job on the denoised path, and clamping twice would darken it.
         float3 diffRad = frameDiff / float(spp);
         float3 specRad = frameSpec / float(spp);
-        // Keep the retired/optional NRD lobe contract equal to the combined output: atmospheric
-        // in-scatter is diffuse, while both underlying lobes receive the same camera-segment extinction.
+        // Atmospheric in-scatter is diffuse; both lobes take the same camera-segment extinction, so
+        // the per-lobe pair still sums exactly to the combined output.
         diffRad = diffRad * screenFog.transmittance + screenFog.inScatter;
         specRad *= screenFog.transmittance;
         if (any(isnan(diffRad)) || any(isinf(diffRad))) {
@@ -818,9 +818,26 @@ void main() {
         }
         diffRad = clamp(diffRad, 0.0, 65504.0);
         specRad = clamp(specRad, 0.0, 65504.0);
-        // viewZ + roughness were written/read at the primary hit by Pass A (sky = 1e6 = INF for NRD).
-        float viewZ = gViewZ[pix];
+
+        // Material demodulation (NRD_MaterialFactors). NRD wants radiance with the surface material
+        // divided out, so its spatial kernels never average across albedo/texture detail; the
+        // combine pass multiplies the same factors back after denoising. Both sides read the factors
+        // from the SAME guide textures, so the round trip is exact — see nrdMaterialFactors.
+        float3 albedoGuide = gAlbedo[pix].rgb;
+        float3 specAlbedoGuide = gSpecAlbedo[pix].rgb;
         float rough = clamp(gNormal[pix].w, 0.0, 1.0);
+        float3 diffFactor;
+        float3 specFactor;
+        nrdMaterialFactors(albedoGuide, specAlbedoGuide, rough, diffFactor, specFactor);
+        diffRad /= diffFactor;
+        specRad /= specFactor;
+        // The division can push a bright sample past FP16; re-clamp so the stored signal is always
+        // representable (an Inf here would spread through REBLUR's history).
+        diffRad = clamp(diffRad, 0.0, 65504.0);
+        specRad = clamp(specRad, 0.0, 65504.0);
+
+        // viewZ was written at the primary hit by Pass A (sky = 1e6 = INF for NRD).
+        float viewZ = gViewZ[pix];
         float normHitDiff = frameHitDiff > 0.0 ? nrdNormHitDist(frameHitDiff, viewZ, rough) : 0.0;
         float normHitSpec = frameHitSpec > 0.0 ? nrdNormHitDist(frameHitSpec, viewZ, rough) : 0.0;
         gNrdDiff[pix] = float4(nrdLinearToYCoCg(diffRad), normHitDiff);

@@ -1,0 +1,172 @@
+#version 460
+
+// SVGF stage 2 — variance-guided edge-avoiding à-trous wavelet.
+//
+// The spatial half of the renderer's denoiser. Runs several times with a doubling tap spacing
+// (1, 2, 4, ...), each pass widening the effective filter while keeping the 5x5 tap cost, so the
+// footprint grows exponentially for a linear cost — that reach is what actually removes low-frequency
+// blotchiness at 1 spp; a fixed 5x5 blur (what the old spatial pass did, twice) only ever removed
+// per-pixel grain and left the large-scale mottling that reads as "still noisy".
+//
+// What makes it stable rather than smeary:
+//   * the luminance edge-stop is scaled by the ESTIMATED STANDARD DEVIATION of the pixel (from the
+//     temporal moments), not by a fixed sigma. A converged pixel has tiny variance, so its edge-stop
+//     is tight and real detail survives; a noisy pixel has large variance, so the filter is allowed
+//     to blend widely exactly where it must. That single coupling is the difference between SVGF and
+//     an ordinary bilateral blur.
+//   * variance is itself filtered (3x3 Gaussian prefilter, and each pass propagates it through the
+//     squared filter weights), so a lone noisy sample cannot make its own edge-stop huge.
+//   * depth uses a screen-space GRADIENT tolerance, so a steeply slanted floor is not mistaken for a
+//     depth discontinuity (the old shader's relative-depth test blurred those exactly wrong).
+//
+// Input/output alpha carries variance, so passes chain directly. The caller feeds the FIRST pass's
+// output back as the next frame's temporal history (SVGF's standard choice: the 1-step-filtered
+// colour is much cleaner than the raw accumulation, so history converges faster while still being
+// only lightly biased). The frame count lives in the moments texture precisely so that feedback can
+// be a plain image copy without clobbering it.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba16f) uniform readonly  image2D colorIn;  // rgb colour, a variance
+layout(binding = 1, set = 0, rgba16f) uniform writeonly image2D colorOut; // rgb colour, a variance
+layout(binding = 2, set = 0, r32f)    uniform readonly  image2D viewZ;    // linear view depth
+layout(binding = 3, set = 0, rgba16f) uniform readonly  image2D normal;   // world normal (xyz) + roughness (w)
+layout(binding = 4, set = 0, rgba16f) uniform readonly  image2D moments;  // z = accumulated frame count
+
+layout(push_constant) uniform Push {
+    int width;
+    int height;
+    int step;           // tap spacing: 1, 2, 4, ...
+    float phiLuminance; // luminance edge-stop scale (multiplies the estimated std deviation)
+    float phiNormal;    // normal edge-stop exponent
+    float phiDepth;     // depth edge-stop scale (multiplied by the local depth gradient)
+    int extraSkySmooth; // 1 = frame generation is presenting; smooth the sky harder (see below)
+} pc;
+
+const float DENOISING_RANGE = 500000.0;
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+// 5x5 separable B-spline kernel (SVGF's h(x)), as the outer product of (1, 4, 6, 4, 1)/16.
+const float KERNEL[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+// Below this many accumulated frames a pixel is treated as freshly disoccluded and filtered harder:
+// its temporal estimate is still unreliable, so spatial filtering is all it has.
+const float HISTORY_FIX_FRAMES = 4.0;
+
+bool isSky(float z) {
+    return !(z < DENOISING_RANGE);
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= pc.width || pix.y >= pc.height) {
+        return;
+    }
+    ivec2 maxPix = ivec2(pc.width - 1, pc.height - 1);
+
+    vec4 center = imageLoad(colorIn, pix);
+    vec3 cc = clamp(center.rgb, vec3(0.0), vec3(65504.0));
+    float cv = max(center.a, 0.0);
+    float zc = imageLoad(viewZ, pix).r;
+    vec3 nc = imageLoad(normal, pix).xyz;
+    bool centerSky = isSky(zc);
+    float frames = max(imageLoad(moments, pix).z, 0.0);
+
+    // ---- Prefilter the variance over 3x3 (SVGF §4.2). The per-pixel variance estimate is itself a
+    // noisy quantity; using it raw makes the edge-stop flicker frame to frame, which shows up as
+    // boiling. The Gaussian prefilter is what keeps the guidance stable.
+    float varSum = 0.0;
+    float varWeight = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            ivec2 q = clamp(pix + ivec2(dx, dy), ivec2(0), maxPix);
+            float w = KERNEL[dx + 2] * KERNEL[dy + 2]; // 3x3 slice of the same kernel
+            varSum += w * max(imageLoad(colorIn, q).a, 0.0);
+            varWeight += w;
+        }
+    }
+    float filteredVar = varWeight > 0.0 ? varSum / varWeight : cv;
+
+    // Luminance edge-stop denominator: phi * sqrt(variance). The epsilon keeps a fully converged
+    // (variance ~ 0) pixel from dividing by zero and rejecting every neighbour.
+    float lc = dot(cc, LUMA);
+    float sigmaL = pc.phiLuminance * sqrt(max(filteredVar, 1.0e-8)) + 1.0e-4;
+    // A pixel with almost no history has no trustworthy variance yet, so the luminance stop is
+    // loosened for it: better a briefly over-blurred disocclusion than a burst of raw noise.
+    if (frames < HISTORY_FIX_FRAMES) {
+        sigmaL *= 1.0 + 3.0 * (1.0 - frames / HISTORY_FIX_FRAMES);
+    }
+    // Sky under frame generation: FG interpolates between presented frames and turns any residual
+    // per-frame sky grain into visible flicker, and the sky has no fine geometric detail to protect,
+    // so loosen the stop there. Off on the plain path, which keeps maximum sky crispness.
+    if (centerSky && pc.extraSkySmooth != 0) {
+        sigmaL *= 4.0;
+    }
+
+    // Local depth gradient (in view-Z per pixel), used to scale the depth edge-stop so slanted
+    // surfaces are not read as discontinuities.
+    float dzdx = 0.0;
+    float dzdy = 0.0;
+    if (!centerSky) {
+        float zx = imageLoad(viewZ, clamp(pix + ivec2(1, 0), ivec2(0), maxPix)).r;
+        float zy = imageLoad(viewZ, clamp(pix + ivec2(0, 1), ivec2(0), maxPix)).r;
+        dzdx = isSky(zx) ? 0.0 : abs(zx - zc);
+        dzdy = isSky(zy) ? 0.0 : abs(zy - zc);
+    }
+    float gradZ = max(max(dzdx, dzdy), 1.0e-3);
+
+    float weightSum = KERNEL[2] * KERNEL[2]; // the centre tap always participates, at full weight
+    vec3 colorSum = cc * weightSum;
+    // Variance combines through the SQUARE of the weights: filtering is a weighted mean of random
+    // variables, and Var(sum w_i x_i) = sum w_i^2 Var(x_i). Getting this right is what lets the next
+    // pass widen its kernel by exactly the amount the remaining noise justifies.
+    float varianceSum = weightSum * weightSum * cv;
+
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            ivec2 offset = ivec2(dx, dy) * pc.step;
+            ivec2 q = pix + offset;
+            if (q.x < 0 || q.y < 0 || q.x > maxPix.x || q.y > maxPix.y) {
+                continue; // no clamped duplication: it would over-weight the border pixel
+            }
+            float zt = imageLoad(viewZ, q).r;
+            bool tapSky = isSky(zt);
+            // Sky and geometry never blend into each other: the horizon must stay a hard edge.
+            if (tapSky != centerSky) {
+                continue;
+            }
+            vec4 tap = imageLoad(colorIn, q);
+            vec3 ct = clamp(tap.rgb, vec3(0.0), vec3(65504.0));
+            float vt = max(tap.a, 0.0);
+            float lt = dot(ct, LUMA);
+
+            float w = KERNEL[dx + 2] * KERNEL[dy + 2];
+            if (!centerSky) {
+                // Depth: allowed difference grows with the surface's own screen-space slope.
+                float expectedDz = gradZ * length(vec2(offset));
+                float wz = exp(-abs(zt - zc) / (pc.phiDepth * expectedDz + 1.0e-3));
+                // Normal: the standard SVGF power-of-cosine stop.
+                vec3 nt = imageLoad(normal, q).xyz;
+                float wn = pow(max(dot(nc, nt), 0.0), pc.phiNormal);
+                w *= wz * wn;
+            }
+            // Luminance: the variance-guided term.
+            w *= exp(-abs(lt - lc) / sigmaL);
+            if (w <= 0.0) {
+                continue;
+            }
+            colorSum += w * ct;
+            weightSum += w;
+            varianceSum += w * w * vt;
+        }
+    }
+
+    if (weightSum <= 1.0e-6) {
+        imageStore(colorOut, pix, vec4(cc, cv)); // degenerate: pass the pixel through untouched
+        return;
+    }
+    vec3 filtered = colorSum / weightSum;
+    float outVar = varianceSum / (weightSum * weightSum);
+    imageStore(colorOut, pix, vec4(max(filtered, vec3(0.0)), outVar));
+}

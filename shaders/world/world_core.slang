@@ -17,9 +17,9 @@ import world_common;
 [[vk::binding(6, 0)]] [format("rg16f")]   public RWTexture2D<float2> gMotion;     // screen-space motion (render px)
 [[vk::binding(7, 0)]] [format("rgba16f")] public RWTexture2D<float4> gSpecAlbedo; // exact-mirror reflected diffuse × reflectance; material reflectance otherwise
 [[vk::binding(8, 0)]] [format("rg16f")]   public RWTexture2D<float2> gSpecMotion; // reflection MVs for RR
-// NRD (REBLUR_DIFFUSE_SPECULAR) signals: gViewZ in Pass A (also consumed by the renderer's TAA as
-// its sky cutoff, so it is written when EITHER feature is on), the YCoCg-packed per-lobe radiance +
-// normalized hit distance in Pass B (NRD-only). Formats are the NRD front-end contract (IN_VIEWZ =
+// Denoiser signals: gViewZ in Pass A (NRD's IN_VIEWZ, and the guide SVGF validates its reprojection
+// against, so it is written whenever EITHER denoiser is active), plus the YCoCg-packed per-lobe
+// radiance + normalized hit distance in Pass B (NRD only). Formats are NRD's contract (IN_VIEWZ =
 // R16f+; IN_*_RADIANCE_HITDIST = RGBA16f with the REBLUR pack); the normal + roughness input is
 // gNormal itself (NRD is built with the RGBA16/SNORM normal encoding + LINEAR roughness, whose
 // unpack is exactly xyz + w — no repack needed).
@@ -71,7 +71,7 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 public bool sssEnabled() { return worldFeature(worldPush, FEATURE_SSS); }
 public bool denoiserEnabled() { return worldFeature(worldPush, FEATURE_DENOISER); }
 public bool nrdEnabled() { return worldFeature(worldPush, FEATURE_NRD); }
-public bool taaEnabled() { return worldFeature(worldPush, FEATURE_TAA); }
+public bool viewZEnabled() { return worldFeature(worldPush, FEATURE_VIEWZ); }
 public bool restirEnabled() {
     // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
     // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.
@@ -157,6 +157,42 @@ public float nrdSpecMagicCurve(float roughness) {
 public float nrdNormHitDist(float hitDist, float viewZ, float roughness) {
     float f = (3.0 + abs(viewZ) * 0.1) * lerp(20.0, 1.0, nrdSpecMagicCurve(roughness));
     return max(saturate(hitDist / f), 1.0e-4);
+}
+
+// ---- NRD material demodulation (NRD.hlsli's NRD_MaterialFactors).
+//
+// NRD denoises pure RADIANCE, not irradiance with the surface material baked in: "materials need to
+// be decoupled from the input signal ... BRDF should be applied AFTER denoising". Feeding it
+// modulated radiance makes its spatial kernels average across texture detail, so denoising bleeds
+// albedo across block edges — a large part of what previously looked like temporal smearing.
+// The tracer divides the per-lobe radiance by these factors and the combine pass multiplies them
+// back, so the material detail passes through the denoiser untouched.
+//
+// IMPORTANT: the factors are derived ONLY from guide textures that both sides can read
+// (gAlbedo.rgb, gSpecAlbedo.rgb, gNormal.w), never from values that live inside the tracer. That is
+// what makes the round trip exact: nrd_combine.comp mirrors this function bit for bit, so whatever
+// is divided out here is multiplied back there, even if the material model changes later.
+//
+// The floors are NRD's own NRD_MATERIAL_FACTOR_MIN_SCALE / NRD_ROUGHNESS_FACTOR_MIN_SCALE; they are
+// what stops a near-black albedo from turning the division into an explosion of noise (dividing a
+// noisy signal by ~0 is unbounded amplification, and NRD warns that smaller values are unstable).
+public static const float NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
+public static const float NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
+
+/**
+ * Diffuse/specular demodulation factors for a primary hit. {@code specAlbedo} is the renderer's
+ * existing pre-integrated specular albedo guide (gSpecAlbedo) — the same quantity DLSS-RR consumes
+ * for exactly this purpose, i.e. NRD's "Fenv" — and {@code roughness} is LINEAR roughness.
+ */
+public void nrdMaterialFactors(float3 albedo, float3 specAlbedo, float roughness,
+                               out float3 diffFactor, out float3 specFactor) {
+    float3 fenv = saturate(specAlbedo);
+    diffFactor = lerp(float3(NRD_MATERIAL_FACTOR_MIN_SCALE), float3(1.0),
+            saturate((1.0 - fenv) * saturate(albedo)));
+    // "Don't be greedy": NRD scales the specular factor down toward the floor at low roughness,
+    // where a mirror-like lobe carries almost all of its energy in the reflected image itself.
+    specFactor = fenv * lerp(float3(NRD_ROUGHNESS_FACTOR_MIN_SCALE), float3(1.0), saturate(roughness));
+    specFactor = lerp(float3(NRD_MATERIAL_FACTOR_MIN_SCALE), float3(1.0), saturate(specFactor));
 }
 
 // Continuations one sample may carry: the camera segment, plus the reflection branch a primary

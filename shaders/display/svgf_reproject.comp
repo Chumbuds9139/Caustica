@@ -1,0 +1,212 @@
+#version 460
+
+// SVGF stage 1 — temporal reprojection + luminance moments.
+//
+// This is the temporal half of the renderer's own denoiser (the stack every non-DLSS path uses:
+// Off / FSR 3 / XeSS). It reprojects last frame's accumulated colour with the tracer's jitter-free
+// motion vectors, VALIDATES the reprojection against the previous frame's geometry (view depth +
+// normal) instead of trusting a colour clamp alone, and accumulates the first two luminance moments
+// so the à-trous pass that follows knows HOW NOISY each pixel actually is.
+//
+// Why moments instead of the old neighbourhood-variance clamp: the previous TAA estimated its clamp
+// box from the CURRENT frame's 3x3 neighbourhood, which at 1 spp is itself pure noise — the box was
+// as wide as the noise, so the clamp neither removed noise nor stopped ghosting, and it had to hide
+// that behind a motion-scaled blend (alpha up to 0.7) that threw history away the moment the camera
+// moved. That is exactly the "still noisy while moving, never settles" behaviour. Temporal moments
+// measure the noise over TIME at a reprojected surface point, so the spatial filter can blur hard
+// where the estimate is uncertain and leave converged pixels crisp, which is what makes DLSS-class
+// output look stable rather than smeared.
+//
+// Outputs (all render resolution):
+//   histOut    rgba16f  rgb = accumulated colour (the next frame's history); alpha unused
+//   momentsOut rgba16f  x = luminance m1, y = m2, z = history length in FRAMES
+//   filterOut  rgba16f  rgb = accumulated colour, a = VARIANCE — the à-trous pass's input
+//
+// The frame count deliberately lives in the moments texture rather than the history's alpha: the
+// à-trous pass writes its first iteration's result back as the next frame's history (SVGF's own
+// feedback choice), and a whole-image copy would otherwise overwrite the count with variance.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0, set = 0, rgba16f) uniform readonly  image2D current;    // this frame's raw trace
+layout(binding = 1, set = 0, rgba16f) uniform readonly  image2D history;    // previous accumulation (rgb + frames)
+layout(binding = 2, set = 0, rgba16f) uniform readonly  image2D momentsIn;  // previous moments + frame count
+layout(binding = 3, set = 0, rgba16f) uniform writeonly image2D histOut;
+layout(binding = 4, set = 0, rgba16f) uniform writeonly image2D momentsOut;
+layout(binding = 5, set = 0, rgba16f) uniform writeonly image2D filterOut;
+layout(binding = 6, set = 0, rg16f)   uniform readonly  image2D motion;     // render-pixel MVs (prev - current)
+layout(binding = 7, set = 0, r32f)    uniform readonly  image2D viewZ;      // linear view depth, this frame
+layout(binding = 8, set = 0, rgba16f) uniform readonly  image2D normal;     // world normal (xyz) + roughness (w)
+layout(binding = 9, set = 0, r32f)    uniform readonly  image2D prevViewZ;  // linear view depth, previous frame
+layout(binding = 10, set = 0, rgba16f) uniform readonly image2D prevNormal; // world normal, previous frame
+
+layout(push_constant) uniform Push {
+    int width;
+    int height;
+    int reset;         // 1 = discard history everywhere (FOV change, rebase jump, toggle, first frame)
+    float maxFrames;   // accumulation window cap: alpha never falls below 1 / maxFrames
+} pc;
+
+// Matches the viewZ the tracer writes for sky/miss pixels (RtComposite.NRD_DENOISING_RANGE):
+// anything beyond is sky, which has no surface to validate against.
+const float DENOISING_RANGE = 500000.0;
+// Reprojection acceptance thresholds. Depth is compared RELATIVELY (a 10 cm error means something
+// very different at 2 blocks and at 200), normals by angle.
+const float DEPTH_TOLERANCE = 0.05;   // 5% of view depth
+const float NORMAL_TOLERANCE = 0.85;  // cos of the maximum allowed normal deviation
+// Spatial fallback radius while the temporal history is too short to carry a meaningful variance.
+const int SPATIAL_VARIANCE_RADIUS = 3;
+const float SPATIAL_VARIANCE_FRAMES = 4.0;
+
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+// A single NaN/Inf sample would poison the history forever (it survives every blend and then spreads
+// through the spatial filter), so every read is sanitized at the source. isnan/isinf rather than a
+// bare clamp: clamp() propagates NaN on most implementations.
+vec3 loadCurrent(ivec2 p) {
+    ivec2 q = clamp(p, ivec2(0), ivec2(pc.width - 1, pc.height - 1));
+    vec3 c = imageLoad(current, q).rgb;
+    if (any(isnan(c)) || any(isinf(c))) {
+        return vec3(0.0);
+    }
+    return clamp(c, vec3(0.0), vec3(65504.0));
+}
+
+bool isSky(float z) {
+    return !(z < DENOISING_RANGE);
+}
+
+/**
+ * Is the surface that lived at `prevPix` last frame the same surface we see at this pixel now?
+ * Geometry answers this far more reliably than colour: a disocclusion changes depth or normal
+ * discontinuously, while noise leaves both untouched.
+ */
+bool reprojectionValid(ivec2 prevPix, float z, vec3 n, bool sky) {
+    if (prevPix.x < 0 || prevPix.y < 0 || prevPix.x >= pc.width || prevPix.y >= pc.height) {
+        return false;
+    }
+    float zPrev = imageLoad(prevViewZ, prevPix).r;
+    bool skyPrev = isSky(zPrev);
+    if (sky || skyPrev) {
+        // Sky has no surface: the only test that means anything is that it was sky before too.
+        return sky && skyPrev;
+    }
+    if (abs(z - zPrev) > DEPTH_TOLERANCE * max(z, 1.0)) {
+        return false;
+    }
+    vec3 nPrev = imageLoad(prevNormal, prevPix).xyz;
+    return dot(n, nPrev) > NORMAL_TOLERANCE;
+}
+
+void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= pc.width || pix.y >= pc.height) {
+        return;
+    }
+    vec3 cur = loadCurrent(pix);
+    float lum = dot(cur, LUMA);
+    float z = imageLoad(viewZ, pix).r;
+    vec3 n = imageLoad(normal, pix).xyz;
+    bool sky = isSky(z);
+
+    // ---- Reproject: bilinear gather with per-tap validation.
+    //
+    // A single nearest-neighbour tap (what the old TAA did) snaps the history to whole pixels, so
+    // sub-pixel camera motion resamples a neighbour every frame — that resampling error IS the
+    // shimmer/crawl the image had while moving. Bilinear weighting of the four taps that pass the
+    // geometry test keeps the history aligned to the sub-pixel position it actually came from.
+    vec2 mv = imageLoad(motion, pix).rg;
+    vec2 prevPos = vec2(pix) + 0.5 + mv;
+    vec2 base = floor(prevPos - 0.5);
+    vec2 frac = prevPos - 0.5 - base;
+    float bilinear[4] = float[4](
+            (1.0 - frac.x) * (1.0 - frac.y),
+            frac.x * (1.0 - frac.y),
+            (1.0 - frac.x) * frac.y,
+            frac.x * frac.y);
+    ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+
+    vec3 histColor = vec3(0.0);
+    vec2 histMoments = vec2(0.0);
+    float histFrames = 0.0;
+    float weightSum = 0.0;
+    if (pc.reset == 0) {
+        for (int i = 0; i < 4; i++) {
+            ivec2 q = ivec2(base) + offsets[i];
+            if (bilinear[i] <= 0.0 || !reprojectionValid(q, z, n, sky)) {
+                continue;
+            }
+            vec3 hc = imageLoad(history, q).rgb;
+            vec4 hm = imageLoad(momentsIn, q);
+            if (any(isnan(hc)) || any(isinf(hc)) || any(isnan(hm)) || any(isinf(hm))) {
+                continue;
+            }
+            histColor += bilinear[i] * clamp(hc, vec3(0.0), vec3(65504.0));
+            histMoments += bilinear[i] * hm.xy;
+            histFrames += bilinear[i] * max(hm.z, 0.0);
+            weightSum += bilinear[i];
+        }
+    }
+
+    bool hasHistory = weightSum > 0.01;
+    if (hasHistory) {
+        // Colour and moments are renormalized over the taps that PASSED, so a pixel where only part
+        // of the bilinear footprint survived keeps the correct value instead of being darkened
+        // toward zero by the rejected taps.
+        float inv = 1.0 / weightSum;
+        histColor *= inv;
+        histMoments *= inv;
+        // The frame count deliberately keeps the UNNORMALIZED weighted sum. Partial acceptance means
+        // the pixel is partially disoccluded, and the surviving fraction is exactly how much history
+        // it really has: at full acceptance the bilinear weights sum to 1 and this is the plain
+        // average, while at 40% acceptance the effective history is 40% as long, so the blend below
+        // leans on the fresh sample by the same proportion.
+    } else {
+        histColor = cur;
+        histMoments = vec2(lum, lum * lum);
+        histFrames = 0.0;
+    }
+
+    // ---- Accumulate. 1/n up to the window cap converges the Monte-Carlo estimate as fast as an
+    // unbiased running mean can, then holds a fixed exponential window so slow lighting changes are
+    // still tracked. No motion-scaled alpha: motion is handled by REJECTING history that does not
+    // reproject (above), not by discarding history that does.
+    float frames = min(histFrames + 1.0, max(pc.maxFrames, 1.0));
+    float alpha = 1.0 / frames;
+
+    vec3 accum = mix(histColor, cur, alpha);
+    vec2 moments = mix(histMoments, vec2(lum, lum * lum), alpha);
+
+    // ---- Variance for the spatial pass.
+    float variance;
+    if (frames >= SPATIAL_VARIANCE_FRAMES) {
+        // Temporal estimate: the honest per-pixel measure of "how much is this pixel still moving".
+        variance = max(moments.y - moments.x * moments.x, 0.0);
+    } else {
+        // Too little history to measure anything (fresh disocclusion): estimate the noise level
+        // spatially over a 7x7 window of THIS frame instead, so freshly revealed geometry is filtered
+        // hard immediately instead of showing a frame or two of raw noise.
+        float sum = 0.0;
+        float sumSq = 0.0;
+        float count = 0.0;
+        for (int dy = -SPATIAL_VARIANCE_RADIUS; dy <= SPATIAL_VARIANCE_RADIUS; dy++) {
+            for (int dx = -SPATIAL_VARIANCE_RADIUS; dx <= SPATIAL_VARIANCE_RADIUS; dx++) {
+                float l = dot(loadCurrent(pix + ivec2(dx, dy)), LUMA);
+                sum += l;
+                sumSq += l * l;
+                count += 1.0;
+            }
+        }
+        float mean = sum / count;
+        float spatial = max(sumSq / count - mean * mean, 0.0);
+        // Boost while the history is short: the spatial estimate underestimates the true variance of
+        // a 1-spp signal, and under-filtering a disocclusion is the visible failure.
+        variance = spatial * (SPATIAL_VARIANCE_FRAMES / max(frames, 1.0));
+    }
+
+    // histOut is the fallback history for the next frame; the à-trous pass overwrites it with its
+    // first iteration's (cleaner) result, which is why the frame count does not live in its alpha.
+    imageStore(histOut, pix, vec4(accum, 1.0));
+    imageStore(momentsOut, pix, vec4(moments, frames, 0.0));
+    imageStore(filterOut, pix, vec4(accum, variance));
+}
