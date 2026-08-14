@@ -151,9 +151,11 @@ final class RtDenoiserShaderRegressionTest {
      * Bobbing off, and flying (no bob) never flickered. Raising the threshold cannot fix it
      * because bob dwarfs a real FOV step.
      *
-     * <p>Testing only the focal entries separates them: bob leaks 0.0074 into m00/m11 via its
-     * roll and pitch, a 1 degree FOV step moves them 0.0262. Pin the focal-only comparison so a
-     * future edit cannot quietly go back to comparing the whole matrix.
+     * <p>Reading m00/m11 directly is not enough either: a walking bob leaks only 0.0074 into them
+     * but a SPRINTING bob leaks 0.017-0.066, overlapping a real 1 degree FOV step at 0.0262, which
+     * is the flicker that survived while running. The row norms of the upper 3x3 are the fix -- bob
+     * appends an orthogonal factor, which provably cannot change a row norm, so they are invariant
+     * at every amplitude while FOV still scales them one for one.
      */
     @Test
     void projectionResetKeysOnFovNotOnViewBobbing() throws IOException {
@@ -162,13 +164,12 @@ final class RtDenoiserShaderRegressionTest {
 
         assertFalse(composite.contains("for (int i = 0; i < 16 && !projectionChanged; i++)"),
                 "comparing the whole matrix reads view bobbing as an FOV change");
-        assertTrue(composite.contains("FOCAL_EPSILON = 0.015f"),
-                "the threshold must sit between bob's 0.0074 leak and a real FOV step's 0.0262");
-        assertTrue(composite.contains("Math.abs(prevProjection[0] - curProjection[0])")
-                        && composite.contains("Math.abs(prevProjection[5] - curProjection[5])"),
-                "only m00 and m11 encode the FOV; JOML get() is column-major so those are 0 and 5");
-        assertTrue(composite.contains("projectionChanged = focalDelta > FOCAL_EPSILON;"),
-                "the reset must be driven by the focal delta alone");
+        assertFalse(composite.contains("Math.abs(prevProjection[0] - curProjection[0])"),
+                "reading m00/m11 directly is not bob-proof: a sprint bob leaks up to 0.066 into them");
+        assertTrue(composite.contains("private static float rowNorm3(float[] m, int row)"),
+                "the focal scale must be measured as a row norm, which a rotation cannot change");
+        assertTrue(composite.contains("projectionChanged = focalScaleDelta(prevProjection, curProjection) > FOCAL_EPSILON;"),
+                "the reset must be driven by the bob-invariant focal scale");
     }
 
     /**

@@ -67,11 +67,18 @@ public final class RtNrdDenoiser {
     public static final RtNrdDenoiser INSTANCE = new RtNrdDenoiser();
 
     /**
-     * Whether REBLUR should run: the player's toggle plus a bundled runtime for this platform. The
-     * UI hides the row entirely where no runtime exists, so this can never be true without natives.
+     * Whether REBLUR should run. Always false: the integration is retired.
+     *
+     * <p>REBLUR keeps its temporal history inside the library, so the reprojection fixes that made
+     * the built-in SVGF path stable could not reach it, and it stayed blobby and noisy in exactly
+     * the conditions SVGF now handles. The toggle is gone from the options screen and this gate
+     * keeps a hand-edited config from bringing it back.
+     *
+     * <p>The code and the CMake shim stay in the tree because CI builds them, and because the
+     * per-lobe demodulated signals it consumes are still produced for DLSS-RR.
      */
     public static boolean enabled() {
-        return CausticaConfig.Rt.Nrd.ENABLED.value() && NrdRuntime.platformSupported();
+        return false;
     }
 
     /**

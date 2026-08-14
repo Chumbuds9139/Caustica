@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
-import dev.comfyfluffy.caustica.nrd.NrdRuntime;
 import dev.comfyfluffy.caustica.compat.VoxyCompat;
 import dev.comfyfluffy.caustica.rt.terrain.RtDistantHorizonsTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
@@ -109,22 +108,12 @@ public final class RtVideoOptions {
         // Denoiser rows, for every path except DLSS (Ray Reconstruction denoises internally, so it
         // owns the slot and neither row would do anything).
         //
-        // Two denoisers, mutually exclusive: the built-in SVGF and NVIDIA's REBLUR. The NRD toggle
-        // appears only where its natives are bundled, and turning it on hands REBLUR the denoise
-        // slot — so the built-in row is hidden while it is active rather than offering a
-        // combination that cannot run (two temporal filters in series fight over one history).
+        // The built-in SVGF is the only denoiser offered. REBLUR is no longer exposed: it kept its
+        // own temporal history inside the library, so the reprojection fixes that cleaned up the
+        // built-in path could not reach it, and it stayed blobby where SVGF is now stable. The
+        // integration is left in the tree (the CI still builds the shim) but nothing turns it on.
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
-            boolean nrdAvailable = NrdRuntime.platformSupported();
-            boolean nrdActive = nrdAvailable && CausticaConfig.Rt.Nrd.ENABLED.value();
-            if (!nrdActive) {
-                options.add(svgfDenoiser());
-            }
-            if (nrdAvailable) {
-                options.add(nrdDenoiser(upscalerChanged));
-                if (nrdActive) {
-                    options.add(nrdValidation());
-                }
-            }
+            options.add(svgfDenoiser());
         }
         options.add(omm());
         return options.toArray(OptionInstance<?>[]::new);
@@ -605,28 +594,6 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> svgfDenoiser() {
         return bool("caustica.options.rt.denoise", CausticaConfig.Rt.Denoise.ENABLED);
-    }
-
-    /**
-     * NRD (REBLUR) denoiser toggle. Flipping it swaps which denoiser owns the slot, so the screen
-     * is rebuilt afterwards: the built-in denoiser's row disappears while REBLUR is active and its
-     * validation-overlay row appears. The renderer side is live — {@code ensureOutput} re-keys on
-     * the toggle and allocates/releases the NRD targets — so no restart is needed.
-     */
-    private static OptionInstance<Boolean> nrdDenoiser(Runnable onChanged) {
-        return OptionInstance.createBoolean(
-            "caustica.options.rt.nrd",
-            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.nrd.tooltip")),
-            CausticaConfig.Rt.Nrd.ENABLED.value(),
-            value -> {
-                CausticaConfig.Rt.Nrd.ENABLED.set(value);
-                onChanged.run();
-            });
-    }
-
-    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
-    private static OptionInstance<Boolean> nrdValidation() {
-        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
     }
 
     /**

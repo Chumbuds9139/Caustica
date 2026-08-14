@@ -529,15 +529,40 @@ public final class RtComposite {
     private final float[] curProjection = new float[16];
     private boolean prevProjectionValid;
     /**
-     * How much the projection's focal entries (m00, m11) must move before the temporal history is
-     * discarded as a genuine FOV change.
+     * How much the projection's focal scale must move before the temporal history is discarded as
+     * a genuine FOV change.
      *
-     * <p>Chosen from the two magnitudes it has to separate: a full-amplitude view bob leaks 0.0074
-     * into these entries through its roll and pitch, and a 1 degree FOV step -- the smallest real
-     * one vanilla produces while easing toward a sprint -- moves them 0.0262. This sits at twice
-     * the bob leak and well under the real signal.
+     * <p>The quantity compared is bob-invariant (see {@link #focalScaleDelta}), so this only has
+     * to sit below the smallest real FOV step vanilla produces while easing toward a sprint: one
+     * degree, which moves the focal scale by 0.0262. Half of that keeps a comfortable margin while
+     * still ignoring pure floating-point noise.
      */
-    private static final float FOCAL_EPSILON = 0.015f;
+    private static final float FOCAL_EPSILON = 0.013f;
+
+    /**
+     * How much the projection's focal scale changed between two frames, immune to view bobbing.
+     *
+     * <p>The captured matrix is projection * view and bob appends an orthogonal factor (roll plus
+     * pitch) on the right. Right-multiplying by an orthogonal matrix preserves the row norms of
+     * the upper 3x3, so those norms depend on the FOV and the aspect ratio but not on bob, at any
+     * amplitude. Comparing raw m00/m11 instead fails while sprinting, where the larger bob leaks
+     * up to 0.066 into them and overlaps a real FOV step.
+     *
+     * <p>JOML's {@code get(float[])} is column-major, so element (row, col) lives at col * 4 + row.
+     */
+    private static float focalScaleDelta(float[] prev, float[] cur) {
+        float dx = rowNorm3(cur, 0) - rowNorm3(prev, 0);
+        float dy = rowNorm3(cur, 1) - rowNorm3(prev, 1);
+        return Math.max(Math.abs(dx), Math.abs(dy));
+    }
+
+    /** Euclidean norm of one row of the matrix's upper 3x3 block. */
+    private static float rowNorm3(float[] m, int row) {
+        float a = m[row];
+        float b = m[4 + row];
+        float c = m[8 + row];
+        return (float) Math.sqrt(a * a + b * b + c * c);
+    }
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -1655,19 +1680,24 @@ public final class RtComposite {
             // Raising the threshold cannot separate them, because bob is far larger than a real
             // FOV step; that is why the earlier 4.0e-3 attempt changed nothing.
             //
-            // Key the test on the focal scale instead. m00 = f/aspect and m11 = f with
-            // f = 1/tan(fov/2), so FOV is exactly what those two entries encode, while bob's
-            // translation lands in other entries. Bob's rotation does leak in a little, but the
-            // magnitudes separate cleanly: a full-amplitude bob perturbs the focal entries by
-            // 0.0074, while a 1 degree FOV step moves them by 0.0262. The threshold sits between.
+            // Key the test on the focal scale instead, measured in a way bob cannot disturb at all.
+            //
+            // Reading m00/m11 directly is not enough: bob's roll and pitch leak into them, and
+            // while a walking bob only leaks 0.0074, SPRINTING has a larger amplitude and leaks
+            // 0.017-0.066 -- past any threshold that still catches a real 1 degree FOV step
+            // (0.0262). The two ranges overlap, so no fixed cut on those entries can work. That is
+            // the flicker that survived while running.
+            //
+            // Use the row norms of the upper 3x3 instead. The captured matrix is projection * view,
+            // and bob contributes an ORTHOGONAL factor (a roll and a pitch) on the right, which
+            // provably preserves row norms -- so the norms are invariant to bob at every
+            // amplitude, exactly 0.000000000 of movement, not merely small. FOV still scales them
+            // one for one: 70 to 71 degrees moves them 0.0262. The separation is exact rather than
+            // statistical.
             frameProjection.get(curProjection);
             boolean projectionChanged = !prevProjectionValid;
             if (prevProjectionValid) {
-                // JOML column-major: index 0 = m00, index 5 = m11.
-                float focalDelta = Math.max(
-                        Math.abs(prevProjection[0] - curProjection[0]),
-                        Math.abs(prevProjection[5] - curProjection[5]));
-                projectionChanged = focalDelta > FOCAL_EPSILON;
+                projectionChanged = focalScaleDelta(prevProjection, curProjection) > FOCAL_EPSILON;
             }
             frameProjection.get(prevProjection);
             prevProjectionValid = true;
