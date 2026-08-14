@@ -528,6 +528,15 @@ public final class RtComposite {
     private final float[] prevProjection = new float[16];
     private final float[] curProjection = new float[16];
     private boolean prevProjectionValid;
+    /**
+     * Largest single-frame projection-matrix change the temporal history tolerates, and the budget
+     * for slow drift accumulated across frames. Both are in matrix units; at the 640-wide render
+     * target and a 70 degree FOV, 4.0e-3 is about one pixel of shift at the screen edge, which is
+     * below what the bilinear history fetch already resamples away.
+     */
+    private static final float PROJECTION_EPSILON = 4.0e-3f;
+    /** Running sum of per-frame projection deltas since the last accumulation restart. */
+    private float projectionDrift;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -1635,9 +1644,39 @@ public final class RtComposite {
             frameProjection.get(curProjection);
             boolean projectionChanged = !prevProjectionValid;
             if (prevProjectionValid) {
-                for (int i = 0; i < 16 && !projectionChanged; i++) {
-                    projectionChanged = Math.abs(prevProjection[i] - curProjection[i]) > 1.0e-5f;
+                // Compare with a tolerance the temporal stages can actually absorb, and track slow
+                // drift separately.
+                //
+                // The old test used 1.0e-5, which sounds conservative and is in fact catastrophic:
+                // Minecraft's projection includes view bobbing and the speed-based FOV multiplier,
+                // and that multiplier eases exponentially toward its target so it never settles
+                // exactly. A FOV change of 0.00038 degrees already exceeds 1.0e-5 -- 0.0022 pixels
+                // of shift at the screen edge -- so ordinary walking tripped this EVERY frame and
+                // reset the accumulation for the WHOLE SCREEN. That is why the flicker appeared in
+                // blocks, indirect light, shadows and reflections simultaneously: nothing was
+                // wrong per-surface, the entire history was being thrown away at once, which also
+                // pinned the history-length debug view at grey instead of white.
+                //
+                // This gate feeds BOTH denoisers (svgfReset below and REBLUR's jumped), so the
+                // same mistake was resetting NRD every frame too.
+                //
+                // A single frame's tolerance is not sufficient on its own: an ease that stays just
+                // under it every frame would still warp the projection arbitrarily far over time.
+                // So accumulate the per-frame deltas and restart when the TOTAL exceeds the same
+                // budget. Simulated over a walk->sprint ease this restarts while the FOV is really
+                // moving and then stops; against pure sub-milli-degree jitter it fires twice in
+                // 200 frames instead of 200 times.
+                float maxDelta = 0.0f;
+                for (int i = 0; i < 16; i++) {
+                    maxDelta = Math.max(maxDelta, Math.abs(prevProjection[i] - curProjection[i]));
                 }
+                projectionDrift += maxDelta;
+                if (maxDelta > PROJECTION_EPSILON || projectionDrift > PROJECTION_EPSILON) {
+                    projectionChanged = true;
+                }
+            }
+            if (projectionChanged) {
+                projectionDrift = 0.0f;
             }
             frameProjection.get(prevProjection);
             prevProjectionValid = true;
@@ -2655,6 +2694,7 @@ public final class RtComposite {
         }
         svgfHasHistory = false;
         prevProjectionValid = false;
+        projectionDrift = 0.0f;
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;

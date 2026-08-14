@@ -141,6 +141,34 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
+     * The projection-change test gates BOTH temporal denoisers (SVGF's svgfReset and REBLUR's
+     * jumped), so its tolerance decides whether either can accumulate at all while the player
+     * moves. Minecraft's projection includes view bobbing and the speed-based FOV multiplier,
+     * which eases exponentially and never settles exactly, so an over-strict epsilon resets the
+     * whole screen every frame.
+     *
+     * <p>The original 1.0e-5 tripped on a FOV change of 0.00038 degrees -- 0.0022 pixels of shift
+     * at the screen edge. That produced flicker in blocks, indirect light, shadows and reflections
+     * simultaneously (a global reset, not a per-surface bug) and pinned the history-length debug
+     * view at grey. Pin the relaxed epsilon and the drift accumulator: a per-frame threshold alone
+     * would let a slow ease creep arbitrarily far without ever tripping.
+     */
+    @Test
+    void projectionResetIgnoresFovBreathingButCatchesRealChanges() throws IOException {
+        String composite = Files.readString(
+                REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
+
+        assertFalse(composite.contains("> 1.0e-5f"),
+                "the projection epsilon must not be tight enough to trip on FOV breathing");
+        assertTrue(composite.contains("PROJECTION_EPSILON = 4.0e-3f"),
+                "the epsilon must be scaled to about one pixel of edge shift");
+        assertTrue(composite.contains("projectionDrift += maxDelta;"),
+                "slow drift must accumulate; a per-frame threshold alone can be crept past");
+        assertTrue(composite.contains("maxDelta > PROJECTION_EPSILON || projectionDrift > PROJECTION_EPSILON"),
+                "both the per-frame jump and the accumulated drift must be able to restart history");
+    }
+
+    /**
      * camForwardDelta only compensates TRANSLATION. View depth is the projection onto the view
      * axis, so rotating the camera changes a static surface's depth with nothing having moved --
      * at 4 deg/frame a surface 40 degrees off-axis shifts by 6%, past the 5% tolerance, and the
