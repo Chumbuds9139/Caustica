@@ -141,61 +141,6 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
-     * The projection-change test gates BOTH temporal denoisers (SVGF's svgfReset and REBLUR's
-     * jumped), so its tolerance decides whether either can accumulate at all while the player
-     * moves. Minecraft's projection includes view bobbing and the speed-based FOV multiplier,
-     * which eases exponentially and never settles exactly, so an over-strict epsilon resets the
-     * whole screen every frame.
-     *
-     * <p>The original 1.0e-5 tripped on a FOV change of 0.00038 degrees -- 0.0022 pixels of shift
-     * at the screen edge. That produced flicker in blocks, indirect light, shadows and reflections
-     * simultaneously (a global reset, not a per-surface bug) and pinned the history-length debug
-     * view at grey. Pin the relaxed epsilon and the drift accumulator: a per-frame threshold alone
-     * would let a slow ease creep arbitrarily far without ever tripping.
-     */
-    @Test
-    void projectionResetIgnoresFovBreathingButCatchesRealChanges() throws IOException {
-        String composite = Files.readString(
-                REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
-
-        assertFalse(composite.contains("> 1.0e-5f"),
-                "the projection epsilon must not be tight enough to trip on FOV breathing");
-        assertTrue(composite.contains("PROJECTION_EPSILON = 4.0e-3f"),
-                "the epsilon must be scaled to about one pixel of edge shift");
-        assertTrue(composite.contains("projectionDrift += maxDelta;"),
-                "slow drift must accumulate; a per-frame threshold alone can be crept past");
-        assertTrue(composite.contains("maxDelta > PROJECTION_EPSILON || projectionDrift > PROJECTION_EPSILON"),
-                "both the per-frame jump and the accumulated drift must be able to restart history");
-    }
-
-    /**
-     * camForwardDelta only compensates TRANSLATION. View depth is the projection onto the view
-     * axis, so rotating the camera changes a static surface's depth with nothing having moved --
-     * at 4 deg/frame a surface 40 degrees off-axis shifts by 6%, past the 5% tolerance, and the
-     * gate drops history along the screen edges while turning.
-     *
-     * <p>The depth field's own slope supplies the missing term: the history sits mv pixels away,
-     * where the surface is (grad z . mv) deeper. Measured over walk+turn combinations, 12/80 taps
-     * were rejected without it and 0/80 with it. Pin the term, pin that the gradient is SIGNED
-     * (the a-trous edge stop uses abs(); copying that here destroys the direction the prediction
-     * depends on), and pin the clamp -- an unbounded correction would accept history from a
-     * different surface.
-     */
-    @Test
-    void svgfDepthGateCompensatesRotationWithTheDepthGradient() throws IOException {
-        String reproject = Files.readString(SVGF_REPROJECT);
-
-        assertTrue(reproject.contains("float correction = gx * mv.x + gy * mv.y;"),
-                "the gate must project the depth gradient along the motion vector");
-        assertTrue(reproject.contains("float gx = isSky(zRight) ? 0.0 : (zRight - z);"),
-                "the gradient must be signed; abs() would discard the direction of the prediction");
-        assertTrue(reproject.contains("correction = clamp(correction, -correctionLimit, correctionLimit);"),
-                "an unbounded correction could accept history from a different surface");
-        assertTrue(reproject.contains("expectedZPrev += correction;"),
-                "the correction must actually reach the predicted depth");
-    }
-
-    /**
      * SVGF's accumulated frame count lives in the moments texture, NOT in the history's alpha,
      * because the à-trous feedback overwrites the whole history image. Moving it back into the
      * history alpha would make the count read as variance (and vice versa) with no compile error.

@@ -206,40 +206,7 @@ void main() {
     // A static surface seen at view depth z now was at z + camForwardDelta last frame (the camera
     // moved camForwardDelta towards it). Predicting this is what lets the depth gate stay tight
     // enough to catch real disocclusion while ignoring the camera's own motion.
-    // camForwardDelta only covers TRANSLATION. View depth is the projection onto the view AXIS, so
-    // rotating the camera changes a static surface's depth even though nothing moved: turning at
-    // 4 deg/frame, a surface 40 degrees off-axis shifts depth by 6% -- past the 5% tolerance -- and
-    // the gate drops the history along the screen edges, which is most of the screen when turning.
-    //
-    // Correct it with the depth field's own slope. The history is fetched from prevPos, mv pixels
-    // away, where the surface is (grad z . mv) deeper to first order. Measured over walk+turn
-    // combinations (0-6 deg/frame, 0-40 degrees off-axis, 2-16 blocks): 12/80 taps rejected with
-    // camForwardDelta alone, 0/80 with this term.
-    //
-    // SIGNED differences, unlike the a-trous edge stop's abs(): this predicts WHICH WAY the depth
-    // goes, so the direction is the whole point.
     float expectedZPrev = z + pc.camForwardDelta;
-    if (!sky) {
-        ivec2 hi = ivec2(pc.width - 1, pc.height - 1);
-        float zRight = imageLoad(viewZ, clamp(pix + ivec2(1, 0), ivec2(0), hi)).r;
-        float zDown  = imageLoad(viewZ, clamp(pix + ivec2(0, 1), ivec2(0), hi)).r;
-        float gx = isSky(zRight) ? 0.0 : (zRight - z);
-        float gy = isSky(zDown)  ? 0.0 : (zDown  - z);
-        // A neighbour across a depth step is not the same plane, so its difference is not a
-        // gradient: drop it rather than extrapolating a silhouette edge across the screen.
-        float slopeLimit = DEPTH_TOLERANCE * max(z, 1.0);
-        if (abs(gx) > slopeLimit) { gx = 0.0; }
-        if (abs(gy) > slopeLimit) { gy = 0.0; }
-        float correction = gx * mv.x + gy * mv.y;
-        // Bound the correction so a bad gradient cannot open the gate onto a different surface.
-        // One tolerance, chosen by measurement: 0.5x still rejected 4/80 taps because the needed
-        // correction reaches 1.9x tolerance at the screen edge, while 1.5x widens the gate to
-        // exactly a one-block silhouette step at 8 blocks depth. 1.0x rejects 0/80 and still
-        // rejects that step (0.80 blocks of gate against a 1.00 block jump).
-        float correctionLimit = slopeLimit;
-        correction = clamp(correction, -correctionLimit, correctionLimit);
-        expectedZPrev += correction;
-    }
 
     vec3 histColor = vec3(0.0);
     vec2 histMoments = vec2(0.0);
