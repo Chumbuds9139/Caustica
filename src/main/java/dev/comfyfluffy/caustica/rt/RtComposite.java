@@ -528,6 +528,16 @@ public final class RtComposite {
     private final float[] prevProjection = new float[16];
     private final float[] curProjection = new float[16];
     private boolean prevProjectionValid;
+    /**
+     * How much the projection's focal entries (m00, m11) must move before the temporal history is
+     * discarded as a genuine FOV change.
+     *
+     * <p>Chosen from the two magnitudes it has to separate: a full-amplitude view bob leaks 0.0074
+     * into these entries through its roll and pitch, and a 1 degree FOV step -- the smallest real
+     * one vanilla produces while easing toward a sprint -- moves them 0.0262. This sits at twice
+     * the bob leak and well under the real signal.
+     */
+    private static final float FOCAL_EPSILON = 0.015f;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -1630,14 +1640,34 @@ public final class RtComposite {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to the temporal/upscale reads
-            // FOV changes (sprint/fly) warp the reprojection space the temporal stages live in;
-            // detected from the projection matrix itself and used to restart accumulation.
+            // FOV changes (sprint/fly) warp the reprojection space the temporal stages live in and
+            // must restart accumulation. Camera MOTION must not: the reprojection already follows
+            // it through prevViewProj and the motion vectors.
+            //
+            // Comparing the whole matrix conflated the two. Minecraft's captured projection has
+            // view bobbing baked in (see GameRendererMixin), which is a translate plus a roll and
+            // pitch of a few degrees, and that moves matrix entries by up to ~0.51 -- five orders
+            // of magnitude past the old 1.0e-5. So every walking frame was read as an FOV change
+            // and the ENTIRE screen's history was discarded, for both SVGF and REBLUR (they share
+            // this flag). Confirmed in game: the flicker disappears with View Bobbing off, and
+            // flying -- which has no bob -- never flickered at any speed.
+            //
+            // Raising the threshold cannot separate them, because bob is far larger than a real
+            // FOV step; that is why the earlier 4.0e-3 attempt changed nothing.
+            //
+            // Key the test on the focal scale instead. m00 = f/aspect and m11 = f with
+            // f = 1/tan(fov/2), so FOV is exactly what those two entries encode, while bob's
+            // translation lands in other entries. Bob's rotation does leak in a little, but the
+            // magnitudes separate cleanly: a full-amplitude bob perturbs the focal entries by
+            // 0.0074, while a 1 degree FOV step moves them by 0.0262. The threshold sits between.
             frameProjection.get(curProjection);
             boolean projectionChanged = !prevProjectionValid;
             if (prevProjectionValid) {
-                for (int i = 0; i < 16 && !projectionChanged; i++) {
-                    projectionChanged = Math.abs(prevProjection[i] - curProjection[i]) > 1.0e-5f;
-                }
+                // JOML column-major: index 0 = m00, index 5 = m11.
+                float focalDelta = Math.max(
+                        Math.abs(prevProjection[0] - curProjection[0]),
+                        Math.abs(prevProjection[5] - curProjection[5]));
+                projectionChanged = focalDelta > FOCAL_EPSILON;
             }
             frameProjection.get(prevProjection);
             prevProjectionValid = true;

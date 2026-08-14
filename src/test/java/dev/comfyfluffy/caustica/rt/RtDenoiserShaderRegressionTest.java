@@ -141,6 +141,37 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
+     * The projection-change test restarts BOTH temporal denoisers, so it must fire on FOV changes
+     * and never on camera motion -- the reprojection already follows motion through prevViewProj
+     * and the motion vectors.
+     *
+     * <p>Minecraft's captured projection has view bobbing baked in, and bob moves whole-matrix
+     * entries by up to 0.51, so any whole-matrix comparison reads every walking frame as an FOV
+     * change and resets the entire screen. Confirmed in game: the flicker disappears with View
+     * Bobbing off, and flying (no bob) never flickered. Raising the threshold cannot fix it
+     * because bob dwarfs a real FOV step.
+     *
+     * <p>Testing only the focal entries separates them: bob leaks 0.0074 into m00/m11 via its
+     * roll and pitch, a 1 degree FOV step moves them 0.0262. Pin the focal-only comparison so a
+     * future edit cannot quietly go back to comparing the whole matrix.
+     */
+    @Test
+    void projectionResetKeysOnFovNotOnViewBobbing() throws IOException {
+        String composite = Files.readString(
+                REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
+
+        assertFalse(composite.contains("for (int i = 0; i < 16 && !projectionChanged; i++)"),
+                "comparing the whole matrix reads view bobbing as an FOV change");
+        assertTrue(composite.contains("FOCAL_EPSILON = 0.015f"),
+                "the threshold must sit between bob's 0.0074 leak and a real FOV step's 0.0262");
+        assertTrue(composite.contains("Math.abs(prevProjection[0] - curProjection[0])")
+                        && composite.contains("Math.abs(prevProjection[5] - curProjection[5])"),
+                "only m00 and m11 encode the FOV; JOML get() is column-major so those are 0 and 5");
+        assertTrue(composite.contains("projectionChanged = focalDelta > FOCAL_EPSILON;"),
+                "the reset must be driven by the focal delta alone");
+    }
+
+    /**
      * SVGF's accumulated frame count lives in the moments texture, NOT in the history's alpha,
      * because the à-trous feedback overwrites the whole history image. Moving it back into the
      * history alpha would make the count read as variance (and vice versa) with no compile error.
