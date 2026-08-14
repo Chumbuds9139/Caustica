@@ -116,6 +116,31 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
+     * The SVGF depth gate predicts what a static surface's PREVIOUS view depth should have been by
+     * adding the camera's forward travel to the current depth. Row 2 of the rotation-only view
+     * matrix is view-space +Z, and view space looks down -Z (the tracer treats curClip.w = -z_view
+     * as a positive forward-growing depth), so that dot product is BACKWARD travel and has to be
+     * negated.
+     *
+     * <p>Getting this sign wrong does not soften the gate, it inverts the correction: the error
+     * becomes twice the per-frame travel instead of zero, and every surface within ~4.8 blocks
+     * fails the gate on every frame while walking. The whole history collapses to a single sample
+     * in motion -- confirmed in-game with debug view 10, which showed white standing still and
+     * black while moving. Pin the negation; it is one character and it is invisible in review.
+     */
+    @Test
+    void svgfDepthGateUsesForwardNotBackwardCameraTravel() throws IOException {
+        String composite = Files.readString(
+                REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
+
+        assertTrue(composite.contains("svgfCamForwardDelta = (float) -((camX - svgfPrevCamX) * fx"),
+                "the camera's forward travel must negate the dot with view row 2, which points backward");
+        String reproject = Files.readString(SVGF_REPROJECT);
+        assertTrue(reproject.contains("float expectedZPrev = z + pc.camForwardDelta;"),
+                "the gate must compare against the predicted previous depth, not the current one");
+    }
+
+    /**
      * SVGF's accumulated frame count lives in the moments texture, NOT in the history's alpha,
      * because the à-trous feedback overwrites the whole history image. Moving it back into the
      * history alpha would make the count read as variance (and vice versa) with no compile error.

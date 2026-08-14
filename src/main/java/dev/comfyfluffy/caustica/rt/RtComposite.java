@@ -1721,11 +1721,25 @@ public final class RtComposite {
                 // ~2.5 blocks), which is both the noise and the blur reported while moving.
                 float svgfCamForwardDelta = 0.0f;
                 if (svgfHasHistory && !svgfReset) {
-                    // Row 2 of the rotation-only view matrix is the camera's forward axis.
+                    // Row 2 of the rotation-only view matrix is the view-space +Z axis, and view
+                    // space looks down -Z -- the tracer relies on exactly that when it treats
+                    // curClip.w (= -z_view) as a positive depth growing forward. So row 2 is the
+                    // BACKWARD axis and the dot product below must be negated to get the camera's
+                    // forward travel.
+                    //
+                    // Without the negation the term did not cancel the camera's motion, it DOUBLED
+                    // it: the predicted previous depth moved one step the wrong way, leaving an
+                    // error of 2x the per-frame travel. At 4.3 blocks/s and 36 fps that is 0.239
+                    // blocks against a 5% tolerance, so every surface closer than ~4.8 blocks
+                    // failed the depth gate on EVERY frame while walking, and the history was
+                    // rebuilt from a single sample each frame. Measured with debug view 10:
+                    // white (converged) standing still, black (no history) the moment the camera
+                    // moved. Negated, the prediction is exact -- the residual is 0.0000 blocks at
+                    // every distance and every off-axis angle.
                     double fx = frameViewRotation.m02();
                     double fy = frameViewRotation.m12();
                     double fz = frameViewRotation.m22();
-                    svgfCamForwardDelta = (float) ((camX - svgfPrevCamX) * fx
+                    svgfCamForwardDelta = (float) -((camX - svgfPrevCamX) * fx
                             + (camY - svgfPrevCamY) * fy
                             + (camZ - svgfPrevCamZ) * fz);
                     if (!Float.isFinite(svgfCamForwardDelta)) {
