@@ -95,6 +95,13 @@ public final class RtWeatherCapture {
     private static final float RAIN_ONSET = 0.18f;
 
     /**
+     * Smallest column alpha worth emitting: one step of the 8-bit alpha channel {@link ARGB#white} packs
+     * the fade into. Below this the coverage byte rounds to zero, so the sheet is invisible no matter
+     * what the shader does with it — building and tracing it is pure cost.
+     */
+    private static final float MIN_VISIBLE_ALPHA = 1.0f / 255.0f;
+
+    /**
      * Vanilla's per-column billboard orientation table. Each (x, z) offset around the camera gets a fixed
      * horizontal facing, so neighbouring columns fan out instead of all facing the same way — this is what
      * stops the rain from looking like one flat wall. Copied from {@code WeatherEffectRenderer}'s
@@ -292,7 +299,15 @@ public final class RtWeatherCapture {
             float relativeZ = (float) (column.z() + 0.5 - camPos.z);
             float distanceSq = (float) Mth.lengthSquared(relativeX, relativeZ);
             float alpha = Mth.lerp(Math.min(distanceSq / radiusSq, 1.0f), maxAlpha, 0.5f) * intensity;
-            if (alpha <= 0.0f) {
+            // Drop columns the 8-bit colour channel cannot represent. The capture's coverage lane is fed
+            // from an ARGB byte, so anything under one full step quantises to alpha 0 — geometry that is
+            // built, budgeted and traced only to be discarded by every ray that touches it. Skipping it
+            // here keeps the particle budget for sheets that are actually visible.
+            //
+            // The comparison is against the channel step rather than plain > 0 on purpose: the ramp
+            // spends its first moments in exactly this sub-representable range, so `alpha > 0` admitted
+            // a whole storm's worth of columns whose coverage byte was zero.
+            if (alpha < MIN_VISIBLE_ALPHA) {
                 continue;
             }
             // Vanilla's per-column alpha is a raster blend weight. The RT particle path has no blend
@@ -301,6 +316,12 @@ public final class RtWeatherCapture {
             // with the sheet texel's own alpha. Fading by *coverage* is what a blend weight actually
             // means — fewer drop samples survive with distance — so the far columns thin out instead of
             // changing colour.
+            //
+            // That thinning only works because world.rahit dithers weather coverage instead of
+            // thresholding it (see the PRIM_WEATHER branch there). Under a fixed cutout the multiplier
+            // is all-or-nothing per texel: an opaque drop core draws at full strength until the fade
+            // finally crosses the cutoff and the whole sheet pops out together, which is what made both
+            // the distance falloff and the rain-density option look like they did nothing.
             //
             // The RGB stays WHITE on purpose. An earlier version also scaled RGB by the same factor to
             // reproduce the fade, but tint is not opacity: world.rchit multiplies it straight into the

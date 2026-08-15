@@ -207,6 +207,79 @@ final class RtWeatherCaptureTest {
     }
 
     /**
+     * For particles and weather, zero coverage must mean invisible — not opaque.
+     *
+     * <p>{@code world.rahit} used to read the aux0 coverage lane as {@code aux0 == 0 ? 1.0 : aux0} for
+     * every kind of geometry. That is right for model geometry, whose alpha byte comes from a vertex
+     * colour some submit paths use 0 in as a "no tint" sentinel, but wrong for particles and weather,
+     * whose alpha is vanilla's own blend weight and genuinely means transparency.
+     *
+     * <p>For rain the shared reading inverted the storm's own ramp. Coverage is {@code columnAlpha *
+     * visualIntensity * rainDensity}, so as weather starts the multiplier passes through the
+     * sub-representable range where the 8-bit lane rounds to zero; every column in it rendered at FULL
+     * opacity, blanking the screen with a wall of sheets for about a second before the ramp climbed
+     * clear of it — then again in reverse as the storm ended.
+     */
+    @Test
+    void zeroParticleCoverageIsTransparentRatherThanOpaque() throws IOException {
+        String rahit = Files.readString(anyHitShader());
+
+        assertTrue(rahit.contains("bool particleKind = instanceKind == PARTICLE_BIT;"),
+                "the coverage reading must distinguish particle/weather prims from model geometry");
+        assertTrue(rahit.contains("if (!particleKind && epr.aux0 == 0u)"),
+                "the zero-means-opaque sentinel must be confined to model geometry");
+        assertFalse(rahit.contains("float primCoverage = epr.aux0 == 0u ? 1.0"),
+                "reading a particle's zero coverage as opaque makes fading rain flash fully solid");
+    }
+
+    /**
+     * The rain-density option (and the distance fade) must actually thin the streaks.
+     *
+     * <p>Both are fractional coverage multipliers, which only means anything against a stochastic test.
+     * Under the fixed {@code ENTITY_ALPHA_CUTOFF} the fraction is all-or-nothing per texel: a drop core
+     * has texture alpha ~1, so at 15% density it still evaluated {@code 1.0 * 0.15 > 0.1} and drew
+     * exactly as it does in a full downpour — the reported "still shows up even configured to 15%" —
+     * until the multiplier finally crossed the cutoff and the whole sheet vanished at once.
+     */
+    @Test
+    void weatherCoverageIsDitheredSoDensityAndDistanceThinTheStreaks() throws IOException {
+        String rahit = Files.readString(anyHitShader());
+
+        assertTrue(rahit.contains("(epr.flags & PRIM_WEATHER) != 0u"),
+                "weather sheets must be recognised in the any-hit alpha path");
+        assertTrue(rahit.contains("stochasticAlpha = true;"),
+                "weather coverage must route through the stochastic dither, not the fixed cutout");
+
+        // The fraction must survive into the dither comparison as a multiplier on the texel alpha.
+        assertTrue(rahit.contains("alphaDitherThreshold(salt) >= clamp(texel.a * primCoverage, 0.0, 1.0)"),
+                "the dither must weigh the texel alpha by the primitive coverage");
+    }
+
+    /**
+     * A column whose alpha rounds to zero in the 8-bit colour channel must not be emitted at all.
+     *
+     * <p>{@code ARGB.white} packs the fade into a byte, so anything below one channel step becomes
+     * coverage 0 — geometry built, budgeted into the particle limit, uploaded and traced, only for every
+     * ray to discard it. The guard is written against the channel step rather than {@code > 0} because
+     * the intensity ramp spends its first moments inside exactly that sub-representable band.
+     */
+    @Test
+    void columnsBelowOneAlphaStepAreNotEmitted() throws IOException {
+        String src = Files.readString(source());
+
+        assertTrue(src.contains("MIN_VISIBLE_ALPHA = 1.0f / 255.0f"),
+                "the cull threshold must be one step of the 8-bit alpha channel the fade is packed into");
+        assertTrue(src.contains("alpha < MIN_VISIBLE_ALPHA"),
+                "columns quantising to zero coverage must be skipped before they reach the BLAS");
+        assertFalse(src.contains("if (alpha <= 0.0f) {"),
+                "a plain > 0 test still admits columns whose coverage byte rounds to zero");
+    }
+
+    private static Path anyHitShader() {
+        return repoRoot().resolve("shaders/world/world.rahit.slang");
+    }
+
+    /**
      * Weather rides the particle mesh, so it must stay inside the particle budget and must not be able
      * to starve the ParticleEngine billboards that share it.
      */
