@@ -525,44 +525,6 @@ public final class RtComposite {
     private RtImage nrdValidation;
     private RtNrdCombinePipeline nrdCombinePipeline;
     private boolean renderSizeNrdEnabled;
-    private final float[] prevProjection = new float[16];
-    private final float[] curProjection = new float[16];
-    private boolean prevProjectionValid;
-    /**
-     * How much the projection's focal scale must move before the temporal history is discarded as
-     * a genuine FOV change.
-     *
-     * <p>The quantity compared is bob-invariant (see {@link #focalScaleDelta}), so this only has
-     * to sit below the smallest real FOV step vanilla produces while easing toward a sprint: one
-     * degree, which moves the focal scale by 0.0262. Half of that keeps a comfortable margin while
-     * still ignoring pure floating-point noise.
-     */
-    private static final float FOCAL_EPSILON = 0.013f;
-
-    /**
-     * How much the projection's focal scale changed between two frames, immune to view bobbing.
-     *
-     * <p>The captured matrix is projection * view and bob appends an orthogonal factor (roll plus
-     * pitch) on the right. Right-multiplying by an orthogonal matrix preserves the row norms of
-     * the upper 3x3, so those norms depend on the FOV and the aspect ratio but not on bob, at any
-     * amplitude. Comparing raw m00/m11 instead fails while sprinting, where the larger bob leaks
-     * up to 0.066 into them and overlaps a real FOV step.
-     *
-     * <p>JOML's {@code get(float[])} is column-major, so element (row, col) lives at col * 4 + row.
-     */
-    private static float focalScaleDelta(float[] prev, float[] cur) {
-        float dx = rowNorm3(cur, 0) - rowNorm3(prev, 0);
-        float dy = rowNorm3(cur, 1) - rowNorm3(prev, 1);
-        return Math.max(Math.abs(dx), Math.abs(dy));
-    }
-
-    /** Euclidean norm of one row of the matrix's upper 3x3 block. */
-    private static float rowNorm3(float[] m, int row) {
-        float a = m[row];
-        float b = m[4 + row];
-        float c = m[8 + row];
-        return (float) Math.sqrt(a * a + b * b + c * c);
-    }
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
@@ -1665,42 +1627,25 @@ public final class RtComposite {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to the temporal/upscale reads
-            // FOV changes (sprint/fly) warp the reprojection space the temporal stages live in and
-            // must restart accumulation. Camera MOTION must not: the reprojection already follows
-            // it through prevViewProj and the motion vectors.
+            // A FOV change does NOT need to restart accumulation, so nothing here does.
             //
-            // Comparing the whole matrix conflated the two. Minecraft's captured projection has
-            // view bobbing baked in (see GameRendererMixin), which is a translate plus a roll and
-            // pitch of a few degrees, and that moves matrix entries by up to ~0.51 -- five orders
-            // of magnitude past the old 1.0e-5. So every walking frame was read as an FOV change
-            // and the ENTIRE screen's history was discarded, for both SVGF and REBLUR (they share
-            // this flag). Confirmed in game: the flicker disappears with View Bobbing off, and
-            // flying -- which has no bob -- never flickered at any speed.
+            // The history is fetched through the motion vectors, and the tracer builds those with
+            // prevViewProj -- the PREVIOUS frame's projection, carrying the previous frame's FOV.
+            // A zoom therefore appears in the motion vector as the on-screen displacement it
+            // actually is (a 1 degree step moves an edge pixel 5.9 px, a 7 degree step 38 px), the
+            // bilinear fetch follows it, and the geometry gate validates the result. There is no
+            // stale-projection error left for a reset to protect against.
             //
-            // Raising the threshold cannot separate them, because bob is far larger than a real
-            // FOV step; that is why the earlier 4.0e-3 attempt changed nothing.
+            // Resetting instead cost the whole screen at once: every pixel dropped from the
+            // 48-frame window (14% residual noise) to a single sample (100%), and vanilla eases
+            // the sprint FOV over about three frames, so it fired three times in a row. That flash
+            // is what remained when starting/stopping a sprint and when toggling flight, after the
+            // bob-invariant test correctly stopped firing during steady movement.
             //
-            // Key the test on the focal scale instead, measured in a way bob cannot disturb at all.
-            //
-            // Reading m00/m11 directly is not enough: bob's roll and pitch leak into them, and
-            // while a walking bob only leaks 0.0074, SPRINTING has a larger amplitude and leaks
-            // 0.017-0.066 -- past any threshold that still catches a real 1 degree FOV step
-            // (0.0262). The two ranges overlap, so no fixed cut on those entries can work. That is
-            // the flicker that survived while running.
-            //
-            // Use the row norms of the upper 3x3 instead. The captured matrix is projection * view,
-            // and bob contributes an ORTHOGONAL factor (a roll and a pitch) on the right, which
-            // provably preserves row norms -- so the norms are invariant to bob at every
-            // amplitude, exactly 0.000000000 of movement, not merely small. FOV still scales them
-            // one for one: 70 to 71 degrees moves them 0.0262. The separation is exact rather than
-            // statistical.
-            frameProjection.get(curProjection);
-            boolean projectionChanged = !prevProjectionValid;
-            if (prevProjectionValid) {
-                projectionChanged = focalScaleDelta(prevProjection, curProjection) > FOCAL_EPSILON;
-            }
-            frameProjection.get(prevProjection);
-            prevProjectionValid = true;
+            // Two real discontinuities still restart it, and they are handled where they arise
+            // rather than by inspecting the matrix: the first frame after (re)allocation, via
+            // svgfHasHistory below, and a terrain rebase, which RtNrdDenoiser compensates against
+            // the anchor. Resolution changes reallocate, which takes the same path.
 
             // ---- NRD / REBLUR (opt-in). Consumes the tracer's demodulated per-lobe signals plus
             // the guides at render res; the combine pass re-modulates and sums the denoised pair
@@ -1715,15 +1660,15 @@ public final class RtComposite {
                     // signals live in. That pair is what lets the denoiser compensate a rebase
                     // instead of seeing it as a teleport (see RtNrdDenoiser): the old code passed
                     // only anchor-relative coordinates, so every rebase silently invalidated
-                    // REBLUR's history mid-motion. projectionChanged still restarts it on an FOV
-                    // lerp (sprint/fly), which genuinely warps the reprojection space.
+                    // REBLUR's history mid-motion. No FOV-driven restart is passed: the motion
+                    // vectors already carry a zoom as screen displacement (see the SVGF path).
                     nrdDone = RtNrdDenoiser.INSTANCE.denoise(cmd.address(), renderW, renderH,
                             gMotion, gNormal, gViewZ, gNrdDiff, gNrdSpec, nrdDiffOut, nrdSpecOut,
                             nrdValidation,
                             frameProjection, frameViewRotation,
                             camX, camY, camZ,
                             terrain.blockX, terrain.blockY, terrain.blockZ,
-                            jitterX, jitterY, (int) frameCounter, projectionChanged);
+                            jitterX, jitterY, (int) frameCounter, false);
                 }
                 if (nrdDone) {
                     VulkanCommandEncoder.memoryBarrier(cmd, stack); // NRD outputs visible to the combine
@@ -1768,11 +1713,12 @@ public final class RtComposite {
                 RtImage historyOut = svgfWriteToPing ? svgfHistoryPing : svgfHistoryPong;
                 RtImage momentsIn = svgfWriteToPing ? svgfMomentsPong : svgfMomentsPing;
                 RtImage momentsOut = svgfWriteToPing ? svgfMomentsPing : svgfMomentsPong;
-                // A projection change (FOV lerp) warps the reprojection space, and the first frame
-                // after (re)allocation has nothing to reproject; both restart the accumulation.
-                // Camera MOVEMENT deliberately does not: the whole point of validating history
-                // against geometry is that motion no longer costs the history.
-                boolean svgfReset = projectionChanged || !svgfHasHistory;
+                // Only a genuine absence of history restarts accumulation: the first frame after
+                // (re)allocation, which includes a resolution change. Camera movement does not,
+                // and neither does an FOV change -- the motion vectors are built against the
+                // previous frame's projection, so a zoom arrives as ordinary screen displacement
+                // that the reprojection follows and the geometry gate validates.
+                boolean svgfReset = !svgfHasHistory;
                 // How far the camera travelled ALONG THE VIEW AXIS since the previous frame. The
                 // reprojection gate uses it to predict what a static surface's previous view depth
                 // should have been; without it, walking forward changes every nearby surface's
@@ -2714,7 +2660,6 @@ public final class RtComposite {
             fgUiCompositePipeline = null;
         }
         svgfHasHistory = false;
-        prevProjectionValid = false;
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;

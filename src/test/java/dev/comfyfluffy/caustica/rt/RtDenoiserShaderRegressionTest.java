@@ -141,35 +141,29 @@ final class RtDenoiserShaderRegressionTest {
     }
 
     /**
-     * The projection-change test restarts BOTH temporal denoisers, so it must fire on FOV changes
-     * and never on camera motion -- the reprojection already follows motion through prevViewProj
-     * and the motion vectors.
+     * Nothing may restart the temporal history because of an FOV change.
      *
-     * <p>Minecraft's captured projection has view bobbing baked in, and bob moves whole-matrix
-     * entries by up to 0.51, so any whole-matrix comparison reads every walking frame as an FOV
-     * change and resets the entire screen. Confirmed in game: the flicker disappears with View
-     * Bobbing off, and flying (no bob) never flickered. Raising the threshold cannot fix it
-     * because bob dwarfs a real FOV step.
+     * <p>The motion vectors are built against prevViewProj, the previous frame's projection, so a
+     * zoom reaches the reprojection as the on-screen displacement it actually is and the geometry
+     * gate validates the result. Resetting instead dropped every pixel from the 48-frame window to
+     * a single sample at once, and vanilla eases a sprint FOV over about three frames, so it
+     * flashed three times -- the artefact left when starting or stopping a sprint and when
+     * toggling flight.
      *
-     * <p>Reading m00/m11 directly is not enough either: a walking bob leaks only 0.0074 into them
-     * but a SPRINTING bob leaks 0.017-0.066, overlapping a real 1 degree FOV step at 0.0262, which
-     * is the flicker that survived while running. The row norms of the upper 3x3 are the fix -- bob
-     * appends an orthogonal factor, which provably cannot change a row norm, so they are invariant
-     * at every amplitude while FOV still scales them one for one.
+     * <p>This is also why the whole projection-matrix comparison is gone: with view bobbing baked
+     * into that matrix, no threshold on it could tell a zoom from a footstep anyway.
      */
     @Test
-    void projectionResetKeysOnFovNotOnViewBobbing() throws IOException {
+    void noTemporalResetIsDrivenByTheProjectionMatrix() throws IOException {
         String composite = Files.readString(
                 REPO_ROOT.resolve("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
 
-        assertFalse(composite.contains("for (int i = 0; i < 16 && !projectionChanged; i++)"),
-                "comparing the whole matrix reads view bobbing as an FOV change");
-        assertFalse(composite.contains("Math.abs(prevProjection[0] - curProjection[0])"),
-                "reading m00/m11 directly is not bob-proof: a sprint bob leaks up to 0.066 into them");
-        assertTrue(composite.contains("private static float rowNorm3(float[] m, int row)"),
-                "the focal scale must be measured as a row norm, which a rotation cannot change");
-        assertTrue(composite.contains("projectionChanged = focalScaleDelta(prevProjection, curProjection) > FOCAL_EPSILON;"),
-                "the reset must be driven by the bob-invariant focal scale");
+        assertFalse(composite.contains("projectionChanged"),
+                "an FOV change must not restart accumulation; the motion vectors already carry it");
+        assertFalse(composite.contains("prevProjection"),
+                "no leftover projection snapshot should remain to tempt a future reset");
+        assertTrue(composite.contains("boolean svgfReset = !svgfHasHistory;"),
+                "only a genuine absence of history may restart SVGF");
     }
 
     /**
