@@ -84,15 +84,23 @@ public final class RtWeatherCapture {
     private static final float SNOW_MAX_ALPHA = 0.8f;
 
     /**
-     * Rain level below which no drops are drawn at all — the dead zone in {@link #visualIntensity}.
+     * Floor applied to a column's <em>opacity</em> once it is drawn at all — <b>not</b> a delay.
      *
-     * <p>Vanilla's rain level ramps over roughly 5 seconds (it moves ~0.01/tick), so this holds the
-     * drops back for about the first second of that ramp and, symmetrically, removes them about a second
-     * before it reaches zero. That is enough for the sky to have visibly greyed first and to still look
-     * overcast as the last drops go, without a delay long enough to feel like a bug in the other
-     * direction.
+     * <p>This replaces an earlier {@code RAIN_ONSET} dead zone that suppressed the drops entirely until
+     * the rain level passed 0.18. The intent there was sound: at rain 0.05 the sky's overcast blend is
+     * only 5% grey (invisible) while a thin bright streak is already unmistakable, so feeding both the
+     * same number made rain appear against a still-blue sky. But suppressing the drops fixed that by
+     * deleting them, and the cost was a visible desync with the rest of the storm — vanilla's splash
+     * particles on the ground start as soon as the rain level leaves zero, so the columns came in about
+     * 1.7 seconds late and, symmetrically, vanished 1.7 seconds early. Rain hitting the ground with no
+     * rain in the air.
+     *
+     * <p>The real problem was never <em>when</em> the drops appear, it is that a faint sheet reads as too
+     * present. So fix the contrast instead of the timing: a column that is drawn is drawn from the first
+     * frame the storm exists, but never fainter than this. The ramp then rides on top, and the drops
+     * track the splash particles and the greying sky in lockstep.
      */
-    private static final float RAIN_ONSET = 0.18f;
+    private static final float MIN_COLUMN_OPACITY = 0.35f;
 
     /**
      * Smallest column alpha worth emitting, mirroring {@code ENTITY_ALPHA_CUTOFF} in {@code
@@ -226,19 +234,31 @@ public final class RtWeatherCapture {
      *       there, because a thin streak against a bright sky is high contrast.</li>
      * </ul>
      *
-     * <p>So with both fed the same number, the drops appear while the sky is still blue and linger after
-     * it has cleared — the reported "starts early, ends late". The fix is to hold the drops back until
-     * the sky has visibly committed to the storm, then bring them in quickly: a smoothstep with a dead
-     * zone at the bottom. Rain now starts a beat <em>after</em> the sky begins to grey and is gone a beat
-     * <em>before</em> it finishes clearing, which is the order the eye expects (clouds gather, then it
-     * rains; it stops raining, then the sky opens).
+     * <p>So with both fed the same number, the drops read as too present against a sky that has barely
+     * changed. The earlier fix for that was a dead zone: draw nothing until the rain level cleared 0.18.
+     * It did make the sky commit first, but it bought that by deleting the first ~1.7 seconds of
+     * precipitation and, because the ramp is symmetric, the last ~1.7 seconds too. Everything else in
+     * the storm keeps vanilla's timing — most visibly the splash particles on the ground, which start
+     * the moment the rain level leaves zero — so the columns arrived late and left early against them.
+     *
+     * <p>Timing and contrast are separate problems, so they get separate fixes. Timing is left exactly
+     * as vanilla computes it: the drops exist for precisely as long as the storm does. Contrast is
+     * handled by {@link #MIN_COLUMN_OPACITY}, which stops a column from ever being drawn at the wispy
+     * levels that looked wrong, and by the smoothstep below, which keeps the ramp eased rather than
+     * linear so the sheets thicken naturally instead of snapping to full.
      *
      * <p>Deliberately applied here rather than to {@code weather.x}: that lane also drives the sun/moon
-     * attenuation and the fog, and delaying <em>those</em> is what would make the sky lag the storm.
+     * attenuation and the fog, and reshaping <em>those</em> is what would make the sky lag the storm.
      */
     private static float visualIntensity(float rainLevel) {
-        float t = Mth.clamp((rainLevel - RAIN_ONSET) / (1.0f - RAIN_ONSET), 0.0f, 1.0f);
-        return t * t * (3.0f - 2.0f * t); // smoothstep
+        float t = Mth.clamp(rainLevel, 0.0f, 1.0f);
+        if (t <= 0.0f) {
+            return 0.0f; // no storm at all: the only case that draws nothing
+        }
+        float eased = t * t * (3.0f - 2.0f * t); // smoothstep
+        // Lift the eased ramp into [MIN_COLUMN_OPACITY, 1]. The drops are present from the storm's first
+        // frame to its last, and the ramp controls how heavy they look rather than whether they exist.
+        return MIN_COLUMN_OPACITY + eased * (1.0f - MIN_COLUMN_OPACITY);
     }
 
     /**
