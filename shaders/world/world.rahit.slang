@@ -121,11 +121,39 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
         float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(uv, 0.0);
-        // aux0 stores a float coverage multiplier written by RtEntityCapture. Older/default records have
-        // zero in this lane, so treat 0 as opaque coverage for compatibility. For enchantment glint this
+        // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint this
         // multiplier is deliberately < 1 because vanilla's opaque purple glint texture is fixed-function
         // blended over the armour; texture alpha alone would make it an opaque ray-traced shell.
-        float primCoverage = epr.aux0 == 0u ? 1.0 : clamp(asfloat(epr.aux0), 0.0, 1.0);
+        //
+        // How a zero in this lane is read depends on the instance kind, because the two kinds disagree
+        // about what a zero MEANS:
+        //
+        //  * Model geometry (ENTITY_BIT) inherits its alpha byte from whatever vertex colour the model
+        //    supplied, and some submit paths use 0 as a "no tint" sentinel rather than as transparency
+        //    (the FRAPI block-model path averages the quad's vertex colours through unchanged). Reading
+        //    that literally would make solid geometry — a falling block, a moving piston — vanish, so
+        //    the historical "0 means opaque" reading is kept here.
+        //
+        //  * Particles and weather sheets (PARTICLE_BIT) get their alpha from vanilla's own per-particle
+        //    /per-column blend weight, which is a real, authoritative coverage. Zero means invisible.
+        //
+        // Conflating the two is what blanked the screen when a storm began. Rain coverage is
+        // columnAlpha * visualIntensity * rainDensity, and vanilla's rain level ramps over ~5 seconds,
+        // so the product starts every storm in the range where the 8-bit alpha byte still rounds to
+        // zero. Every column in that window took the "0 means opaque" branch and drew at FULL strength:
+        // roughly the first second of the ramp was a downpour at maximum density, which then vanished
+        // into the correct light rain the moment the byte reached 1. Symmetrically, the storm ending
+        // walked back down into the same window and flashed the full sheet again before clearing.
+        //
+        // Note the flash was independent of the density option — at rainDensity 0.2 the product just
+        // takes slightly longer to leave the dead zone, so the burst lasted marginally longer while
+        // looking exactly as heavy. That is the giveaway that the option was never being ignored: the
+        // flash is this branch overriding it with 1.0, not the multiplier failing to apply.
+        bool particleKind = instanceKind == PARTICLE_BIT;
+        float primCoverage = clamp(asfloat(epr.aux0), 0.0, 1.0);
+        if (!particleKind && epr.aux0 == 0u) {
+            primCoverage = 1.0;
+        }
         bool stochasticAlpha = false;
         MaterialHeader materialHeader;
         if (instanceKind == ENTITY_BIT) {
