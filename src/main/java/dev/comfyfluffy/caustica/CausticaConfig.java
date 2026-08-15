@@ -60,8 +60,8 @@ public final class CausticaConfig {
             Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY, Rt.Spatial.ENABLED,
-            Rt.Nrd.ENABLED,
+            Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
+            Rt.Denoise.ENABLED, Rt.Nrd.ENABLED, Rt.Nrd.VALIDATION,
             Rt.Reflex.ENABLED, Rt.Lights.HELD_ITEM_LIGHT, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -109,14 +109,22 @@ public final class CausticaConfig {
                         + " at runtime to the driver's reported DLSSG.MultiFrameCountMax.");
         FILE.setComment("fsr",
                 " AMD FSR 3 upscaling (experimental): upscales the path-traced image WITHOUT denoising,\n"
-                        + " so raw-trace noise follows the SPP setting unless the NRD denoiser is also on. quality\n"
+                        + " so raw-trace noise is handled by the renderer's denoiser (SVGF or NRD). quality\n"
                         + " mirrors the DLSS PerfQuality numbering (0 Performance, 1 Balanced, 2 Quality,\n"
                         + " 3 Ultra Performance, 5 native AA). The runtime is bundled for Windows only for\n"
                         + " now; elsewhere the upscaler selector does not offer FSR 3.");
+        FILE.setComment("denoise",
+                " The renderer's own denoiser (SVGF): geometry-validated temporal reprojection with\n"
+                        + " luminance moments, then a variance-guided a-trous wavelet cascade. Default on and\n"
+                        + " used by every non-DLSS path; DLSS Ray Reconstruction denoises internally instead,\n"
+                        + " and switching NRD on hands the slot to REBLUR.");
         FILE.setComment("nrd",
-                " NRD (NVIDIA Real-time Denoisers) REBLUR denoising (experimental): the denoiser path for\n"
-                        + " GPUs without DLSS Ray Reconstruction. Denoises at render resolution; combine with the\n"
-                        + " FSR 3 upscaler (or none) for the display. Mutually exclusive with DLSS in the UI.");
+                " NRD (NVIDIA Real-time Denoisers) REBLUR denoising: the optional alternative to the\n"
+                        + " built-in denoiser, running on demodulated per-lobe radiance so diffuse and specular\n"
+                        + " are filtered separately. Denoises at render resolution; combine with FSR 3 / XeSS\n"
+                        + " (or no upscaler) for the display. Requires the bundled NRD natives (Windows) and is\n"
+                        + " mutually exclusive with both DLSS and the built-in denoiser.\n"
+                        + " validation: REBLUR's diagnostic overlay; replaces the image with NRD's debug grid.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -976,42 +984,34 @@ public final class CausticaConfig {
         }
 
         /**
-         * Renderer-owned temporal accumulation (a lightweight TAA over the current frame's image,
-         * reprojected with the tracer's motion vectors). The noise-convergence stage of every
-         * non-DLSS path: it integrates the Monte-Carlo noise AND the jitter sequence over up to 32
-         * frames at render resolution. Under XeSS the upscaler then receives the converged image
-         * with zero jitter (its internal temporal layer stabilizes it instead of re-chasing the
-         * jitter) — that handoff is what makes the pair clean. Default ON: without it SPP 1 frames
-         * stay visibly noisy. Hidden only under DLSS-RR, which denoises internally.
+         * The renderer's own denoiser: SVGF (Spatiotemporal Variance-Guided Filtering) — a
+         * geometry-validated temporal reprojection that accumulates luminance moments, followed by
+         * an à-trous wavelet cascade whose edge-stops are driven by the variance those moments
+         * measure. It is the default denoiser for every non-DLSS path (upscaler Off, FSR 3, XeSS)
+         * and replaces the previous fixed-sigma spatial blur + neighbourhood-clamped TAA pair,
+         * which could neither hold noise down while the camera moved nor keep converged detail
+         * crisp. Default ON: at SPP 1 the raw trace is unusable without it. Hidden under DLSS-RR
+         * (which denoises internally) and superseded by NRD when that is switched on.
          */
-        public static final class Taa {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.temporalAccumulation", "taa.enabled", true);
+        public static final class Denoise {
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.denoise", "denoise.enabled", true);
 
-            private Taa() {
+            private Denoise() {
             }
         }
 
         /**
-         * Edge-avoiding à-trous SPATIAL denoise over the raw trace (2 passes at render res,
-         * weighted by luminance/depth/normal, with a firefly guard). History-less by design, so it
-         * cannot ghost on camera motion — the failure mode that retired the NRD/REBLUR stack —
-         * while still removing the single-sample grain the temporal layers would otherwise smear.
-         * Runs on every non-DLSS path before temporal accumulation / upscaling. Default ON.
-         */
-        public static final class Spatial {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.spatialDenoise", "spatial.enabled", true);
-
-            private Spatial() {
-            }
-        }
-
-        /**
-         * NRD (NVIDIA Real-time Denoisers) REBLUR denoising — the STRONG temporal option: a trained
-         * spatio-temporal filter over the per-lobe radiance signals, better than the spatial pass at
-         * holding noise down WHILE MOVING (the spatial filter restarts on motion by design). Costs
-         * more GPU and can trade stability for strength on fast camera motion. Mutually exclusive
-         * with the spatial/TAA stack in the renderer: when NRD is on it owns the denoise slot (RR
-         * still wins over everything when DLSS-RR is active).
+         * NRD (NVIDIA Real-time Denoisers) REBLUR_DIFFUSE_SPECULAR — the optional alternative
+         * denoiser, NVIDIA's production spatio-temporal filter running on the tracer's demodulated
+         * per-lobe signals. It denoises diffuse and specular separately with hit-distance-driven
+         * kernels, which resolves reflections far better than a single-signal filter can, and adds
+         * its own anti-lag, anti-firefly and temporal stabilization stages.
+         *
+         * <p>Mutually exclusive with the built-in denoiser: whichever runs owns the slot, because
+         * two temporal filters in series fight over the same history. Requires the bundled NRD
+         * natives (Windows for now); the option is hidden where they are absent. Costs more GPU
+         * than SVGF.
          */
         public static final class Nrd {
             public static final BooleanSetting ENABLED = bool("caustica.rt.nrd", "nrd.enabled", false);

@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.Arrays;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
@@ -29,14 +30,22 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
 /**
- * Compute pass that decodes NRD's denoised per-lobe outputs (YCoCg radiance + normalized hit
- * distance) back to linear HDR and sums diffuse + specular into the single radiance image the
- * upscale stage consumes. Mirrors the {@code RtDisplayPipeline} plumbing.
+ * NRD/REBLUR back-end pass: decodes the denoised per-lobe outputs (YCoCg, material-demodulated),
+ * RE-MODULATES the material factors the tracer divided out before denoising, and sums diffuse +
+ * specular into the single radiance image the upscale stage consumes. Sky pixels (beyond NRD's
+ * denoising range) pass the raw trace through instead.
+ *
+ * <p>Bindings, matching {@code shaders/display/nrd_combine.comp}: 0 denoised diffuse, 1 denoised
+ * specular, 2 combined output, 3 raw trace colour, 4 diffuse albedo guide, 5 viewZ, 6 specular
+ * albedo guide, 7 normal + roughness guide. The last four are what the demodulation factors are
+ * rebuilt from — the tracer derives them from the very same textures, so the round trip is exact.
  */
 public final class RtNrdCombinePipeline {
     private static final String SHADER_DIR = "/caustica/rt/";
     /** Push constants: int width, int height, float denoisingRange. */
     private static final int PUSH_BYTES = 3 * Integer.BYTES;
+    /** Storage images the combine shader binds; see the class docs for the slot order. */
+    private static final int BINDINGS = 8;
 
     private final RtContext ctx;
     private final long descriptorSetLayout;
@@ -44,12 +53,7 @@ public final class RtNrdCombinePipeline {
     private final long descriptorSet;
     private final long pipelineLayout;
     private final long pipeline;
-    private long boundDiffView;
-    private long boundSpecView;
-    private long boundCombinedView;
-    private long boundRawDiffView;
-    private long boundRawSpecView;
-    private long boundViewZView;
+    private final long[] boundViews = new long[BINDINGS];
     private boolean destroyed;
 
     private RtNrdCombinePipeline(RtContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
@@ -64,8 +68,8 @@ public final class RtNrdCombinePipeline {
     public static RtNrdCombinePipeline create(RtContext ctx) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(6, stack);
-            for (int i = 0; i < 6; i++) {
+            VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(BINDINGS, stack);
+            for (int i = 0; i < BINDINGS; i++) {
                 binds.get(i).binding(i).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                         .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
             }
@@ -77,7 +81,7 @@ public final class RtNrdCombinePipeline {
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, "nrd combine descriptor set layout");
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
-            poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(6);
+            poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(BINDINGS);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(nrd combine)");
             long pool = p.get(0);
@@ -114,17 +118,26 @@ public final class RtNrdCombinePipeline {
         }
     }
 
+    /**
+     * Drop the cached binding state so the next {@link #setImages} always rewrites the descriptor.
+     * Required after the images are recreated: a recycled view handle would otherwise compare equal
+     * to the destroyed one and the update would be skipped.
+     */
+    public void invalidateBindings() {
+        Arrays.fill(boundViews, 0L);
+    }
+
     public void setImages(long diffView, long specView, long combinedView,
-                          long rawDiffView, long rawSpecView, long viewZView) {
-        if (boundDiffView == diffView && boundSpecView == specView && boundCombinedView == combinedView
-                && boundRawDiffView == rawDiffView && boundRawSpecView == rawSpecView
-                && boundViewZView == viewZView) {
+                          long rawColorView, long albedoView, long viewZView,
+                          long specAlbedoView, long normalView) {
+        long[] views = {diffView, specView, combinedView, rawColorView, albedoView, viewZView,
+                specAlbedoView, normalView};
+        if (Arrays.equals(views, boundViews)) {
             return;
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            long[] views = {diffView, specView, combinedView, rawDiffView, rawSpecView, viewZView};
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(6, stack);
-            for (int i = 0; i < 6; i++) {
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(BINDINGS, stack);
+            for (int i = 0; i < BINDINGS; i++) {
                 VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
                 info.get(0).imageView(views[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 writes.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i)
@@ -133,12 +146,7 @@ public final class RtNrdCombinePipeline {
             }
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
-        boundDiffView = diffView;
-        boundSpecView = specView;
-        boundCombinedView = combinedView;
-        boundRawDiffView = rawDiffView;
-        boundRawSpecView = rawSpecView;
-        boundViewZView = viewZView;
+        System.arraycopy(views, 0, boundViews, 0, BINDINGS);
     }
 
     public void dispatch(VkCommandBuffer cmd, int width, int height, float denoisingRange) {

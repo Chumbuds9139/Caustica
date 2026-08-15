@@ -80,6 +80,11 @@ public final class NrdRuntime {
      * Re-init on size change is cheap enough for the rare resize path (NRD recreates its pools);
      * returns {@code null} when unavailable, and callers fall back to the undenoised image.
      */
+    /** True once init or a denoise has failed and the integration has latched off for the session. */
+    public synchronized boolean hasFailed() {
+        return failed;
+    }
+
     public synchronized NrdLibrary acquire(VulkanDevice device, int width, int height) {
         if (failed) {
             return null;
@@ -91,6 +96,10 @@ public final class NrdRuntime {
                 return lib;
             }
             if (initWidth != width || initHeight != height) {
+                // Re-init destroys and rebuilds NRD's internal resources. With
+                // autoWaitForIdle = false NRD does not synchronize that for us, so a frame still
+                // referencing the old pools would read freed memory.
+                waitDeviceIdle();
                 init(device, width, height);
             }
             return lib;
@@ -105,6 +114,12 @@ public final class NrdRuntime {
     public synchronized void shutdown() {
         if (lib != null && initialized) {
             try {
+                // The integration is created with autoWaitForIdle = false, so NRD will NOT stall the
+                // device for us: destroying its pipelines/descriptors while a frame that references
+                // them is still in flight is a use-after-free. The renderer's own teardown path waits
+                // idle, but shutdown() is also reachable from a resource reload, so wait here too —
+                // it costs nothing on a path that runs at most a handful of times per session.
+                waitDeviceIdle();
                 lib.destroy();
             } catch (Throwable t) {
                 CausticaMod.LOGGER.warn("NRD shutdown failed", t);
@@ -113,6 +128,15 @@ public final class NrdRuntime {
         initialized = false;
         failed = false;
         lib = null;
+        initWidth = 0;
+        initHeight = 0;
+    }
+
+    /** Best-effort {@code vkDeviceWaitIdle} on the renderer's device; ignored if it is unavailable. */
+    private static void waitDeviceIdle() {
+        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
+            VK10.vkDeviceWaitIdle(device.vkDevice());
+        }
     }
 
     private void init(VulkanDevice device, int width, int height) {
@@ -146,7 +170,7 @@ public final class NrdRuntime {
         }
         initWidth = width;
         initHeight = height;
-        CausticaMod.LOGGER.info("NRD initialized ({}x{}, {})", width, height, shim);
+        CausticaMod.LOGGER.info("NRD {} initialized at {}x{} ({})", lib.versionString(), width, height, shim);
     }
 
     private static Path extractBundledNative() {

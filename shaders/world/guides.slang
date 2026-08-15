@@ -262,12 +262,12 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     float4 curClip = mul(worldPush.curViewProj, float4(gv_hitCamRel, 1.0));
     float depth = curClip.w > 0.0 ? curClip.z / curClip.w : 0.0;
 
-    // NRD IN_VIEWZ / TAA sky cutoff: linear view depth of the primary hit (positive, grows forward;
+    // NRD IN_VIEWZ / SVGF reprojection guide: linear view depth of the primary hit (positive, grows forward;
     // the perspective divide's w is exactly that distance). Sky/miss pixels place gv_hitCamRel at
     // 1e6 blocks, so their viewZ lands above CommonSettings::denoisingRange — how REBLUR recognizes
-    // INF pixels and the TAA recognizes "accumulate in place". Written here (Pass A) because the
+    // INF pixels and how SVGF recognizes sky. Written here (Pass A) because the
     // primary hit is owned here; Pass B only reads it for hit-distance normalization.
-    if (nrdEnabled() || taaEnabled()) {
+    if (nrdEnabled() || viewZEnabled()) {
         // BUGFIX: for sky, curClip.w works out to ~1e6 * |rd.z_view|, which is DIRECTION-dependent:
         // sky rays near the view axis exceed denoisingRange (correctly INF) but sky rays far from the
         // axis fall BELOW it, so the NRD mistakes edge-of-screen sky for geometry and tries to denoise

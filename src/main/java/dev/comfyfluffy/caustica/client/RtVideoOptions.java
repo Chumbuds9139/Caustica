@@ -105,17 +105,15 @@ public final class RtVideoOptions {
         } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
             options.add(xessQuality());
         }
-        // Temporal accumulation is the renderer's own temporal stage for the non-DLSS paths — it
-        // converges the Monte-Carlo noise + jitter sequence before the upscaler reads the image
-        // (under XeSS the upscaler then gets the converged image with zero jitter, so the two
-        // temporal layers cooperate instead of fighting). Hidden only under DLSS, where RR
-        // denoises internally.
-        // NRD/REBLUR is hidden: its temporal reprojection conflicted with this renderer's motion
-        // contract (camera tremble + ghosting on every camera move, across all tuning attempts) —
-        // see RtNrdDenoiser.enabled(). The spatial denoiser + TAA pair below is the stable stack.
+        // Denoiser rows, for every path except DLSS (Ray Reconstruction denoises internally, so it
+        // owns the slot and neither row would do anything).
+        //
+        // The built-in SVGF is the only denoiser offered. REBLUR is no longer exposed: it kept its
+        // own temporal history inside the library, so the reprojection fixes that cleaned up the
+        // built-in path could not reach it, and it stayed blobby where SVGF is now stable. The
+        // integration is left in the tree (the CI still builds the shim) but nothing turns it on.
         if (!RtUpscalerSupport.MODE_DLSS.equals(mode)) {
-            options.add(spatialDenoiser());
-            options.add(temporalAccumulation());
+            options.add(svgfDenoiser());
         }
         options.add(omm());
         return options.toArray(OptionInstance<?>[]::new);
@@ -590,31 +588,12 @@ public final class RtVideoOptions {
     }
 
     /**
-     * Renderer-owned temporal accumulation toggle. Live-safe like the other per-frame toggles:
-     * flipping it re-keys {@code RtComposite.ensureOutput} (the history images are allocated on the
-     * rebuild) and the tracer picks the feature flag up next frame.
+     * The built-in denoiser (SVGF) toggle. Live-safe like the other per-frame toggles: flipping it
+     * re-keys {@code RtComposite.ensureOutput}, which allocates or releases the history/moment
+     * targets on the rebuild, and the tracer picks the feature flag up on the next frame.
      */
-    private static OptionInstance<Boolean> temporalAccumulation() {
-        return bool("caustica.options.rt.temporalAccumulation", CausticaConfig.Rt.Taa.ENABLED);
-    }
-
-    /** Edge-avoiding spatial denoise — history-less, so live-safe like the other per-frame toggles. */
-    private static OptionInstance<Boolean> spatialDenoiser() {
-        return bool("caustica.options.rt.spatialDenoise", CausticaConfig.Rt.Spatial.ENABLED);
-    }
-
-    /**
-     * NRD (REBLUR) denoiser toggle: the strong temporal option. Live-safe like the other per-frame
-     * toggles: flipping it re-keys {@code RtComposite.ensureOutput} (the NRD signal images are
-     * allocated/released on the rebuild) and the tracer picks the feature flag up next frame.
-     */
-    private static OptionInstance<Boolean> nrdDenoiser() {
-        return bool("caustica.options.rt.nrd", CausticaConfig.Rt.Nrd.ENABLED);
-    }
-
-    /** REBLUR's diagnostic overlay — the in-game tool for debugging temporal artifacts. */
-    private static OptionInstance<Boolean> nrdValidation() {
-        return bool("caustica.options.rt.nrdValidation", CausticaConfig.Rt.Nrd.VALIDATION);
+    private static OptionInstance<Boolean> svgfDenoiser() {
+        return bool("caustica.options.rt.denoise", CausticaConfig.Rt.Denoise.ENABLED);
     }
 
     /**
@@ -807,8 +786,10 @@ public final class RtVideoOptions {
             // CycleButton (used for Enum values) already prepends "caption: " itself (DisplayState.
             // NAME_AND_VALUE), so this must return only the value's text, not caption + value again.
             (caption, value) -> Component.translatable("caustica.options.rt.debugView." + value),
-            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7), Codec.INT),
-            Math.clamp(setting.value(), 0, 7),
+            // 10-12 inspect the SVGF denoiser's internal state and, unlike 1-7, leave the denoiser
+            // running (see RtComposite.SVGF_DEBUG_FIRST). 8/9 are not exposed here.
+            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12), Codec.INT),
+            Math.clamp(setting.value(), 0, 12),
             setting::set);
     }
 
