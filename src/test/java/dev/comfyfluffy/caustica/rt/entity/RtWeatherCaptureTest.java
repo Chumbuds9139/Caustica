@@ -233,46 +233,62 @@ final class RtWeatherCaptureTest {
     }
 
     /**
-     * The rain-density option (and the distance fade) must actually thin the streaks.
+     * The density option must survive the whole storm, including its opening and closing moments.
      *
-     * <p>Both are fractional coverage multipliers, which only means anything against a stochastic test.
-     * Under the fixed {@code ENTITY_ALPHA_CUTOFF} the fraction is all-or-nothing per texel: a drop core
-     * has texture alpha ~1, so at 15% density it still evaluated {@code 1.0 * 0.15 > 0.1} and drew
-     * exactly as it does in a full downpour — the reported "still shows up even configured to 15%" —
-     * until the multiplier finally crossed the cutoff and the whole sheet vanished at once.
+     * <p>The flash was never the multiplier failing to apply — it was the coverage branch above
+     * discarding it. Coverage is {@code columnAlpha * visualIntensity * rainDensity}, so a configured
+     * 0.2 simply reaches the first representable alpha byte a little later than 1.0 does; while the
+     * product sat in the dead zone the sentinel replaced it with 1.0 and the sheet rendered at maximum
+     * density regardless of the setting. Pinning the sentinel to non-particle geometry is what keeps the
+     * option in force for every frame of the ramp.
      */
     @Test
-    void weatherCoverageIsDitheredSoDensityAndDistanceThinTheStreaks() throws IOException {
+    void theDensityOptionIsNotOverriddenDuringTheRamp() throws IOException {
         String rahit = Files.readString(anyHitShader());
 
-        assertTrue(rahit.contains("(epr.flags & PRIM_WEATHER) != 0u"),
-                "weather sheets must be recognised in the any-hit alpha path");
-        assertTrue(rahit.contains("stochasticAlpha = true;"),
-                "weather coverage must route through the stochastic dither, not the fixed cutout");
+        // The multiplier must reach the alpha test unmodified for particle/weather prims...
+        assertTrue(rahit.contains("float primCoverage = clamp(asfloat(epr.aux0), 0.0, 1.0);"),
+                "captured coverage must be the starting value for every instance kind");
+        // ...which means the only override left is explicitly gated on NOT being a particle.
+        assertEquals(1, occurrences(rahit, "epr.aux0 == 0u"),
+                "exactly one coverage override may exist, and it must be the model-geometry one");
+        assertTrue(rahit.contains("texel.a * primCoverage < ENTITY_ALPHA_CUTOFF"),
+                "the coverage multiplier must still weigh the texel alpha in the cutout test");
+    }
 
-        // The fraction must survive into the dither comparison as a multiplier on the texel alpha.
-        assertTrue(rahit.contains("alphaDitherThreshold(salt) >= clamp(texel.a * primCoverage, 0.0, 1.0)"),
-                "the dither must weigh the texel alpha by the primitive coverage");
+    private static int occurrences(String source, String needle) {
+        int count = 0;
+        for (int at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
     }
 
     /**
-     * A column whose alpha rounds to zero in the 8-bit colour channel must not be emitted at all.
+     * A column the any-hit cutout will reject outright must not be built in the first place.
      *
-     * <p>{@code ARGB.white} packs the fade into a byte, so anything below one channel step becomes
-     * coverage 0 — geometry built, budgeted into the particle limit, uploaded and traced, only for every
-     * ray to discard it. The guard is written against the channel step rather than {@code > 0} because
-     * the intensity ramp spends its first moments inside exactly that sub-representable band.
+     * <p>The shader keeps a weather texel only when {@code texel.a * coverage} clears {@code
+     * ENTITY_ALPHA_CUTOFF}. The densest texel in the rain sheet — a drop's core — is about alpha 1, so
+     * below that cutoff a column contributes no surviving sample at all while still consuming a slot of
+     * the shared particle budget, a BLAS entry and a ray test per pixel.
+     *
+     * <p>The threshold must track the shader constant. One 8-bit channel step is the point where the
+     * coverage byte rounds to zero, but everything from there up to the cutoff is equally invisible, so
+     * culling at the smaller bound would leave most of the dead columns in the budget.
      */
     @Test
-    void columnsBelowOneAlphaStepAreNotEmitted() throws IOException {
+    void columnsBelowTheAnyHitCutoffAreNotEmitted() throws IOException {
         String src = Files.readString(source());
+        String rahit = Files.readString(anyHitShader());
 
-        assertTrue(src.contains("MIN_VISIBLE_ALPHA = 1.0f / 255.0f"),
-                "the cull threshold must be one step of the 8-bit alpha channel the fade is packed into");
+        assertTrue(src.contains("MIN_VISIBLE_ALPHA = 0.1f"),
+                "the cull threshold must match the shader's alpha cutoff");
+        assertTrue(rahit.contains("ENTITY_ALPHA_CUTOFF = 0.1"),
+                "world.rahit's cutoff moved: MIN_VISIBLE_ALPHA has to follow it");
         assertTrue(src.contains("alpha < MIN_VISIBLE_ALPHA"),
-                "columns quantising to zero coverage must be skipped before they reach the BLAS");
+                "columns below the cutoff must be skipped before they reach the BLAS");
         assertFalse(src.contains("if (alpha <= 0.0f) {"),
-                "a plain > 0 test still admits columns whose coverage byte rounds to zero");
+                "a plain > 0 test admits a whole storm's worth of columns that never draw");
     }
 
     private static Path anyHitShader() {

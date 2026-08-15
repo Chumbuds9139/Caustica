@@ -138,11 +138,17 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         //    /per-column blend weight, which is a real, authoritative coverage. Zero means invisible.
         //
         // Conflating the two is what blanked the screen when a storm began. Rain coverage is
-        // columnAlpha * visualIntensity * rainDensity, so while the intensity ramp is climbing it passes
-        // through the range where the 8-bit alpha byte still rounds to zero — and every column in that
-        // window took the "0 means opaque" branch and drew at FULL strength. That is the wall of rain
-        // that covers the view for about a second as weather starts, disappears once the ramp clears the
-        // smallest representable value, then flashes once more in reverse as the storm ends.
+        // columnAlpha * visualIntensity * rainDensity, and vanilla's rain level ramps over ~5 seconds,
+        // so the product starts every storm in the range where the 8-bit alpha byte still rounds to
+        // zero. Every column in that window took the "0 means opaque" branch and drew at FULL strength:
+        // roughly the first second of the ramp was a downpour at maximum density, which then vanished
+        // into the correct light rain the moment the byte reached 1. Symmetrically, the storm ending
+        // walked back down into the same window and flashed the full sheet again before clearing.
+        //
+        // Note the flash was independent of the density option — at rainDensity 0.2 the product just
+        // takes slightly longer to leave the dead zone, so the burst lasted marginally longer while
+        // looking exactly as heavy. That is the giveaway that the option was never being ignored: the
+        // flash is this branch overriding it with 1.0, not the multiplier failing to apply.
         bool particleKind = instanceKind == PARTICLE_BIT;
         float primCoverage = clamp(asfloat(epr.aux0), 0.0, 1.0);
         if (!particleKind && epr.aux0 == 0u) {
@@ -153,18 +159,6 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         if (instanceKind == ENTITY_BIT) {
             materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
             stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
-        } else if ((epr.flags & PRIM_WEATHER) != 0u) {
-            // Rain/snow sheets: coverage IS the fade, so it has to be dithered rather than thresholded.
-            // Vanilla's weather pass is alpha-blended, and both the distance falloff and the rain-density
-            // option are expressed as a fractional coverage whose whole job is to THIN the streaks. The
-            // fixed cutout below cannot express that: it compares the same texel against one threshold,
-            // so a drop core (texture alpha ~1) survives at full strength until the multiplier finally
-            // drops under the cutoff and the entire sheet disappears at once. That is why the density
-            // option looked ignored — at 15% every opaque drop core still passed 1.0 * 0.15 > 0.1 and
-            // drew exactly as it does in a full downpour, with only the soft streak edges trimmed.
-            // Dithering makes the fraction mean what it says (15% of the drop samples survive), so the
-            // option reads as a drizzle and distant columns thin out instead of stepping away.
-            stochasticAlpha = true;
         }
         if (stochasticAlpha) {
             uint salt = pid * 1664525u
