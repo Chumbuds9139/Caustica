@@ -787,6 +787,19 @@ void main() {
     AmbientFog screenFog = evalAmbientFog(worldPush.ambientFog, fogDepth);
     radiance = radiance * screenFog.transmittance + screenFog.inScatter;
 
+    // Sanitize the combined radiance every downstream consumer reads. A single non-finite sample
+    // (a 0/0 or inf-inf from some BSDF corner surviving the walk) would be written into outImage
+    // and from there straight into DLSS-RR's or SVGF's history, where it survives every temporal
+    // blend and then spreads through the spatial kernels — one bad pixel becomes a persistent
+    // bright smudge. The NRD branch below scrubs its own lobe images; this is the same guard for
+    // the combined image. The FP16 bound also matters for RR specifically: outImage is the raw
+    // R16G16B16A16 colour input, and anything above 65504 stores as Inf in that texture.
+    // isnan/isinf rather than a bare clamp: clamp() propagates NaN on most implementations.
+    if (any(isnan(radiance)) || any(isinf(radiance))) {
+        radiance = float3(0.0, 0.0, 0.0);
+    }
+    radiance = clamp(radiance, 0.0, 65504.0);
+
     // Firefly clamp for the raw (undenoised) view only — see UNDENOISED_FIREFLY_MAX_LUMINANCE. Scaling
     // the whole colour by the luminance ratio preserves hue and saturation, so a clamped highlight
     // desaturates toward nothing rather than shifting colour.

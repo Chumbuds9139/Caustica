@@ -158,10 +158,17 @@ public PathSegment tracePrimary(PathSegment seg,
                 } else {
                     mediumPop(guideMedium);
                 }
+                // Seed the guide filter with the transmittance of the camera prefix: the same
+                // exp(-sigma*t) this function applied to the split throughputs above for the
+                // camera->interface hop (non-zero when the eye is submerged). The walk then
+                // accumulates every refracted segment on top of it, so the transmitted guide's
+                // albedo ends up carrying the exact attenuation the colour it explains carries —
+                // see resolveTransmissionGuide. The glass entry tint is NOT seeded here anymore;
+                // the medium stack carries it as extinction and the walk applies it physically.
+                float3 guideFilter = max(exp(-min(medium.current.extinction * payload.hitT,
+                        float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
                 resolveTransmissionGuide(hitPos, transmittedDir, geometricNormal,
-                        guideMedium, transmitBias, rayConeWidth, rayConeSpread,
-                        !isWater && entering
-                                ? float3(payload.albedo) : float3(1.0, 1.0, 1.0));
+                        guideMedium, transmitBias, rayConeWidth, rayConeSpread, guideFilter);
             }
         }
 
