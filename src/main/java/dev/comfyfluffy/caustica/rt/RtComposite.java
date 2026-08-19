@@ -1570,7 +1570,10 @@ public final class RtComposite {
                     // Analytic held-item light: xyz rebased position, w intensity (0 = none held),
                     // then the item's RGB tint lane.
                     hand.light(),
-                    hand.color()
+                    hand.color(),
+                    // Water-opacity lane: x = extra neutral per-block extinction scale (0 = default
+                    // clarity). Matches WorldPush.waterOpacity; y/z/w reserved.
+                    new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(), 0.0f, 0.0f, 0.0f)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

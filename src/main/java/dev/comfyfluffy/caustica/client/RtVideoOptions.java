@@ -54,6 +54,7 @@ public final class RtVideoOptions {
             weatherParticles(),
             rainDensity(),
             waterWaves(),
+            waterOpacity(),
             // POM: the on/off toggle followed by its tuning sliders, shader-only and safe live.
             parallaxEnabled(),
             parallaxStrength(),
@@ -127,6 +128,7 @@ public final class RtVideoOptions {
             weatherParticles(),
             rainDensity(),
             waterWaves(),
+            waterOpacity(),
             handFov(),
         };
     }
@@ -371,6 +373,16 @@ public final class RtVideoOptions {
 
     private static OptionInstance<Boolean> waterWaves() {
         return bool("caustica.options.rt.waterWaves", CausticaConfig.Rt.Composite.WATER_WAVES);
+    }
+
+    /**
+     * How opaque ray-traced water is, as a percentage. 0% keeps the default near-crystal clarity;
+     * 100% makes a one-block column transmit under 2% of what is behind it. Mostly a mitigation
+     * control: DLSS Ray Reconstruction can draw a halo around translucent water in dark scenes,
+     * and dimming the transmitted light through the water is what removes it.
+     */
+    private static OptionInstance<Integer> waterOpacity() {
+        return percent("caustica.options.rt.waterOpacity", CausticaConfig.Rt.Composite.WATER_OPACITY);
     }
 
     /**

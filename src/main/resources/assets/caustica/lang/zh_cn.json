@@ -26,6 +26,8 @@
 	"caustica.options.rt.glow.tooltip": "为发光实体绘制原版发光效果轮廓（可穿墙显示）。",
 	"caustica.options.rt.waterWaves": "动态水面",
 	"caustica.options.rt.waterWaves.tooltip": "对水面法线进行动画处理，以显示移动波浪高光。",
+	"caustica.options.rt.waterOpacity": "水体不透明度",
+	"caustica.options.rt.waterOpacity.tooltip": "透过水的光量。如果在暗处 DLSS Ray Reconstruction 在水周围产生光晕，请调高此项。",
 	"caustica.options.rt.sss": "次表面散射",
 	"caustica.options.rt.sss.tooltip": "让光线穿过树叶、草等薄表面并发生散射，因此朝太阳方向看时植被会发光。仅影响提供次表面数据的材质，并在生效处增加一条阴影光线。",
 	"caustica.options.rt.weatherLighting": "天气光照",

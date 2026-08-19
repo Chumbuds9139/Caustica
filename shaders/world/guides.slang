@@ -173,8 +173,32 @@ public void setTransmissionGuide(float3 hitCamRel, float3 motionPrev, float3 nor
     gv_albedo = diffuseAlbedo;
 }
 
+// Per-channel floor for the transmittance folded into the transmitted diffuse-albedo guide. FP16
+// guide textures flush anything below ~6e-8 to zero, and a zero albedo makes every demodulating
+// consumer (DLSS-RR internally, NRD/SVGF after their own floors) divide by ~0. 1e-3 clears both
+// hazards while staying invisible: below it the transmitted lobe carries under 0.1% of the floor's
+// diffuse, so the pixel is effectively the foreground Fresnel reflection and the guide is moot.
+public static const float GUIDE_TRANSMITTANCE_MIN = 1.0e-3;
+
 // Deterministic ordinary guide behind the first transmitted interface. This is guide-only work:
 // radiance reflection/transmission continuations are queued at the first split and traced by Pass B.
+//
+// `guideFilter` arrives as the transmittance of the camera prefix (Pass A applied the same factor to
+// the split throughputs) and leaves as the transmittance of the ENTIRE refracted walk: every segment
+// multiplies in the Beer–Lambert attenuation of the medium it travelled through, exactly the factor
+// Pass B applies to the real transmitted branch over the same deterministic hops. Folding it into the
+// endpoint albedo is what keeps the denoiser's contract honest for translucent pixels:
+//
+//     colour_diffuse ≈ gAlbedo · destinationIrradiance
+//
+// The destination's irradiance is CONTINUOUS with the dry land beside the water — the absorption that
+// makes the pixel darker lives in the colour, so it must live in the albedo too, or the demodulated
+// signal the denoiser filters carries a fake luminance cliff at the waterline. DLSS-RR rebuilds that
+// cliff as a bright ring around the body of water (most visible in caves, where the transmitted floor
+// is the dominant lobe and RR's auto-exposure amplifies the dark frame), which is why the old guide —
+// the destination albedo with NO water attenuation — read as a halo around water. NRD and SVGF
+// demodulate by the same texture (and re-modulate by it downstream), so their round trip stays exact;
+// only the domain they filter in improves.
 public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                               float3 surfaceBiasNormal, MediumStack medium, float rayBias,
                               float rayConeWidth, float rayConeSpread, float3 guideFilter) {
@@ -197,6 +221,15 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
         uint material = payloadMaterial();
         float3 interfacePos = ro + direction * payload.hitT;
+        // Transmittance of the segment just traced: Beer–Lambert over the medium it travelled in
+        // (water extinction for water, one-block-reference volume extinction for glass), bounded the
+        // way evalAmbientFog bounds its optical depth so a long segment cannot denormalize exp().
+        // This replaces the old one-shot `guideFilter *= payload.albedo` per glass entry: the medium
+        // the stack pushed already encodes that tint as extinction, so applying the physical factor
+        // over the real segment length matches Pass B exactly instead of over-darkening thin panes.
+        guideFilter = max(guideFilter * exp(-min(medium.current.extinction * payload.hitT,
+                float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
+
         if (material == MATERIAL_OPAQUE || material == MATERIAL_PARTICLE) {
             float endpointRoughness = material == MATERIAL_PARTICLE
                     ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
@@ -233,9 +266,8 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                     interfaceNormal, 0.0, float3(0.0, 0.0, 0.0));
             return;
         }
-        if (!isWater && entering) {
-            guideFilter *= payload.albedo;
-        }
+        // (No per-interface tint multiply for glass here: the medium push/pop below plus the
+        // per-segment factor above applies the tint's extinction over the true segment length.)
         if (entering) {
             mediumPush(medium, entered);
         } else {

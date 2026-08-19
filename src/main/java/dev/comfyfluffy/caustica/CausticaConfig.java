@@ -583,6 +583,20 @@ public final class CausticaConfig {
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
             /**
+             * How opaque ray-traced water is, 0..1. 0 keeps the default near-crystal clarity (biome
+             * tint absorption only); 1 adds enough neutral per-block extinction that a one-block
+             * column transmits under 2% of the light behind it.
+             *
+             * <p>This is the first-class control for the DLSS Ray Reconstruction water halo: in
+             * near-dark scenes RR's reconstruction of the high-dynamic-range transmitted lobe (the
+             * torch-lit floor/rock seen through the sheet) draws a bright ring around the water
+             * body. Dimming the transmitted lobe is the only empirically verified mitigation, and
+             * this slider exposes it without resorting to a resource-pack water-tint hack. Affects
+             * the look only — guide/denoiser work is separate.
+             */
+            public static final FloatSetting WATER_OPACITY =
+                    clampedFloat("caustica.rt.waterOpacity", "composite.water-opacity", 0.0f, 0.0f, 1.0f);
+            /**
              * Shader-only Parallax Occlusion Mapping from the LabPBR {@code _n} alpha height channel.
              * The closest-hit shader marches a short ray through the height field and shades the
              * displaced texel; geometry, BLASes and terrain streaming are never touched, so toggling
