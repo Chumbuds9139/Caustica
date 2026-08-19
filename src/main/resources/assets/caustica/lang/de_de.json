@@ -26,6 +26,8 @@
 	"caustica.options.rt.glow.tooltip": "Zeichnet die Vanilla-Kontur des Glowing-Effekts (durch Wände) um leuchtende Entitäten.",
 	"caustica.options.rt.waterWaves": "Animiertes Wasser",
 	"caustica.options.rt.waterWaves.tooltip": "Animiert Wasseroberflächen-Normalen für bewegte Wellenlichter.",
+	"caustica.options.rt.waterOpacity": "Wasser-Deckkraft",
+	"caustica.options.rt.waterOpacity.tooltip": "Wie viel Licht durch Wasser fällt. Erhöhen, wenn DLSS Ray Reconstruction an dunklen Orten einen Halo um Wasser zeichnet.",
 	"caustica.options.rt.sss": "Streuung unter der Oberfläche",
 	"caustica.options.rt.sss.tooltip": "Lässt Licht durch dünne Oberflächen wie Blätter und Gras streuen, sodass Laub leuchtet, wenn man in Richtung Sonne hindurchschaut. Betrifft nur Materialien mit Subsurface-Daten und kostet dort einen zusätzlichen Schattenstrahl.",
 	"caustica.options.rt.weatherLighting": "Wetterbeleuchtung",

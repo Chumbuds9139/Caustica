@@ -127,6 +127,12 @@ public struct WorldPush {
     // Linear RGB tint of the held light, resolved per item on the CPU (RtComposite.heldLight):
     // torch warm orange, soul torch cyan, lava deep orange-red... Only read when handLight.w > 0.
     public float4   handLightColor;
+    // Water-opacity control: x is extra NEUTRAL (per-channel-equal) extinction per block added on
+    // top of the biome-tint absorption, 0 = the tuned default clarity. Higher values make water
+    // progressively less see-through (the floor/rock behind fades) — the mitigation for the halo
+    // DLSS-RR draws around translucent water in near-dark scenes, which is driven by the transmitted
+    // lobe's dynamic range. y/z/w reserved.
+    public float4   waterOpacity;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

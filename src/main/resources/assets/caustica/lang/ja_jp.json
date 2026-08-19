@@ -26,6 +26,8 @@
 	"caustica.options.rt.glow.tooltip": "発光中のエンティティに、バニラの発光効果アウトライン（壁越し）を描画します。",
 	"caustica.options.rt.waterWaves": "アニメーションする水",
 	"caustica.options.rt.waterWaves.tooltip": "水面の法線をアニメーションさせ、動く波のハイライトを表示します。",
+	"caustica.options.rt.waterOpacity": "水の不透明度",
+	"caustica.options.rt.waterOpacity.tooltip": "水を通る光の量。暗い場所で DLSS Ray Reconstruction が水の周りにハローを描く場合は上げてください。",
 	"caustica.options.rt.sss": "サブサーフェススキャタリング",
 	"caustica.options.rt.sss.tooltip": "葉や草などの薄い面を光が透過して散乱し、太陽に向かって見たときに葉が輝くようになります。サブサーフェス情報を持つマテリアルにのみ影響し、適用箇所ではシャドウレイが1本増えます。",
 	"caustica.options.rt.weatherLighting": "天候による照明",

@@ -38,6 +38,8 @@
 	"caustica.options.rt.glow.tooltip": "Draw the vanilla Glowing-effect outline (through walls) around glowing entities.",
 	"caustica.options.rt.waterWaves": "Animated Water",
 	"caustica.options.rt.waterWaves.tooltip": "Animate water-surface normals for moving wave highlights.",
+	"caustica.options.rt.waterOpacity": "Water Opacity",
+	"caustica.options.rt.waterOpacity.tooltip": "How much light passes through water. Raise this if DLSS Ray Reconstruction draws a halo around water in dark places.",
 	"caustica.options.rt.sss": "Subsurface Scattering",
 	"caustica.options.rt.sss.tooltip": "Let light scatter through thin surfaces such as leaves and grass, so foliage glows when you look through it toward the sun. Only affects materials that provide subsurface data; costs an extra shadow ray where it applies.",
 	"caustica.options.rt.weatherLighting": "Weather Lighting",

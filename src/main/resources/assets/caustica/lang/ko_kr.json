@@ -26,6 +26,8 @@
 	"caustica.options.rt.glow.tooltip": "발광 중인 엔티티 주위에 바닐라 발광 효과 윤곽선(벽 너머 표시)을 그립니다.",
 	"caustica.options.rt.waterWaves": "애니메이션 물",
 	"caustica.options.rt.waterWaves.tooltip": "움직이는 물결 하이라이트를 위해 물 표면 노멀을 애니메이션합니다.",
+	"caustica.options.rt.waterOpacity": "물 불투명도",
+	"caustica.options.rt.waterOpacity.tooltip": "물을 통과하는 빛의 양. 어두운 곳에서 DLSS Ray Reconstruction이 물 주변에 헤일로를 그리면 올리세요.",
 	"caustica.options.rt.sss": "표면 하부 산란",
 	"caustica.options.rt.sss.tooltip": "나뭇잎이나 풀처럼 얇은 표면을 빛이 투과하며 산란하도록 하여, 태양 쪽을 바라볼 때 잎이 빛나 보이게 합니다. 표면 하부 데이터를 제공하는 재질에만 적용되며, 적용되는 지점마다 그림자 광선이 하나씩 추가됩니다.",
 	"caustica.options.rt.weatherLighting": "날씨 조명",

@@ -26,6 +26,8 @@
 	"caustica.options.rt.glow.tooltip": "Disegna il contorno vanilla dell'effetto Luminescenza (attraverso i muri) attorno alle entità luminose.",
 	"caustica.options.rt.waterWaves": "Acqua animata",
 	"caustica.options.rt.waterWaves.tooltip": "Anima le normali della superficie dell'acqua per riflessi di onde in movimento.",
+	"caustica.options.rt.waterOpacity": "Opacità dell'acqua",
+	"caustica.options.rt.waterOpacity.tooltip": "Quanta luce attraversa l'acqua. Aumentala se DLSS Ray Reconstruction disegna un alone intorno all'acqua nei luoghi bui.",
 	"caustica.options.rt.sss": "Dispersione sottosuperficiale",
 	"caustica.options.rt.sss.tooltip": "Consente alla luce di diffondersi attraverso superfici sottili come foglie ed erba, così il fogliame si illumina quando lo si guarda in controluce. Interessa solo i materiali che forniscono dati di sottosuperficie e costa un raggio d'ombra aggiuntivo dove viene applicata.",
 	"caustica.options.rt.weatherLighting": "Illuminazione meteorologica",
