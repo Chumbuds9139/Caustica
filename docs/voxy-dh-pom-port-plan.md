@@ -100,6 +100,8 @@ No fork, POM é shader-only e inclui mais que deslocamento visual de UV:
 
 O fork também contém uma antiga implementação de `HeightField` para deslocamento de malha. Ela não será portada: a própria versão final do fork retorna `null` nesse gancho porque POM passou a ser inteiramente GPU/shader. O nosso objetivo é POM, não alteração de topologia ou aumento de BLAS.
 
+**Atualização (implementação atual):** o height field **não** é mais amostrado em camadas de profundidade fixas como no fork. `world.rchit.slang` (`parallaxTrace`) intersecta o campo como **geometria real**: cada texel de altura é uma coluna em caixa e o raio percorre essa grade 2D com o mesmo caminhamento Amanatides & Woo que `cloudClassicBoxes` usa para o deck clássico de nuvens. Um empilhamento de camadas não tem laterais — de lado ou muito perto dá para ver (e atravessar) as fatias — enquanto o caminhamento entrega as quatro paredes de cada coluna de graça. O hit é o **topo** da coluna (mantém o normal map LabPBR) ou uma **parede lateral**, devolvida com a normal da própria parede. O plano acima permanece válido no resto: nada de cache Java de heightmap, nada de rebuild de BLAS, e a página canônica bindless continua sendo a única fonte de altura.
+
 ---
 
 ## Arquitetura alvo

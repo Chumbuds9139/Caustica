@@ -116,7 +116,7 @@ public struct WorldPush {
     public uint64_t cloudCellsAddr;
     // Shader-only Parallax Occlusion Mapping (LabPBR _n alpha height field). Geometry and BLASes are
     // never rebuilt; a zero relief depth disables the effect entirely.
-    public float4   parallaxParams;   // x relief depth, y height-march layer count, z unused, w max distance
+    public float4   parallaxParams;   // x relief depth, y max texel crossings, z unused, w max distance
     public uint     dimension;        // DIMENSION_OVERWORLD / DIMENSION_NETHER / DIMENSION_END
     public uint     featureFlags;     // FEATURE_* toggles resolved from CausticaConfig
     // Analytic held-item light: xyz position in the same rebased space as camOffset, w packed
@@ -158,10 +158,20 @@ public static const uint FEATURE_FOG = 256u;             // masked distance fog 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
 public static const uint WORLD_FLAG_WAVES = 16u;   // bit4: animated water wave normals
-public static const uint WORLD_FLAG_POM_SMOOTHING = 32u; // bit5: bilinear LabPBR height/normal sampling
-// Extra sharpening avoided: smooth POM samples the height field slightly above the exact ray-cone LOD
-// so pixel-art height cliffs do not alias into stairstepped relief.
-public static const float PARALLAX_SMOOTH_LOD_BIAS = 0.35;
+public static const uint WORLD_FLAG_POM_SMOOTHING = 32u; // bit5: bilinear LabPBR normal/surface sampling
+// POM walks the LabPBR height field as a grid of per-texel box columns (world.rchit parallaxTrace), so
+// the walk is bounded by texel crossings rather than by a fixed layer count: a head-on view resolves in
+// one step and only grazing views walk far. parallaxParams.y carries the budget RtComposite derives
+// from the relief depth; these bounds keep a bad push value from either killing the effect or letting a
+// single hit sample the height page an unbounded number of times.
+public static const int PARALLAX_MIN_CROSSINGS = 8;
+public static const int PARALLAX_MAX_CROSSINGS = 128;
+// How far a column side wall leans back toward the face it stands on. Raygen reuses the shading normal
+// both to offset the next ray origin and as the cosine hemisphere's axis, so a wall reported exactly
+// parallel to the face (the geometric truth) would launch half of its bounces into the solid block and
+// print black speckle along every relief edge. Leaning the wall ~27 degrees off the face keeps the ray
+// spawn safe while the wall still shades as its own surface.
+public static const float PARALLAX_WALL_TILT = 0.5;
 
 // Flag accessors live here, next to the bit definitions, and take the push explicitly: world.rmiss
 // loads its own WorldPush and must NOT import world_core (that module declares the raygen bindings).
