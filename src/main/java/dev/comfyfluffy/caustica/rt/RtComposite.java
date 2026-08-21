@@ -147,11 +147,22 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
     }
 
-    /** Shader-only POM parameters: x relief depth (blocks), y layer count, z unused, w fade distance. */
+    /**
+     * Shader-only POM parameters: x relief depth (blocks), y max texel crossings, z unused,
+     * w fade distance.
+     *
+     * <p>The shader walks the LabPBR height field as a grid of per-texel box columns (the same
+     * Amanatides &amp; Woo walk the classic cloud deck uses), so its cost is bounded by texel crossings
+     * instead of by a fixed layer count. Deeper relief slants the walk further across the sprite before
+     * it reaches the base plane, so the budget scales with the configured depth; the shader clamps it
+     * to PARALLAX_MIN/MAX_CROSSINGS either way.
+     */
     private static Float4 parallaxParams() {
-        float depth = CausticaConfig.Rt.Composite.PARALLAX_ENABLED.value()
-                ? CausticaConfig.Rt.Composite.PARALLAX_STRENGTH.value() * 0.125f : 0.0f;
-        return new Float4(depth, 10.0f, 0.0f,
+        boolean enabled = CausticaConfig.Rt.Composite.PARALLAX_ENABLED.value();
+        float strength = CausticaConfig.Rt.Composite.PARALLAX_STRENGTH.value();
+        float depth = enabled ? strength * 0.125f : 0.0f;
+        float crossings = Math.min(128.0f, Math.max(16.0f, Math.round(32.0f * Math.max(1.0f, strength))));
+        return new Float4(depth, crossings, 0.0f,
                 CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.value());
     }
 
@@ -1462,7 +1473,7 @@ public final class RtComposite {
                 flags |= 0b10000; // W1: animated water wave normals
             }
             if (CausticaConfig.Rt.Composite.PARALLAX_SMOOTHING.value()) {
-                flags |= 0b100000; // bit5: bilinear LabPBR height/normal sampling for POM
+                flags |= 0b100000; // bit5: bilinear LabPBR normal/surface sampling (POM columns stay texel-exact)
             }
 
             // W1/W2 water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint
@@ -1563,7 +1574,7 @@ public final class RtComposite {
                     clouds.anchor(),
                     clouds.color(),
                     cloudCellsAddress,
-                    // Shader-only POM: x relief depth (blocks), y fixed layer count, w fade distance.
+                    // Shader-only POM: x relief depth (blocks), y max texel crossings, w fade distance.
                     parallaxParams(),
                     dimension,
                     featureFlags(),

@@ -123,7 +123,9 @@ struct Surface {
 // Canonical material pages use a compact page index shared by their three dedicated arrays.
 // When height-map smoothing is disabled (WORLD_FLAG_POM_SMOOTHING off), every LabPBR channel snaps to
 // exact mip texel centres, so "off" is genuinely pixel-aligned rather than merely applying nearest
-// filtering to the height while leaving the mapped normals smooth.
+// filtering to some channels while leaving the mapped normals smooth. The height field itself is not
+// affected by the toggle any more: POM intersects it as per-texel columns, which is texel-exact by
+// construction (parallaxColumnHeight).
 bool pomSmoothingEnabled() {
     return (ConstPtr<WorldPush>(pc.worldPushAddr)[0].flags & WORLD_FLAG_POM_SMOOTHING) != 0u;
 }
@@ -153,29 +155,78 @@ float4 samplePageNormalAo(uint page, float2 uv, float lod) {
     return pageTex.SampleLevel(uv, lod);
 }
 
-// LabPBR stores height in the alpha channel of the _n texture; it shares the normalAo page.
-float samplePageHeight(uint page, float2 uv, float lod) {
-    Sampler2D pageTex = materialNormalAoTex[NonUniformResourceIndex(page)];
-    if (!pomSmoothingEnabled()) uv = snapUvToTexelCentre(pageTex, uv, lod);
-    return pageTex.SampleLevel(uv, lod).a;
+// ---- Parallax Occlusion Mapping -------------------------------------------------------------------
+//
+// The LabPBR height field (alpha of the _n page) is intersected as REAL geometry, exactly the way the
+// classic cloud deck is (see cloudClassicBoxes in clouds.slang): every height texel is a box column
+// standing on the base plane, and the view ray walks that 2D texel grid — Amanatides & Woo, the same
+// walk the cloud cells use — stopping at the first column it cannot pass. That is what a layer march
+// fundamentally cannot do: sampling the field at N fixed depths only ever produces a stack of flat
+// slices, so a grazing or very close view sees the slices themselves, and sees THROUGH them, because a
+// layer has no sides. Walking the grid gives every texel its four side walls for free. The hit is
+// either a column TOP (flat, keeps the LabPBR normal map) or a column SIDE WALL, reported with the
+// wall's own normal so it shades — and visually occludes — like the solid face it stands for.
+//
+// The base plane at relief depth 1 closes the volume, so the walk always terminates on a surface; a
+// ray never escapes out of the bottom of the field.
+//
+// Cost per step is the same single height sample the layer march paid, but a step is now a texel
+// crossing: a head-on view resolves in one sample instead of always paying the full layer count, and
+// only grazing views walk far. parallaxParams.y bounds that walk (see PARALLAX_MIN/MAX_CROSSINGS).
+
+struct ParallaxHit {
+    float2 uv;      // atlas UV to shade with (displaced when the height field moved the hit)
+    float3 normal;  // world-space normal of the surface that was actually hit
+    bool wall;      // true when a column side wall was hit: `normal` is a tangent axis, not the face normal
+};
+
+ParallaxHit parallaxFlat(float2 atlasUv, float3 geometricNormal) {
+    ParallaxHit hit;
+    hit.uv = atlasUv;
+    hit.normal = geometricNormal;
+    hit.wall = false;
+    return hit;
 }
 
-// Parallax Occlusion Mapping: trace a short view-space ray through the LabPBR height field and return
-// a displaced albedo UV. The configured camera distance keeps full relief through 80% of its range,
-// then fades continuously so the cutoff cannot visibly pop. Fade before the sprite boundary and reject
-// rays that leave it: clamping a marching ray to the edge stretches the last texel column into long
-// spikes and makes it pop as the camera moves.
-float2 parallaxUv(MaterialHeader header, float2 atlasUv, float lod, float3 geometricNormal,
-        float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv1, float2 uv2, float3 vdir) {
+// Height of one column. The columns ARE texels, so this always samples the texel centre of a whole mip
+// level: a bilinear tap between two texels would round the box corners back off and reintroduce exactly
+// the smeared, sideless relief the grid walk exists to remove. Out-of-range cells wrap into the sprite
+// so the caller can walk past the sprite border without ever addressing a neighbouring atlas sprite.
+float parallaxColumnHeight(MaterialHeader header, int2 cell, float2 grid, float mip) {
+    float2 wrapped = float2(cell) - floor(float2(cell) / grid) * grid;
+    float2 pageUv = header.materialUv.xy + ((wrapped + 0.5) / grid) * header.materialUv.zw;
+    return materialNormalAoTex[NonUniformResourceIndex(header.texturePage)].SampleLevel(pageUv, mip).a;
+}
+
+// Column grid of one sprite at a whole mip level: one cell per height texel.
+float2 parallaxGrid(MaterialHeader header, float mip) {
+    uint pageWidth, pageHeight;
+    materialNormalAoTex[NonUniformResourceIndex(header.texturePage)].GetDimensions(pageWidth, pageHeight);
+    float2 pageTexels = max(float2(1.0, 1.0), floor(float2(pageWidth, pageHeight) / exp2(mip)));
+    return max(float2(1.0, 1.0), floor(pageTexels * header.materialUv.zw + 0.5));
+}
+
+// Trace the height field for one hit. The configured camera distance keeps full relief through 80% of
+// its range, then fades continuously so the cutoff cannot visibly pop.
+//
+// `repeat` says whether the sprite may tile. Block sprites do — a stone face is the same sprite the
+// next block over shows — so the walk simply continues into the wrapped texel and the relief runs
+// uninterrupted into the block border. That is what removes the old inward "suction" at block edges:
+// the previous code faded the displacement to zero over the last texels of the sprite, which squeezed
+// the whole border band toward the middle of the face. Entity textures are model atlases whose islands
+// must not bleed into each other, so they keep the narrow border fade and stop at the sprite instead.
+ParallaxHit parallaxTrace(MaterialHeader header, float2 atlasUv, float lod, float3 geometricNormal,
+        float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv1, float2 uv2, float3 vdir, bool repeat) {
+    ParallaxHit flatHit = parallaxFlat(atlasUv, geometricNormal);
     if ((header.features & MATERIAL_FEATURE_NORMAL) == 0u) {
-        return atlasUv;
+        return flatHit;
     }
 
     float2 g1 = uv1 - uv0;
     float2 g2 = uv2 - uv0;
     float det = g1.x * g2.y - g1.y * g2.x;
     if (abs(det) <= 1.0e-12) {
-        return atlasUv;
+        return flatHit;
     }
 
     float3 n = geometricNormal;
@@ -194,65 +245,124 @@ float2 parallaxUv(MaterialHeader header, float2 atlasUv, float lod, float3 geome
     float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float cameraDistance = length(hitPosition - worldPush.camOffset);
     float distanceFade = 1.0 - smoothstep(maxDistance * 0.8, maxDistance, cameraDistance);
-    float maxMaterialLod = float((header.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
     // Only suppress the singular near-horizontal case; a wider fade would override the distance slider.
     float grazingFade = smoothstep(0.002, 0.006, rawNoV);
-    float edgeDistance = min(min(localUv.x, 1.0 - localUv.x), min(localUv.y, 1.0 - localUv.y));
-    float edgeFade = smoothstep(0.015, 0.09, edgeDistance);
-    float heightScale = parallaxParams.x * distanceFade * grazingFade * edgeFade;
-    if (heightScale <= 1.0e-5) {
-        return atlasUv;
+    // Tiling sprites need no border fade at all — the walk wraps. Non-tiling (entity) sprites still get
+    // one, because for them the walk has to stop at the border and a hard stop would pop.
+    float edgeFade = 1.0;
+    if (!repeat) {
+        float edgeDistance = min(min(localUv.x, 1.0 - localUv.x), min(localUv.y, 1.0 - localUv.y));
+        edgeFade = smoothstep(0.015, 0.09, edgeDistance);
+    }
+    float reliefDepth = parallaxParams.x * distanceFade * grazingFade * edgeFade;
+    if (reliefDepth <= 1.0e-5) {
+        return flatHit;
     }
 
-    uint page = header.texturePage;
-    bool smoothing = (worldPush.flags & WORLD_FLAG_POM_SMOOTHING) != 0u;
-    float materialLod = min(smoothing ? lod + PARALLAX_SMOOTH_LOD_BIAS : floor(lod), maxMaterialLod);
-    // A view-dependent rounded layer count changes abruptly during tiny camera rotations and makes
-    // high-contrast height fields shimmer. A fixed configured count is temporally stable.
-    int layerCount = clamp(int(round(parallaxParams.y)), 4, 32);
-    float layerDepth = 1.0 / float(layerCount);
-    float2 deltaUv = (viewTs.xy / viewTs.z) * (heightScale / float(layerCount));
-    float2 currentUv = localUv;
-    float currentDepth = 0.0;
-    float sampledDepth = 1.0 - samplePageHeight(page,
-            header.materialUv.xy + currentUv * header.materialUv.zw, materialLod);
+    // Column grid: one cell per texel of the sprite at this mip. The walk needs a whole mip level (a
+    // fractional LOD would blend two differently sized grids), so the ray-cone LOD is floored here.
+    float maxMaterialLod = float((header.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
+    float mip = clamp(floor(lod), 0.0, maxMaterialLod);
+    int maxCrossings = clamp(int(round(parallaxParams.y)), PARALLAX_MIN_CROSSINGS, PARALLAX_MAX_CROSSINGS);
+    float2 grid = parallaxGrid(header, mip);
+
+    // Walk parameter is the relief depth itself: z = 0 at the geometric face, z = 1 at the base plane.
+    // fullDelta is the local UV the ray travels over that whole range, so the crossings the walk would
+    // need are its extent in texels. A very grazing view of a high-resolution pack can need thousands;
+    // rather than truncate the ray (which smears a band exactly where the relief is most visible), drop
+    // to a coarser mip — fewer, bigger columns — until the full depth range fits inside the budget.
+    float2 fullDelta = -(viewTs.xy / viewTs.z) * reliefDepth;
+    float needed = abs(fullDelta.x) * grid.x + abs(fullDelta.y) * grid.y + 1.0;
+    if (needed > float(maxCrossings)) {
+        mip = min(mip + ceil(log2(needed / float(maxCrossings))), maxMaterialLod);
+        grid = parallaxGrid(header, mip);
+    }
+
+    float2 texelPos = localUv * grid;
+    float2 dirTexels = fullDelta * grid;   // texels travelled per unit of relief depth
+    int2 cell = clamp(int2(floor(texelPos)), int2(0, 0), int2(grid) - int2(1, 1));
+    int2 stepDir = int2(dirTexels.x >= 0.0 ? 1 : -1, dirTexels.y >= 0.0 ? 1 : -1);
+    float2 tDelta = float2(abs(dirTexels.x) > 1.0e-8 ? 1.0 / abs(dirTexels.x) : 1.0e30,
+                           abs(dirTexels.y) > 1.0e-8 ? 1.0 / abs(dirTexels.y) : 1.0e30);
+    float2 edge = float2(stepDir.x > 0 ? float(cell.x) + 1.0 : float(cell.x),
+                         stepDir.y > 0 ? float(cell.y) + 1.0 : float(cell.y));
+    float2 tMax = float2(abs(dirTexels.x) > 1.0e-8 ? (edge.x - texelPos.x) / dirTexels.x : 1.0e30,
+                         abs(dirTexels.y) > 1.0e-8 ? (edge.y - texelPos.y) / dirTexels.y : 1.0e30);
+
+    float enterDepth = 0.0;   // depth at which the ray entered `cell`
+    int enterAxis = -1;       // 0 = crossed a u wall, 1 = a v wall, -1 = started here (no wall behind it)
+    float hitDepth = 0.0;
+    int wallAxis = -1;
+    bool resolved = false;
 
     [loop]
-    for (int stepIndex = 0; stepIndex < 32 && currentDepth < sampledDepth; ++stepIndex) {
-        float2 nextUv = currentUv - deltaUv;
-        if (any(nextUv < float2(0.0, 0.0)) || any(nextUv > float2(1.0, 1.0))) {
-            return atlasUv;
+    for (int crossing = 0; crossing < maxCrossings; ++crossing) {
+        // A column occupies [top, 1] in depth; top == 0 is a texel flush with the face, top == 1 an
+        // empty cell that only the base plane closes.
+        float top = 1.0 - parallaxColumnHeight(header, cell, grid, mip);
+        float exitDepth = min(min(tMax.x, tMax.y), 1.0);
+        if (exitDepth >= top) {
+            // The ray reaches this column's height before leaving the cell, so this is the hit. If it
+            // was already below the top when it entered, it never saw the top face: it ran into the
+            // side WALL at the cell boundary — the surface a layer march has no representation for.
+            resolved = true;
+            if (enterAxis >= 0 && enterDepth > top) {
+                hitDepth = enterDepth;
+                wallAxis = enterAxis;
+            } else {
+                hitDepth = max(top, enterDepth);
+            }
+            break;
         }
-        currentUv = nextUv;
-        currentDepth += layerDepth;
-        sampledDepth = 1.0 - samplePageHeight(page,
-                header.materialUv.xy + currentUv * header.materialUv.zw, materialLod);
+        if (tMax.x < tMax.y) {
+            enterDepth = tMax.x;
+            cell.x += stepDir.x;
+            tMax.x += tDelta.x;
+            enterAxis = 0;
+        } else {
+            enterDepth = tMax.y;
+            cell.y += stepDir.y;
+            tMax.y += tDelta.y;
+            enterAxis = 1;
+        }
+        if (!repeat && (any(cell < int2(0, 0)) || any(cell >= int2(grid)))) {
+            return flatHit; // model atlas: leaving the sprite must not sample a neighbouring island
+        }
+    }
+    if (!resolved) {
+        // Crossing budget spent (very grazing view, very deep relief, or a high-resolution pack): stop
+        // the ray where it stands instead of snapping back to the flat face, which would pop.
+        hitDepth = enterDepth;
     }
 
-    // Smooth mode refines the crossing. Pixel mode intentionally keeps the discrete layer hit so it
-    // cannot reintroduce interpolated/rounded relief after the user disabled smoothing.
-    float2 frontUv = currentUv + deltaUv;
-    float frontDepth = max(0.0, currentDepth - layerDepth);
-    float2 backUv = currentUv;
-    float backDepth = currentDepth;
-    if (smoothing) {
-        [unroll]
-        for (int refine = 0; refine < 4; ++refine) {
-            float2 midUv = (frontUv + backUv) * 0.5;
-            float midDepth = (frontDepth + backDepth) * 0.5;
-            float mapDepth = 1.0 - samplePageHeight(page,
-                    header.materialUv.xy + midUv * header.materialUv.zw, materialLod);
-            if (midDepth < mapDepth) {
-                frontUv = midUv;
-                frontDepth = midDepth;
-            } else {
-                backUv = midUv;
-                backDepth = midDepth;
-            }
+    float2 hitTexelPos = texelPos + dirTexels * hitDepth;
+    if (wallAxis >= 0) {
+        // A wall belongs to the column it closes, so shade it with that column's own texel: sampling
+        // exactly on the boundary would blend in the neighbour the ray just left.
+        if (wallAxis == 0) {
+            hitTexelPos.x = float(cell.x) + 0.5;
+        } else {
+            hitTexelPos.y = float(cell.y) + 0.5;
         }
     }
-    float2 displacedLocalUv = smoothing ? (frontUv + backUv) * 0.5 : currentUv;
-    return header.albedoUv.xy + displacedLocalUv / header.albedoUv.zw;
+    float2 hitLocalUv = hitTexelPos / grid;
+    hitLocalUv = repeat ? hitLocalUv - floor(hitLocalUv)
+                        : clamp(hitLocalUv, float2(0.0, 0.0), float2(1.0, 1.0));
+
+    ParallaxHit hit;
+    hit.uv = header.albedoUv.xy + hitLocalUv / header.albedoUv.zw;
+    hit.wall = wallAxis >= 0;
+    hit.normal = geometricNormal;
+    if (wallAxis >= 0) {
+        // A wall faces back along the axis the ray crossed, so it always faces the viewer by
+        // construction. It is tilted PARALLAX_WALL_TILT toward the face because the renderer reuses the
+        // shading normal as the ray-spawn basis: a normal exactly parallel to the face would offset the
+        // next bounce along the face plane and send half of its cosine hemisphere into the solid block.
+        // The tangent-space normal map stays out of it — it is authored for the face, not for a side.
+        float3 wall = wallAxis == 0 ? T * float(-stepDir.x) : B * float(-stepDir.y);
+        hit.normal = normalize(wall + geometricNormal * PARALLAX_WALL_TILT);
+    }
+    return hit;
 }
 
 // The sole terrain/entity material evaluation path. LabPBR categorical bytes have already been
@@ -567,9 +677,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         }
         // POM on the opaque entity BLAS geometry only; cutout/translucent entities keep the exact UV
         // whose alpha the any-hit shader already validated (block-entity models like chests are opaque).
+        // Entity textures are model atlases, so the height walk may not tile out of the sprite.
+        ParallaxHit entityParallax = parallaxFlat(euvCoord, n);
         if (GeometryIndex() == 0u && material == MATERIAL_OPAQUE) {
-            euvCoord = parallaxUv(header, euvCoord, entityLod, n, ep0, ep1, ep2,
-                    euv[e0], euv[e1], euv[e2], vdir);
+            entityParallax = parallaxTrace(header, euvCoord, entityLod, n, ep0, ep1, ep2,
+                    euv[e0], euv[e1], euv[e2], vdir, false);
+            euvCoord = entityParallax.uv;
         }
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
         float3 baseAlbedo = srgbToLinear(entityTexel.rgb) * pr.tint.rgb;
@@ -578,7 +691,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, n,
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
                 header.params.x, header.params.y, pr.normal.w, material == MATERIAL_OPAQUE);
-        n = surface.normal;
+        // A column side wall is real geometry the normal map knows nothing about: it wins over the
+        // mapped normal, which is authored for the face the column stands on.
+        n = entityParallax.wall ? entityParallax.normal : surface.normal;
 
         payload.albedo = half3(albedo * surface.ao);
         payload.normal = half3(n);
@@ -648,9 +763,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
     // Parallax Occlusion Mapping: restrict relief to the opaque geometry bucket so leaves, plants,
     // grass overlays and translucent blocks cannot shade a different texel than the one that
-    // established their any-hit coverage.
+    // established their any-hit coverage. Block sprites tile, so the height walk may wrap.
+    ParallaxHit terrainParallax = parallaxFlat(uv, n);
     if (GeometryIndex() == BUCKET_SOLID && materialHeader.model == MATERIAL_OPAQUE) {
-        uv = parallaxUv(materialHeader, uv, blockLod, n, tp0, tp1, tp2, uv0, uv1, uv2, vdir);
+        terrainParallax = parallaxTrace(materialHeader, uv, blockLod, n, tp0, tp1, tp2,
+                uv0, uv1, uv2, vdir, true);
+        uv = terrainParallax.uv;
     }
 
     // Stained glass / ice: a thin colored filter resolved in raygen
@@ -754,6 +872,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // it after normal mapping so decal projection uses the same shading orientation as the old path.
     if (material != MATERIAL_WATER) {
         payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
+    }
+    // Column side walls replace the mapped normal only after the decal, so the crack projection keeps
+    // choosing its axis from the face the block is actually broken on.
+    if (terrainParallax.wall) {
+        n = terrainParallax.normal;
     }
     payload.normal = half3(n);
     payload.f0 = half3(surface.f0);
