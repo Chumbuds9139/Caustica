@@ -67,7 +67,7 @@ public uint sharcHash(uint3 cell) {
 public uint3 sharcCell(WorldPush push, float3 pos) {
     float cellSize = push.sharcParams.x;
     float3 floored = floor(pos / cellSize);
-    return uint3(floored.x, floored.y, floored.z);
+    return uint3(uint(floored.x), uint(floored.y), uint(floored.z));
 }
 
 // Looks up an entry for `pos`/`n` and returns the cached radiance scaled by the normal agreement.
