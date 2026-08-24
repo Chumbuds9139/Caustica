@@ -153,9 +153,5 @@
 	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Frame Generation mediante el motor propio de Caustica: esta GPU no tiene DLSS Frame Generation (solo series RTX 40/50), así que el motor nativo de interpolación por vectores de movimiento de Caustica toma el relevo — mismo interruptor, multiplicador hasta 4x. Cuesta un poco más de GPU y latencia.",
 	"caustica.options.rt.reflex": "NVIDIA Reflex",
 	"caustica.options.rt.reflex.tooltip": "NVIDIA Reflex (baja latencia): el driver sincroniza la entrega de frames para que terminen justo a tiempo para la pantalla — menos retraso entre tu entrada y la imagen. Combina especialmente bien con Frame Generation (FG cuesta ~un frame de latencia; Reflex elimina el resto de la cola). Puede reducir ligeramente los FPS máximos — es el intercambio latencia/rendimiento.",
-	"caustica.options.rt.reflex.unsupported.tooltip": "No disponible: la extensión VK_NV_low_latency2 no se activó en este dispositivo (requiere un driver NVIDIA reciente).",
-	"caustica.options.rt.fogDay": "Day Fog",
-	"caustica.options.rt.fogDay.tooltip": "How much fog appears during the day. 0% = no day fog, 50% = light fog (default), 100% = normal calibrated density, 200% = double density. Caves stay clear via sky-exposure mask, so this never fogs interiors.",
-	"caustica.options.rt.fogNight": "Night Fog",
-	"caustica.options.rt.fogNight.tooltip": "How much fog appears at night. 0% = no night fog, 100% = normal density (default), 200% = very thick. Night defaults higher than day so it feels more misty/gloomy. Also respects the cave mask."
+	"caustica.options.rt.reflex.unsupported.tooltip": "No disponible: la extensión VK_NV_low_latency2 no se activó en este dispositivo (requiere un driver NVIDIA reciente)."
 }

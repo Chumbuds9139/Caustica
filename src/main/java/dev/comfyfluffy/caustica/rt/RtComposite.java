@@ -2404,12 +2404,9 @@ public final class RtComposite {
         float day = Math.clamp(dayFactor, 0f, 1f);
         float rain = weather.rain();
 
-        // Day/night fog are now player-adjustable: day is light by default, night denser.
-        // 0 = no fog, 1 = calibrated density (horizon transmittance), up to 2 = twice dense.
-        // Caves stay clear via maskedFogDepth (sky-exposure mask) so this never fogs interiors.
-        float dayFogSetting = CausticaConfig.Rt.Composite.FOG_DAY.value();
-        float nightFogSetting = CausticaConfig.Rt.Composite.FOG_NIGHT.value();
-        float density = baseDensity * Mth.lerp(day, nightFogSetting, dayFogSetting);
+        // Night deepens the haze a little and darkens it a lot: the same amount of air, lit by the moon
+        // instead of the sun.
+        float density = baseDensity * Mth.lerp(day, NIGHT_FOG_DENSITY_SCALE, 1.0f);
         float[] clear = new float[3];
         for (int i = 0; i < 3; i++) {
             clear[i] = Mth.lerp(day, FOG_NIGHT_COLOR[i], FOG_DAY_COLOR[i]);
