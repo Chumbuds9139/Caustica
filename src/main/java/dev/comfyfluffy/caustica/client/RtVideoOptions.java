@@ -67,6 +67,8 @@ public final class RtVideoOptions {
             // pairs them two per row, so they read as one block rather than scattered checkboxes.
             subsurfaceScattering(),
             fog(),
+            fogDay(),
+            fogNight(),
             weatherLighting(),
             // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
             // the other two reads immediately before them.
@@ -142,6 +144,8 @@ public final class RtVideoOptions {
         return new OptionInstance<?>[] {
             subsurfaceScattering(),
             fog(),
+            fogDay(),
+            fogNight(),
             weatherLighting(),
             metallicShininess(),
         };
@@ -403,6 +407,35 @@ public final class RtVideoOptions {
     /** Selective outdoor distance fog; cave and indoor pixels are excluded by a depth/sky mask. */
     private static OptionInstance<Boolean> fog() {
         return bool("caustica.options.rt.fog", CausticaConfig.Rt.Composite.FOG);
+    }
+
+    /**
+     * Day fog density, 0..200% (0 = no fog, 100% = calibrated, 200% = double).
+     * Light fog by default. Caves stay clear via sky-exposure mask.
+     */
+    private static OptionInstance<Integer> fogDay() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOG_DAY;
+        return new OptionInstance<>(
+            "caustica.options.rt.fogDay",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.fogDay.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, Component.literal(value + "%")),
+            new OptionInstance.IntRange(0, 200),
+            Math.clamp(Math.round(setting.value() * 100.0f), 0, 200),
+            value -> setting.set(value / 100.0f));
+    }
+
+    /**
+     * Night fog density, 0..200%. More intense than day by default.
+     */
+    private static OptionInstance<Integer> fogNight() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOG_NIGHT;
+        return new OptionInstance<>(
+            "caustica.options.rt.fogNight",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.fogNight.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, Component.literal(value + "%")),
+            new OptionInstance.IntRange(0, 200),
+            Math.clamp(Math.round(setting.value() * 100.0f), 0, 200),
+            value -> setting.set(value / 100.0f));
     }
 
     /** Rain/thunderstorm sun-and-sky dimming. Off keeps clear-sky lighting in every weather state. */

@@ -15,10 +15,22 @@ public static const float3 WATER_ABSORB_FLOOR = float3(0.015, 0.010, 0.008);
 // block of water transmits exp(-4) ~= 1.8% - effectively an opaque dark mirror; the low end of the
 // slider gives gentle per-block dimming (exp(-0.4) ~= 67% at 0.1).
 public static const float WATER_OPACITY_EXTINCTION_MAX = 4.0;
+public float3 waterExtinctionBase(float3 tint) {
+    return WATER_ABSORB_FLOOR + WATER_DENSITY * (float3(1.0, 1.0, 1.0) - clamp(tint, 0.0, 1.0));
+}
+
 public float3 waterExtinction(float3 tint) {
+    float3 base = waterExtinctionBase(tint);
+    // When the eye is inside water, keep the medium's own extinction at its natural
+    // clarity. The opacity slider is meant to dim the transmitted lobe seen THROUGH
+    // water from the outside (fixing the DLSS-RR halo), not to make the water you
+    // are swimming in opaque black. At 100% the extra is 4.0 per block -> exp(-40)
+    // over 10 blocks would be ~4e-18, i.e. a black fog when submerged.
+    if (cameraSubmerged()) {
+        return base;
+    }
     float extra = worldPush.waterOpacity.x * WATER_OPACITY_EXTINCTION_MAX;
-    return WATER_ABSORB_FLOOR + WATER_DENSITY * (float3(1.0, 1.0, 1.0) - clamp(tint, 0.0, 1.0))
-            + float3(extra, extra, extra);
+    return base + float3(extra, extra, extra);
 }
 
 // A non-water dielectric's tint is a filter over one block of travel rather than a biome water colour, so

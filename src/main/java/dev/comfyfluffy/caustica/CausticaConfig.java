@@ -57,7 +57,8 @@ public final class CausticaConfig {
         @SuppressWarnings("unused")
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
-            Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
+            Rt.Composite.FOG, Rt.Composite.FOG_DAY, Rt.Composite.FOG_NIGHT,
+            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES,
             Rt.DlssRr.ENABLED, Rt.DlssRr.PRESET, Rt.DlssRr.QUALITY, Rt.Fg.ENABLED,
@@ -666,6 +667,20 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting FOG =
                     bool("caustica.rt.fog", "composite.fog", true);
+            /**
+             * Day fog intensity. 0 = no fog during day, 1 = normal calibrated density
+             * (horizon transmittance), up to 2 = twice as dense. Light day fog by default,
+             * heavier at night. Caves stay clear via the sky-exposure mask, so this never
+             * fogs interiors.
+             */
+            public static final FloatSetting FOG_DAY =
+                    clampedFloat("caustica.rt.fogDay", "composite.fog-day", 0.5f, 0.0f, 2.0f);
+            /**
+             * Night fog intensity. Same scale as day, but defaults higher so night feels
+             * more misty/gloomy. 0 disables night fog, 2 makes it very thick.
+             */
+            public static final FloatSetting FOG_NIGHT =
+                    clampedFloat("caustica.rt.fogNight", "composite.fog-night", 1.0f, 0.0f, 2.0f);
             /**
              * Weather-driven lighting. Rain and thunderstorms attenuate the sun/moon NEE radiance,
              * darken and desaturate the sky toward an overcast grey, hide the celestial discs and the

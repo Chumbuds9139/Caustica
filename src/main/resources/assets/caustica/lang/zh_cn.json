@@ -153,5 +153,9 @@
 	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "通过 Caustica 自有引擎的帧生成：此 GPU 没有 DLSS Frame Generation（仅限 RTX 40/50 系列），因此由 Caustica 的原生运动矢量插值引擎接管 —— 同一开关，倍率最高 4x。会多消耗一点 GPU 和延迟。",
 	"caustica.options.rt.reflex": "NVIDIA Reflex",
 	"caustica.options.rt.reflex.tooltip": "NVIDIA Reflex 低延迟模式：驱动会调度帧提交，让帧恰好赶在显示前完成——减少输入到画面之间的延迟。与帧生成特别搭配（帧生成会增加约一帧的延迟，Reflex 则消除其余的队列延迟）。可能会略微降低最高 FPS——这是延迟与吞吐的权衡。",
-	"caustica.options.rt.reflex.unsupported.tooltip": "不可用：此设备未启用 VK_NV_low_latency2 扩展（需要较新的 NVIDIA 驱动）。"
+	"caustica.options.rt.reflex.unsupported.tooltip": "不可用：此设备未启用 VK_NV_low_latency2 扩展（需要较新的 NVIDIA 驱动）。",
+	"caustica.options.rt.fogDay": "Day Fog",
+	"caustica.options.rt.fogDay.tooltip": "How much fog appears during the day. 0% = no day fog, 50% = light fog (default), 100% = normal calibrated density, 200% = double density. Caves stay clear via sky-exposure mask, so this never fogs interiors.",
+	"caustica.options.rt.fogNight": "Night Fog",
+	"caustica.options.rt.fogNight.tooltip": "How much fog appears at night. 0% = no night fog, 100% = normal density (default), 200% = very thick. Night defaults higher than day so it feels more misty/gloomy. Also respects the cave mask."
 }

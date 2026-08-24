@@ -153,5 +153,9 @@
 	"caustica.options.rt.frameGeneration.nativeFallback.tooltip": "Caustica 자체 엔진을 통한 프레임 생성: 이 GPU에는 DLSS Frame Generation이 없으므로(RTX 40/50 시리즈 전용), Caustica의 네이티브 모션 벡터 보간 엔진이 대신합니다 — 동일한 토글, 배율은 최대 4x. GPU 부하와 지연이 약간 늘어납니다.",
 	"caustica.options.rt.reflex": "NVIDIA Reflex",
 	"caustica.options.rt.reflex.tooltip": "NVIDIA Reflex 저지연 모드: 드라이버가 프레임 제출을 조율하여 디스플레이에 딱 맞춰 프레임이 끝나도록 합니다 — 입력과 화면 사이의 지연이 줄어듭니다. 프레임 생성과 특히 잘 어울립니다(FG는 렌더링된 프레임 하나 정도의 지연을 더하고, Reflex는 나머지 큐를 제거합니다). 최대 FPS가 약간 줄어들 수 있습니다 — 지연/처리량의 교환입니다.",
-	"caustica.options.rt.reflex.unsupported.tooltip": "사용 불가: 이 기기에서 VK_NV_low_latency2 확장이 활성화되지 않았습니다(최신 NVIDIA 드라이버 필요)."
+	"caustica.options.rt.reflex.unsupported.tooltip": "사용 불가: 이 기기에서 VK_NV_low_latency2 확장이 활성화되지 않았습니다(최신 NVIDIA 드라이버 필요).",
+	"caustica.options.rt.fogDay": "Day Fog",
+	"caustica.options.rt.fogDay.tooltip": "How much fog appears during the day. 0% = no day fog, 50% = light fog (default), 100% = normal calibrated density, 200% = double density. Caves stay clear via sky-exposure mask, so this never fogs interiors.",
+	"caustica.options.rt.fogNight": "Night Fog",
+	"caustica.options.rt.fogNight.tooltip": "How much fog appears at night. 0% = no night fog, 100% = normal density (default), 200% = very thick. Night defaults higher than day so it feels more misty/gloomy. Also respects the cave mask."
 }
