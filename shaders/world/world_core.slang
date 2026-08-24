@@ -60,6 +60,15 @@ public bool payloadDynamicEntity() { return (payload.flags & PAYLOAD_DYNAMIC_ENT
 // any threshold compared against it is an alpha threshold.
 public float payloadRoughness() { return unpackHalf2(payload.roughMetal).x; }
 public float payloadMetalness() { return unpackHalf2(payload.roughMetal).y; }
+
+// Metallic Shininess is an optional polish pass, not an emission/bloom boost. It blends in only
+// where the resource pack authored metalness, keeping dielectric and partially-metallic materials
+// physically sensible. The 15% floor gives a strongly polished look without turning every metal into
+// a perfectly sharp, noisy delta mirror.
+public float metallicShininessRoughness(float roughness, float metalness) {
+    float polish = saturate(worldPush.materialParams.x) * saturate(metalness);
+    return clamp(roughness * lerp(1.0, 0.15, polish), 0.0, 1.0);
+}
 public float payloadEmission() { return unpackHalf2(payload.emissionSss).x; }
 public float payloadSss() { return unpackHalf2(payload.emissionSss).y; }
 public float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }

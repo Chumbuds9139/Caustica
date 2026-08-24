@@ -133,6 +133,9 @@ public struct WorldPush {
     // DLSS-RR draws around translucent water in near-dark scenes, which is driven by the transmitted
     // lobe's dynamic range. y/z/w reserved.
     public float4   waterOpacity;
+    // Material appearance controls: x is extra polish for authored metallic surfaces, 0..1.
+    // It only changes the GGX roughness of metals; non-metals keep their authored response.
+    public float4   materialParams;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

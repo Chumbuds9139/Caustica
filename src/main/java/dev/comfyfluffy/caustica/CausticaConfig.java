@@ -57,7 +57,7 @@ public final class CausticaConfig {
         @SuppressWarnings("unused")
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
-            Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER,
+            Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
@@ -98,6 +98,9 @@ public final class CausticaConfig {
                         + " thunderstorms. Off keeps clear-sky lighting in all weather.\n"
                         + " denoiser: the DLSS Ray Reconstruction denoise+upscale filter. Off presents the raw\n"
                         + " path-traced image at full resolution (noisy reference view). Requires dlss-rr.enabled.");
+        FILE.setComment("materials",
+                " Material appearance controls. metallic-shininess reduces roughness only on authored metallic\n"
+                        + " surfaces; 0 preserves resource-pack material data and 1 gives metals their strongest shine.");
         FILE.setComment("terrain",
                 " Render-thread terrain work is bounded by dispatch/result counts per streaming pass.\n"
                         + " Buffer fill and BLAS/OMM preparation run on workers. max-inflight-sections bounds\n"
@@ -596,6 +599,14 @@ public final class CausticaConfig {
              */
             public static final FloatSetting WATER_OPACITY =
                     clampedFloat("caustica.rt.waterOpacity", "composite.water-opacity", 0.0f, 0.0f, 1.0f);
+            /**
+             * Extra polish applied only to surfaces authored as metallic. 0 preserves the resource
+             * pack's LabPBR roughness; 1 reduces metallic roughness to 15% of its authored value.
+             * This changes the GGX lobe rather than adding bloom, so it makes reflections sharper
+             * without brightening non-metal materials or light sources.
+             */
+            public static final FloatSetting METALLIC_SHININESS =
+                    clampedFloat("caustica.rt.metallicShininess", "materials.metallic-shininess", 0.0f, 0.0f, 1.0f);
             /**
              * Shader-only Parallax Occlusion Mapping from the LabPBR {@code _n} alpha height channel.
              * The closest-hit shader marches a short ray through the height field and shades the

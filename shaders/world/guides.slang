@@ -231,11 +231,13 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                 float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
 
         if (material == MATERIAL_OPAQUE || material == MATERIAL_PARTICLE) {
+            float endpointMetalness = material == MATERIAL_PARTICLE
+                    ? 0.0 : clamp(payloadMetalness(), 0.0, 1.0);
             float endpointRoughness = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
+                    ? 1.0 : metallicShininessRoughness(clamp(payloadRoughness(), 0.0, 1.0), endpointMetalness);
             float3 endpointAlbedo = material == MATERIAL_PARTICLE
                     ? payload.albedo
-                    : payload.albedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+                    : payload.albedo * (1.0 - endpointMetalness);
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
                     payload.normal, endpointRoughness, guideFilter * endpointAlbedo);
             return;

@@ -67,12 +67,12 @@ public PathSegment tracePrimary(PathSegment seg,
         }
         uint material = payloadMaterial();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
-            float rough = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
-            bool exactSpecular = material == MATERIAL_OPAQUE && isDeltaAlpha(rough);
-            rough = exactSpecular ? 0.0 : rough;
             float metal = material == MATERIAL_PARTICLE
                     ? 0.0 : clamp(payloadMetalness(), 0.0, 1.0);
+            float rough = material == MATERIAL_PARTICLE
+                    ? 1.0 : metallicShininessRoughness(clamp(payloadRoughness(), 0.0, 1.0), metal);
+            bool exactSpecular = material == MATERIAL_OPAQUE && isDeltaAlpha(rough);
+            rough = exactSpecular ? 0.0 : rough;
             float3 diffAlb = material == MATERIAL_PARTICLE
                     ? float3(payload.albedo) : float3(payload.albedo) * (1.0 - metal);
             if (bounce == 0) {
