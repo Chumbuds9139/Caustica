@@ -9,8 +9,10 @@ import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import dev.comfyfluffy.caustica.client.gui.RtSharcOptionsScreen;
 import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
 import dev.comfyfluffy.caustica.compat.VoxyCompat;
+import dev.comfyfluffy.caustica.rt.RtSharc;
 import dev.comfyfluffy.caustica.rt.terrain.RtDistantHorizonsTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.client.Minecraft;
@@ -18,6 +20,7 @@ import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -982,5 +985,151 @@ public final class RtVideoOptions {
                 CausticaConfig.Rt.Omm.ENABLED.set(value);
                 RtTerrain.requestFullClear();
             });
+    }
+
+    // ===== Experimental SHaRC (Spatially Hashed Radiance Cache) =====
+
+    /**
+     * All SHaRC tuning rows. They ride in the dedicated {@link RtSharcOptionsScreen} so the main RT
+     * screen stays compact: the experimental enable toggle + the "SHaRC Settings..." button live there,
+     * while this list holds the fine-grained cache knobs.
+     */
+    public static OptionInstance<?>[] sharcOptions() {
+        return new OptionInstance<?>[] {
+            sharcCellSize(),
+            sharcCacheEntries(),
+            sharcUpdateCoverage(),
+            sharcTemporalBlend(),
+            sharcStartBounce(),
+            sharcStrength(),
+            sharcMaxDistance(),
+            sharcFrameLifetime(),
+            sharcNormalThreshold(),
+        };
+    }
+
+    private static OptionInstance<Integer> sharcCellSize() {
+        FloatSetting setting = CausticaConfig.Rt.Sharc.CELL_SIZE;
+        return new OptionInstance<>(
+            "caustica.options.sharc.cellSize",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.cellSize.tooltip")),
+            (caption, blocks) -> Options.genericValueLabel(caption, Component.literal(blocks + " blocks")),
+            new OptionInstance.IntRange(1, 64),
+            Math.clamp(Math.round(setting.value()), 1, 64),
+            blocks -> setting.set(blocks.floatValue()));
+    }
+
+    private static OptionInstance<Integer> sharcCacheEntries() {
+        IntSetting setting = CausticaConfig.Rt.Sharc.CACHE_ENTRIES;
+        int minShift = 11; // 2048
+        int maxShift = 18; // 262144
+        int initial = Math.clamp(31 - Integer.numberOfLeadingZeros(setting.value()), minShift, maxShift);
+        return new OptionInstance<>(
+            "caustica.options.sharc.cacheEntries",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.cacheEntries.tooltip")),
+            (caption, shift) -> Options.genericValueLabel(caption,
+                    Component.literal((1 << shift) + " entries")),
+            new OptionInstance.IntRange(minShift, maxShift),
+            initial,
+            shift -> setting.set(1 << shift));
+    }
+
+    private static OptionInstance<Integer> sharcUpdateCoverage() {
+        return percent("caustica.options.sharc.updateCoverage", CausticaConfig.Rt.Sharc.UPDATE_COVERAGE);
+    }
+
+    private static OptionInstance<Integer> sharcTemporalBlend() {
+        return percent("caustica.options.sharc.temporalBlend", CausticaConfig.Rt.Sharc.TEMPORAL_BLEND);
+    }
+
+    private static OptionInstance<Integer> sharcStartBounce() {
+        IntSetting setting = CausticaConfig.Rt.Sharc.START_BOUNCE;
+        return new OptionInstance<>(
+            "caustica.options.sharc.startBounce",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.startBounce.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, value),
+            new OptionInstance.IntRange(1, 6),
+            Math.clamp(setting.value(), 1, 6),
+            setting::set);
+    }
+
+    private static OptionInstance<Integer> sharcStrength() {
+        return percent("caustica.options.sharc.strength", CausticaConfig.Rt.Sharc.STRENGTH);
+    }
+
+    private static OptionInstance<Integer> sharcMaxDistance() {
+        FloatSetting setting = CausticaConfig.Rt.Sharc.MAX_DISTANCE;
+        return new OptionInstance<>(
+            "caustica.options.sharc.maxDistance",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.maxDistance.tooltip")),
+            (caption, blocks) -> Options.genericValueLabel(caption, Component.literal(blocks + " blocks")),
+            new OptionInstance.IntRange(4, 256),
+            Math.clamp(Math.round(setting.value()), 4, 256),
+            blocks -> setting.set(blocks.floatValue()));
+    }
+
+    private static OptionInstance<Integer> sharcFrameLifetime() {
+        IntSetting setting = CausticaConfig.Rt.Sharc.FRAME_LIFETIME;
+        return new OptionInstance<>(
+            "caustica.options.sharc.frameLifetime",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.frameLifetime.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.literal(value + " frames")),
+            new OptionInstance.IntRange(1, 240),
+            Math.clamp(setting.value(), 1, 240),
+            setting::set);
+    }
+
+    private static OptionInstance<Integer> sharcNormalThreshold() {
+        return percent("caustica.options.sharc.normalThreshold", CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD);
+    }
+
+    /** Big experimental enable/disable toggle, shown on both the RT screen and the SHaRC sub-screen. */
+    public static Button sharcToggleButton() {
+        return sharcToggleButton(null);
+    }
+
+    /**
+     * Same toggle with an optional {@code onChanged} callback. The main RT screen passes a rebuild so
+     * the button label (and any dependent rows) stay in sync; the SHaRC sub-screen passes nothing and
+     * simply updates its own label.
+     */
+    public static Button sharcToggleButton(Runnable onChanged) {
+        Button button = Button.builder(sharcToggleLabel(), clicked -> {
+            CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Sharc.ENABLED;
+            setting.set(!setting.value());
+            clicked.setMessage(sharcToggleLabel());
+            if (onChanged != null) {
+                onChanged.run();
+            }
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(
+                Component.translatable("caustica.options.sharc.enabled.tooltip")));
+        return button;
+    }
+
+    private static Component sharcToggleLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.sharc.enabled"),
+                Component.translatable(CausticaConfig.Rt.Sharc.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
+    /** Opens the dedicated SHaRC customization sub-screen (same pattern as "Ray Tracing Settings..."). */
+    public static Button sharcSettingsButton(Screen parent) {
+        return Button.builder(Component.translatable("caustica.options.sharc.settingsButton"), clicked -> {
+            Minecraft minecraft = Minecraft.getInstance();
+            minecraft.gui.setScreen(new RtSharcOptionsScreen(parent, minecraft.options));
+        }).width(310).build();
+    }
+
+    /** Drops every cached radiance entry. The shader feature bit simply reads a cleared buffer next frame. */
+    public static Button sharcResetButton() {
+        Button button = Button.builder(Component.translatable("caustica.options.sharc.reset"), clicked -> {
+            RtSharc.INSTANCE.requestClear();
+            clicked.setMessage(Component.translatable("caustica.options.sharc.reset.queued"));
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(
+                Component.translatable("caustica.options.sharc.reset.tooltip")));
+        return button;
     }
 }

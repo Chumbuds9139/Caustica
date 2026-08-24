@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.rt.RtSharc;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
@@ -390,6 +391,9 @@ public final class RtTerrain {
      */
     public static void requestFullClear() {
         RtTerrainOmm.clearCache();
+        // A full terrain/rebase clears the world-space cache too: SHaRC cells are keyed on the
+        // tracer's rebased coordinates, so a new rebase origin would otherwise read stale entries.
+        RtSharc.INSTANCE.requestClear();
         INSTANCE.fullClearRequested = true;
     }
 

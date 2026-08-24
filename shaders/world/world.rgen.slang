@@ -30,6 +30,7 @@ import trace_ser;
 #endif
 import lighting;
 import clouds;
+import sharc;
 
 // First-bounce lobe decomposition for NRD (REBLUR_DIFFUSE_SPECULAR): alongside the combined
 // radiance L, accumulates per-lobe radiance (outLdiff/outLspec) and the first-bounce hit distance
@@ -431,6 +432,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         }
 
         float3 albedo = payload.albedo;
+        // SHaRC needs the surface's OWN incoming light (emission + NEE + RIS + hand light + SSS) to
+        // warm the cache, so capture the accumulated path radiance before the first local term lands.
+        // localAdded / throughput below recovers a path-independent environment estimate.
+        float3 surfaceLightBaseline = L;
         // Boat interior fix: detect dynamic entity (boat, minecart) early for two-sided lighting
         bool isDynamicEntityEarly = payloadDynamicEntity();
         // LabPBR SSS strength (0 when the material has none, or when the player turned SSS off:
@@ -652,6 +657,36 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                             Ldiff += sssTerm;
                         }
                     }
+                }
+            }
+        }
+
+        // ---- Experimental SHaRC: spatially-hashed world-space radiance cache.
+        //
+        // Early bounces (< startBounce) always trace and warm the cache from the surface's local
+        // radiance. Later diffuse bounces try the cache first: a warm entry is the cached environment
+        // light for this voxel, so it is used as the indirect ambient tail and the path stops. That
+        // shortens noisy multi-bounce tails and reuses nearby world-space light instead of re-tracing
+        // it every frame. Specular/glossy paths and exact mirrors are never replaced, so reflections
+        // keep their traced sharpness. A cache miss falls through to the ordinary continuation.
+        if (sharcEnabled() && sharcReady(worldPush)) {
+            int sharcStartBounce = int(worldPush.sharcParams2.x);
+            if (bounce < sharcStartBounce) {
+                float3 localAdded = L - surfaceLightBaseline;
+                float3 localLight = localAdded / max(throughput, 1.0e-4);
+                sharcWrite(worldPush, hitPos, n, localLight, sharcConfidence(localLight), seed);
+            } else if (channel != 2 && !exactSpecular && worldPush.sharcParams.y > 0.0) {
+                float3 cachedRadiance;
+                float cachedConfidence;
+                if (sharcQuery(worldPush, hitPos, n, cachedRadiance, cachedConfidence)) {
+                    float3 sharcGi = throughput * diffAlb * INV_PI * cachedRadiance
+                            * worldPush.sharcParams.y * cachedConfidence;
+                    L += sharcGi;
+                    // Cached GI is a diffuse indirect-ambient estimate; it belongs in the diffuse lobe
+                    // even when this path had not classified yet (a cache hit at bounce >= 2 is always
+                    // from the diffuse continuation branch).
+                    Ldiff += sharcGi;
+                    break;
                 }
             }
         }

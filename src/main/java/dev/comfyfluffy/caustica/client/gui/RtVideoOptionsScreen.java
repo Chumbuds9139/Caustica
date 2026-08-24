@@ -45,6 +45,7 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
     private static final Component LIGHTS_HEADER = Component.translatable("caustica.options.rt.lightsHeader");
     private static final Component TONEMAP_HEADER = Component.translatable("caustica.options.rt.tonemapHeader");
     private static final Component EXPOSURE_HEADER = Component.translatable("caustica.options.rt.exposureHeader");
+    private static final Component SHARC_HEADER = Component.translatable("caustica.options.sharc.header");
 
     public RtVideoOptionsScreen(Screen parent, Options options) {
         super(parent, options, TITLE);
@@ -88,6 +89,13 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
             list.addBig(fgMultiplier);
         }
         list.addBig(RtVideoOptions.reflexButton());
+
+        // --- SHaRC (experimental) ---
+        // Two big buttons: one to flip the experimental SHaRC on/off, one to open the full tuning
+        // sub-screen. This mirrors how "Ray Tracing Settings..." opens this screen from Video Settings.
+        list.addHeader(SHARC_HEADER);
+        list.addBig(RtVideoOptions.sharcToggleButton(this::rebuildForUpscalerChange));
+        list.addBig(RtVideoOptions.sharcSettingsButton(this));
 
         // --- General ---
         list.addHeader(GENERAL_HEADER);

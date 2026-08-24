@@ -136,6 +136,18 @@ public struct WorldPush {
     // Material appearance controls: x is extra polish for authored metallic surfaces, 0..1.
     // It only changes the GGX roughness of metals; non-metals keep their authored response.
     public float4   materialParams;
+    // Experimental SHaRC (Spatially Hashed Radiance Cache). A single flat spatial-hash cache buffer
+    // is allocated by the host and published as a raw device address; the tracer warms it on early
+    // bounces and consults it for later diffuse bounces to shorten path tails and reduce noise.
+    // sharcParams: x = cell size (blocks), y = cache strength 0..1, z = temporal blend, w = query distance.
+    // sharcParams2: x = first bounce that may query the cache, y = update coverage 0..1,
+    //               z = frame lifetime, w = normal agreement threshold.
+    // sharcGridOrigin.xyz = optional grid origin (0 = use the tracer's rebased world coordinates);
+    // sharcGridOrigin.w = cache entry count.
+    public uint64_t sharcCacheAddr;
+    public float4   sharcParams;
+    public float4   sharcParams2;
+    public int4     sharcGridOrigin;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
@@ -157,6 +169,7 @@ public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial 
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_VIEWZ = 128u;           // a renderer-side denoiser needs gViewZ (reprojection validation + sky cutoff)
 public static const uint FEATURE_FOG = 256u;             // masked distance fog (authored full-depth Nether/End haze)
+public static const uint FEATURE_SHARC = 512u;           // experimental spatial-hash radiance cache
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
