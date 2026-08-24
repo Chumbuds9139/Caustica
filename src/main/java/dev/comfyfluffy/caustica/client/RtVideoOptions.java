@@ -76,6 +76,7 @@ public final class RtVideoOptions {
             denoiser(),
             handFov(),
             dlssQuality(),
+            dlssPreset(),
             hdrEnabled(),
             hdrPaperWhite(),
             hdrPeak(),
@@ -101,6 +102,7 @@ public final class RtVideoOptions {
         String mode = RtUpscalerSupport.currentUpscalerMode();
         if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
             options.add(dlssQuality());
+            options.add(dlssPreset());
         } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
             options.add(fsrQuality());
         } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
@@ -529,6 +531,22 @@ public final class RtVideoOptions {
             new OptionInstance.IntRange(0, DLSS_QUALITY_ORDER.size() - 1),
             initialPosition,
             position -> setting.set(DLSS_QUALITY_ORDER.get(position)));
+    }
+
+    private static final List<Integer> DLSS_PRESET_ORDER = List.of(0, 6);
+
+    private static OptionInstance<Integer> dlssPreset() {
+        IntSetting setting = CausticaConfig.Rt.DlssRr.PRESET;
+        int initialPreset = DLSS_PRESET_ORDER.contains(setting.value()) ? setting.value() : 0;
+        int initialPosition = DLSS_PRESET_ORDER.indexOf(initialPreset);
+        return new OptionInstance<>(
+            "caustica.options.rt.dlssPreset",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.dlssPreset.tooltip")),
+            (caption, position) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.dlssPreset." + DLSS_PRESET_ORDER.get(position))),
+            new OptionInstance.IntRange(0, DLSS_PRESET_ORDER.size() - 1),
+            initialPosition,
+            position -> setting.set(DLSS_PRESET_ORDER.get(position)));
     }
 
     /**
