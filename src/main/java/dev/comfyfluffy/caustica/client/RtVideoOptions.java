@@ -1005,6 +1005,7 @@ public final class RtVideoOptions {
             sharcMaxDistance(),
             sharcFrameLifetime(),
             sharcNormalThreshold(),
+            sharcStableFrames(),
             sharcDebug(),
         };
     }
@@ -1087,6 +1088,18 @@ public final class RtVideoOptions {
 
     private static OptionInstance<Integer> sharcNormalThreshold() {
         return percent("caustica.options.sharc.normalThreshold", CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD);
+    }
+
+    private static OptionInstance<Integer> sharcStableFrames() {
+        IntSetting setting = CausticaConfig.Rt.Sharc.STABLE_FRAMES;
+        return new OptionInstance<>(
+            "caustica.options.sharc.stableFrames",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.stableFrames.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.literal(value + " frames")),
+            new OptionInstance.IntRange(0, 30),
+            Math.clamp(setting.value(), 0, 30),
+            setting::set);
     }
 
     /** Big experimental enable/disable toggle, shown on both the RT screen and the SHaRC sub-screen. */

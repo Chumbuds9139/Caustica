@@ -142,11 +142,13 @@ public struct WorldPush {
     // sharcParams: x = cell size (blocks), y = cache strength 0..1, z = temporal blend, w = query distance.
     // sharcParams2: x = first bounce that may query the cache, y = update coverage 0..1,
     //               z = frame lifetime, w = normal agreement threshold.
-    // sharcGridOrigin.xyz = optional grid origin (0 = use the tracer's rebased world coordinates);
-    // sharcGridOrigin.w = cache entry count.
+    // sharcParams3: x = minimum frame age before a freshly written entry may be queried (warm-up
+    //               guard against a new noisy cell popping in as a flash), y/z/w reserved.
+    // sharcGridOrigin: w = cache entry count; xyz unused (cache is keyed in world coordinates).
     public uint64_t sharcCacheAddr;
     public float4   sharcParams;
     public float4   sharcParams2;
+    public float4   sharcParams3;
     public int4     sharcGridOrigin;
 };
 

@@ -663,6 +663,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
         // ---- Experimental SHaRC: spatially-hashed world-space radiance cache.
         //
+        // Cache keys are WORLD coordinates, not camera-relative hitPos: hitPos shifts as the player
+        // walks (it is rebased onto the camera), so hashing it would smear entries across the world
+        // every frame and make the cached light flash as the camera moves. hitPos - camOffset is the
+        // rebased world-space position, which only changes when the terrain origin rebases.
+        //
         // Early bounces (< startBounce) always trace and warm the cache from the surface's local
         // radiance. Later diffuse bounces try the cache first: a warm entry is the cached environment
         // light for this voxel, so it is used as the indirect ambient tail and the path stops. That
@@ -670,16 +675,17 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // it every frame. Specular/glossy paths and exact mirrors are never replaced, so reflections
         // keep their traced sharpness. A cache miss falls through to the ordinary continuation.
         if (sharcEnabled() && sharcReady(worldPush)) {
+            float3 sharcPos = hitPos - worldPush.camOffset;
             int sharcStartBounce = int(worldPush.sharcParams2.x);
             if (bounce < sharcStartBounce) {
                 float3 localAdded = L - surfaceLightBaseline;
                 float3 localLight = localAdded / max(throughput,
                         float3(1.0e-4, 1.0e-4, 1.0e-4));
-                sharcWrite(worldPush, hitPos, n, localLight, sharcConfidence(localLight), seed);
+                sharcWrite(worldPush, sharcPos, n, localLight, sharcConfidence(localLight), seed);
             } else if (channel != 2 && !exactSpecular && worldPush.sharcParams.y > 0.0) {
                 float3 cachedRadiance;
                 float cachedConfidence;
-                if (sharcQuery(worldPush, hitPos, n, cachedRadiance, cachedConfidence)) {
+                if (sharcQuery(worldPush, sharcPos, n, cachedRadiance, cachedConfidence)) {
                     float3 sharcGi = throughput * diffAlb * INV_PI * cachedRadiance
                             * worldPush.sharcParams.y * cachedConfidence;
                     L += sharcGi;

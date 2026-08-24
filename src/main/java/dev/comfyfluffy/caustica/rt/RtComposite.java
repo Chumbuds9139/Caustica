@@ -289,6 +289,7 @@ public final class RtComposite {
                 + ", maxDistance=" + CausticaConfig.Rt.Sharc.MAX_DISTANCE.value()
                 + ", lifetime=" + CausticaConfig.Rt.Sharc.FRAME_LIFETIME.value()
                 + ", normal=" + CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value()
+                + ", stableFrames=" + CausticaConfig.Rt.Sharc.STABLE_FRAMES.value()
                 + ", cacheAddr=0x" + Long.toHexString(RtSharc.INSTANCE.address());
     }
 
@@ -314,7 +315,12 @@ public final class RtComposite {
                 CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value());
     }
 
-    /** WorldPush.sharcGridOrigin: xyz origin (0 = rebased tracer space), w cache entry count. */
+    /** WorldPush.sharcParams3: x = minimum age before a new entry may be queried, y/z/w reserved. */
+    private static Float4 sharcParams3() {
+        return new Float4(CausticaConfig.Rt.Sharc.STABLE_FRAMES.value(), 0.0f, 0.0f, 0.0f);
+    }
+
+    /** WorldPush.sharcGridOrigin: xyz reserved, w cache entry count. */
     private static Int4 sharcGridOrigin() {
         return new Int4(0, 0, 0, RtSharc.INSTANCE.entryCount());
     }
@@ -1676,11 +1682,13 @@ public final class RtComposite {
                     // Material appearance lane: x is the optional metallic polish amount. It is read
                     // every frame so dragging the slider needs neither a material rebuild nor reload.
                     new Float4(CausticaConfig.Rt.Composite.METALLIC_SHININESS.value(), 0.0f, 0.0f, 0.0f),
-                    // Experimental SHaRC lanes (see sharcParams/sharcParams2/sharcGridOrigin): the
-                    // cache buffer address plus the grid and tuning parameters the shader reads.
+                    // Experimental SHaRC lanes (see sharcParams/sharcParams2/sharcParams3/sharcGridOrigin):
+                    // the cache buffer address plus the world-space caching and tuning parameters the
+                    // shader reads.
                     sharcCacheAddress(),
                     sharcParams(),
                     sharcParams2(),
+                    sharcParams3(),
                     sharcGridOrigin()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);

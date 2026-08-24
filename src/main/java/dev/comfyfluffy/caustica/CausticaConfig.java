@@ -65,7 +65,7 @@ public final class CausticaConfig {
             Rt.Denoise.ENABLED, Rt.Nrd.ENABLED, Rt.Nrd.VALIDATION,
             Rt.Sharc.ENABLED, Rt.Sharc.CELL_SIZE, Rt.Sharc.CACHE_ENTRIES, Rt.Sharc.UPDATE_COVERAGE,
             Rt.Sharc.TEMPORAL_BLEND, Rt.Sharc.START_BOUNCE, Rt.Sharc.STRENGTH, Rt.Sharc.MAX_DISTANCE,
-            Rt.Sharc.FRAME_LIFETIME, Rt.Sharc.NORMAL_THRESHOLD, Rt.Sharc.DEBUG,
+            Rt.Sharc.FRAME_LIFETIME, Rt.Sharc.NORMAL_THRESHOLD, Rt.Sharc.STABLE_FRAMES, Rt.Sharc.DEBUG,
             Rt.Reflex.ENABLED, Rt.Lights.HELD_ITEM_LIGHT, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
             Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -141,7 +141,9 @@ public final class CausticaConfig {
                         + " much a new estimate changes an existing entry; start-bounce is the first bounce\n"
                         + " allowed to query; strength scales the cached indirect tail; max-distance bounds\n"
                         + " how far from a cell centre a query may use it; frame-lifetime is how long an\n"
-                        + " entry stays fresh; normal-threshold is the minimum normal agreement for a hit.\n"
+                        + " entry stays fresh; normal-threshold is the minimum normal agreement for a hit;\n"
+                        + " stable-frames is how many frames a freshly written cell must age before the\n"
+                        + " tracer may use it (guards against the new-cell brightness flash).\n"
                         + " debug: log SHaRC state transitions and a periodic parameter summary to the console.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
@@ -1106,6 +1108,13 @@ public final class CausticaConfig {
             /** Minimum cosine between the stored and query normals for a cache hit. */
             public static final FloatSetting NORMAL_THRESHOLD =
                     clampedFloat("caustica.rt.sharc.normalThreshold", "sharc.normal-threshold", 0.35f, 0.0f, 1.0f);
+            /**
+             * Minimum frame age before a freshly written cache entry can be used. A new cell holds a
+             * very noisy estimate; making the tracer wait a few frames before trusting it prevents the
+             * bright flashes that happen when a previously unseen voxel first appears.
+             */
+            public static final IntSetting STABLE_FRAMES =
+                    clampedInt("caustica.rt.sharc.stableFrames", "sharc.stable-frames", 3, 0, 30);
             /**
              * Debug logging. When on, Caustica logs SHaRC state transitions (enable/disable, buffer
              * allocation/resize, cache resets) and a periodic summary of the active tuning parameters
