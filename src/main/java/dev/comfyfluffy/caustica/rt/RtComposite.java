@@ -2368,7 +2368,12 @@ public final class RtComposite {
         return switch (dimension) {
             case DIMENSION_NETHER -> new Float4(0.052f, 0.0125f, 0.0065f, 0.012f);
             case DIMENSION_END -> new Float4(0.010f, 0.0055f, 0.016f, 0.0016f);
-            default -> overworldFog(weather, dayFactor);
+            // Investigative disable of the Overworld day/night distance haze (see overworldFog).
+            // The reported block/shadow/water artifacts are suspected to come from this fog, so it is
+            // zeroed out to confirm the cause while the authored Nether/End haze and the cloud fog
+            // (clouds.slang) are deliberately kept intact. To restore the normal look, return
+            // -> overworldFog(weather, dayFactor);
+            default -> new Float4(0.0f, 0.0f, 0.0f, 0.0f);
         };
     }
 
