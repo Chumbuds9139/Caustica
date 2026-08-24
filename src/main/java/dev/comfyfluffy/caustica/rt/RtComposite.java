@@ -1584,7 +1584,10 @@ public final class RtComposite {
                     hand.color(),
                     // Water-opacity lane: x = extra neutral per-block extinction scale (0 = default
                     // clarity). Matches WorldPush.waterOpacity; y/z/w reserved.
-                    new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(), 0.0f, 0.0f, 0.0f)
+                    new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(), 0.0f, 0.0f, 0.0f),
+                    // Material appearance lane: x is the optional metallic polish amount. It is read
+                    // every frame so dragging the slider needs neither a material rebuild nor reload.
+                    new Float4(CausticaConfig.Rt.Composite.METALLIC_SHININESS.value(), 0.0f, 0.0f, 0.0f)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

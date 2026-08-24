@@ -442,8 +442,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
         // Material split. Metals tint F0 by albedo and have no diffuse lobe; dielectrics use a fixed
         // 0.04 F0, sourced from the chit (LabPBR custom/metal F0, or the dielectric default it applies).
-        float rough = clamp(payloadRoughness(), 0.0, 1.0);
         float metal = clamp(payloadMetalness(), 0.0, 1.0);
+        float rough = metallicShininessRoughness(clamp(payloadRoughness(), 0.0, 1.0), metal);
         // Unresolvably tight lobes become exact delta mirrors; everything else keeps its authored value.
         // Snapping to 0 also propagates into the guide buffers, which is what tells RR to hold the
         // reflection sharp instead of accumulating it as a glossy lobe.

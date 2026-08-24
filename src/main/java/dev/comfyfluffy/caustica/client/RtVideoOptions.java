@@ -138,6 +138,7 @@ public final class RtVideoOptions {
             subsurfaceScattering(),
             fog(),
             weatherLighting(),
+            metallicShininess(),
         };
     }
 
@@ -820,6 +821,10 @@ public final class RtVideoOptions {
      * A 0..1 float exposed as a 0..100% slider. The setting itself is clamped to [0,1] in the config, so
      * the slider range and the stored domain are the same thing expressed in different units.
      */
+    private static OptionInstance<Integer> metallicShininess() {
+        return percent("caustica.options.rt.metallicShininess", CausticaConfig.Rt.Composite.METALLIC_SHININESS);
+    }
+
     private static OptionInstance<Integer> percent(String captionKey, FloatSetting setting) {
         return new OptionInstance<>(
             captionKey,
