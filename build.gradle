@@ -70,6 +70,7 @@ dependencies {
 
 processResources {
 	inputs.property "version", project.version
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
 	filesMatching("fabric.mod.json") {
 		expand "version": inputs.properties.version
@@ -520,6 +521,7 @@ java {
 }
 
 tasks.named("jar", Jar).configure {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}
