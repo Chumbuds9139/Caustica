@@ -89,6 +89,7 @@ public bool restirEnabled() {
 }
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }
 public bool fogEnabled() { return worldFeature(worldPush, FEATURE_FOG); }
+public bool sharcEnabled() { return worldFeature(worldPush, FEATURE_SHARC); }
 public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED); }
 
 /** SSS strength after the player toggle: the material value, or a hard zero when SSS is disabled. */

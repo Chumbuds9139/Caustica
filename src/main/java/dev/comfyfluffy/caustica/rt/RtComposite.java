@@ -182,6 +182,7 @@ public final class RtComposite {
     // sky cutoff, NRD's IN_VIEWZ), so it is set for both denoisers.
     private static final int FEATURE_VIEWZ = 128;
     private static final int FEATURE_FOG = 256;
+    private static final int FEATURE_SHARC = 512;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -208,6 +209,9 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value()) {
             flags |= FEATURE_RESTIR;
+        }
+        if (CausticaConfig.Rt.Sharc.ENABLED.value() && RtSharc.INSTANCE.entryCount() > 0) {
+            flags |= FEATURE_SHARC;
         }
         if (CausticaConfig.Rt.Composite.CLOUDS.value()) {
             flags |= FEATURE_CLOUDS;
@@ -236,6 +240,89 @@ public final class RtComposite {
             }
         }
         return flags;
+    }
+
+    /**
+     * Keep the SHaRC cache buffer matched to the current config, and honour an explicit "reset" action
+     * from the options UI. Called every frame before the trace so a live toggle takes effect on the
+     * next frame; the shader feature flag is keyed on {@link RtSharc#entryCount()} being non-zero so an
+     * enabled toggle with no buffer (or a failed allocation) degrades to the normal tracer.
+     */
+    private void syncSharcResources(RtContext ctx) {
+        boolean active = RtSharc.INSTANCE.enabled();
+        if (active) {
+            RtSharc.INSTANCE.ensure(ctx);
+            if (RtSharc.INSTANCE.clearRequested()) {
+                CausticaMod.LOGGER.info("[SHaRC] cache reset requested; clearing via vkCmdFillBuffer");
+                // A reset is a rare menu action; idle the device briefly so the fill cannot race a
+                // trace that still reads the old contents.
+                ctx.waitIdle();
+                RtSharc.INSTANCE.clearNow(ctx);
+            }
+            if (!sharcDebugWasActive) {
+                sharcDebugWasActive = true;
+                CausticaMod.LOGGER.info("[SHaRC] enabled: {}", sharcDebugDescription());
+            }
+            // With sharc.debug on, also report the active parameters periodically so a live tuning
+            // change can be tracked without having to read the toml file.
+            if (CausticaConfig.Rt.Sharc.DEBUG.value() && frameCounter - sharcDebugLastLogFrame >= 300) {
+                sharcDebugLastLogFrame = frameCounter;
+                CausticaMod.LOGGER.info("[SHaRC] active (frame {}): {}", frameCounter,
+                        sharcDebugDescription());
+            }
+        } else {
+            if (sharcDebugWasActive) {
+                sharcDebugWasActive = false;
+                CausticaMod.LOGGER.info("[SHaRC] disabled");
+            }
+            RtSharc.INSTANCE.releaseIfDisabled(ctx);
+        }
+    }
+
+    private static String sharcDebugDescription() {
+        return "cell=" + CausticaConfig.Rt.Sharc.CELL_SIZE.value()
+                + " blocks, entries=" + RtSharc.INSTANCE.entryCount()
+                + ", coverage=" + CausticaConfig.Rt.Sharc.UPDATE_COVERAGE.value()
+                + ", blend=" + CausticaConfig.Rt.Sharc.TEMPORAL_BLEND.value()
+                + ", startBounce=" + CausticaConfig.Rt.Sharc.START_BOUNCE.value()
+                + ", strength=" + CausticaConfig.Rt.Sharc.STRENGTH.value()
+                + ", maxDistance=" + CausticaConfig.Rt.Sharc.MAX_DISTANCE.value()
+                + ", lifetime=" + CausticaConfig.Rt.Sharc.FRAME_LIFETIME.value()
+                + ", normal=" + CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value()
+                + ", stableFrames=" + CausticaConfig.Rt.Sharc.STABLE_FRAMES.value()
+                + ", cacheAddr=0x" + Long.toHexString(RtSharc.INSTANCE.address());
+    }
+
+    private static long sharcCacheAddress() {
+        return RtSharc.INSTANCE.address();
+    }
+
+    /** WorldPush.sharcParams: x cell size, y strength, z temporal blend, w max query distance. */
+    private static Float4 sharcParams() {
+        return new Float4(
+                CausticaConfig.Rt.Sharc.CELL_SIZE.value(),
+                CausticaConfig.Rt.Sharc.STRENGTH.value(),
+                CausticaConfig.Rt.Sharc.TEMPORAL_BLEND.value(),
+                CausticaConfig.Rt.Sharc.MAX_DISTANCE.value());
+    }
+
+    /** WorldPush.sharcParams2: x start bounce, y update coverage, z frame lifetime, w normal threshold. */
+    private static Float4 sharcParams2() {
+        return new Float4(
+                CausticaConfig.Rt.Sharc.START_BOUNCE.value(),
+                CausticaConfig.Rt.Sharc.UPDATE_COVERAGE.value(),
+                CausticaConfig.Rt.Sharc.FRAME_LIFETIME.value(),
+                CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value());
+    }
+
+    /** WorldPush.sharcParams3: x = minimum age before a new entry may be queried, y/z/w reserved. */
+    private static Float4 sharcParams3() {
+        return new Float4(CausticaConfig.Rt.Sharc.STABLE_FRAMES.value(), 0.0f, 0.0f, 0.0f);
+    }
+
+    /** WorldPush.sharcGridOrigin: xyz reserved, w cache entry count. */
+    private static Int4 sharcGridOrigin() {
+        return new Int4(0, 0, 0, RtSharc.INSTANCE.entryCount());
     }
 
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
@@ -540,6 +627,12 @@ public final class RtComposite {
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
     private final RtExposure exposure = new RtExposure();
+    // Experimental SHaRC (Spatially Hashed Radiance Cache). Shader-only — the host only owns the
+    // persistent cache buffer and publishes its device address (no native lib, no extra binding).
+    private final RtSharc sharc = RtSharc.INSTANCE;
+    // Debug-state tracking for the SHaRC console logging (enable/disable + periodic summary).
+    private boolean sharcDebugWasActive;
+    private long sharcDebugLastLogFrame;
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
     private int displayW = -1;
@@ -790,6 +883,7 @@ public final class RtComposite {
                     return false;
                 }
             }
+            syncSharcResources(ctx);
             ensureOutput(ctx, width, height);
             // Cheap idempotent check every frame (not just on resize): if the exposure mode is switched
             // manual -> auto at runtime (video settings), the auto-mode histogram/state/pipeline must be
@@ -1587,7 +1681,15 @@ public final class RtComposite {
                     new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(), 0.0f, 0.0f, 0.0f),
                     // Material appearance lane: x is the optional metallic polish amount. It is read
                     // every frame so dragging the slider needs neither a material rebuild nor reload.
-                    new Float4(CausticaConfig.Rt.Composite.METALLIC_SHININESS.value(), 0.0f, 0.0f, 0.0f)
+                    new Float4(CausticaConfig.Rt.Composite.METALLIC_SHININESS.value(), 0.0f, 0.0f, 0.0f),
+                    // Experimental SHaRC lanes (see sharcParams/sharcParams2/sharcParams3/sharcGridOrigin):
+                    // the cache buffer address plus the world-space caching and tuning parameters the
+                    // shader reads.
+                    sharcCacheAddress(),
+                    sharcParams(),
+                    sharcParams2(),
+                    sharcParams3(),
+                    sharcGridOrigin()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {
@@ -2649,6 +2751,7 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
+        sharc.destroy(RtContext.currentOrNull());
         // Unconditional: RtDlssRr.enabled() reflects the CURRENT toggles, and the denoiser toggle can
         // have been turned off after a feature was already created. destroy() is a no-op when nothing
         // was ever allocated, so asking it every time is what guarantees the feature is released.

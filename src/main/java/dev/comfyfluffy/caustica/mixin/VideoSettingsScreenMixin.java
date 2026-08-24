@@ -64,9 +64,11 @@ public abstract class VideoSettingsScreenMixin {
         if (list == null) {
             return;
         }
-        // Trailing section with a single big button that opens the dedicated RT screen.
+        // Trailing section with the dedicated RT screen button, plus a direct SHaRC sub-screen button
+        // so the experimental cache is reachable without first opening the full RT settings.
         list.addHeader(CAUSTICA$RT_HEADER);
         list.addBig(caustica$createRtSettingsButton());
+        list.addBig(caustica$createSharcSettingsButton());
     }
 
     private net.minecraft.client.gui.components.Button caustica$createRtSettingsButton() {
@@ -80,6 +82,23 @@ public abstract class VideoSettingsScreenMixin {
                                     new dev.comfyfluffy.caustica.client.gui.RtVideoOptionsScreen(current, opts);
                             // In 26.2, setScreen moved from Minecraft to Gui: Minecraft.gui.setScreen()
                             minecraft.gui.setScreen(rtScreen);
+                        })
+                .width(310)
+                .build();
+    }
+
+    private static final Component CAUSTICA$SHARC_BUTTON =
+            Component.translatable("caustica.options.sharc.settingsButton");
+
+    private net.minecraft.client.gui.components.Button caustica$createSharcSettingsButton() {
+        return net.minecraft.client.gui.components.Button.builder(
+                        CAUSTICA$SHARC_BUTTON,
+                        btn -> {
+                            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+                            net.minecraft.client.gui.screens.Screen current = (net.minecraft.client.gui.screens.Screen) (Object) this;
+                            net.minecraft.client.Options opts = minecraft.options;
+                            minecraft.gui.setScreen(
+                                    new dev.comfyfluffy.caustica.client.gui.RtSharcOptionsScreen(current, opts));
                         })
                 .width(310)
                 .build();
