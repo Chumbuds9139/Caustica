@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -85,10 +86,15 @@ public final class RtSharc {
     }
 
     private void rebuild(RtContext ctx, int wanted) {
-        if (cache != null) {
+        boolean resize = cache != null;
+        if (resize) {
             // Wait for any in-flight trace that still points at the old buffer before freeing it.
             ctx.waitIdle();
             cache.destroy();
+            logDebug("SHaRC cache buffer resized: new entries={}, total={} MiB", wanted, bytesMiB(wanted));
+        } else {
+            logDebug("SHaRC cache buffer allocated: entries={}, total={} MiB, entryBytes={}",
+                    wanted, bytesMiB(wanted), ENTRY_BYTES);
         }
         long bytes = (long) wanted * ENTRY_BYTES;
         int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -118,7 +124,16 @@ public final class RtSharc {
             cache.destroy();
             cache = null;
             entryCount = 0;
+            logDebug("SHaRC cache buffer released");
         }
         clearRequested = false;
+    }
+
+    private static double bytesMiB(int entries) {
+        return (long) entries * ENTRY_BYTES / (1024.0 * 1024.0);
+    }
+
+    private static void logDebug(String message, Object... args) {
+        CausticaMod.LOGGER.info("[SHaRC] " + message, args);
     }
 }

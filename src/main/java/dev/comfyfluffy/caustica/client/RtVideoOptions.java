@@ -1005,7 +1005,12 @@ public final class RtVideoOptions {
             sharcMaxDistance(),
             sharcFrameLifetime(),
             sharcNormalThreshold(),
+            sharcDebug(),
         };
+    }
+
+    private static OptionInstance<Boolean> sharcDebug() {
+        return bool("caustica.options.sharc.debug", CausticaConfig.Rt.Sharc.DEBUG);
     }
 
     private static OptionInstance<Integer> sharcCellSize() {

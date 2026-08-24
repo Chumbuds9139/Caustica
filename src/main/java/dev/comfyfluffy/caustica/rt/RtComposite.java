@@ -249,17 +249,47 @@ public final class RtComposite {
      * enabled toggle with no buffer (or a failed allocation) degrades to the normal tracer.
      */
     private void syncSharcResources(RtContext ctx) {
-        if (RtSharc.INSTANCE.enabled()) {
+        boolean active = RtSharc.INSTANCE.enabled();
+        if (active) {
             RtSharc.INSTANCE.ensure(ctx);
             if (RtSharc.INSTANCE.clearRequested()) {
+                CausticaMod.LOGGER.info("[SHaRC] cache reset requested; clearing via vkCmdFillBuffer");
                 // A reset is a rare menu action; idle the device briefly so the fill cannot race a
                 // trace that still reads the old contents.
                 ctx.waitIdle();
                 RtSharc.INSTANCE.clearNow(ctx);
             }
+            if (!sharcDebugWasActive) {
+                sharcDebugWasActive = true;
+                CausticaMod.LOGGER.info("[SHaRC] enabled: {}", sharcDebugDescription());
+            }
+            // With sharc.debug on, also report the active parameters periodically so a live tuning
+            // change can be tracked without having to read the toml file.
+            if (CausticaConfig.Rt.Sharc.DEBUG.value() && frameCounter - sharcDebugLastLogFrame >= 300) {
+                sharcDebugLastLogFrame = frameCounter;
+                CausticaMod.LOGGER.info("[SHaRC] active (frame {}): {}", frameCounter,
+                        sharcDebugDescription());
+            }
         } else {
+            if (sharcDebugWasActive) {
+                sharcDebugWasActive = false;
+                CausticaMod.LOGGER.info("[SHaRC] disabled");
+            }
             RtSharc.INSTANCE.releaseIfDisabled(ctx);
         }
+    }
+
+    private static String sharcDebugDescription() {
+        return "cell=" + CausticaConfig.Rt.Sharc.CELL_SIZE.value()
+                + " blocks, entries=" + RtSharc.INSTANCE.entryCount()
+                + ", coverage=" + CausticaConfig.Rt.Sharc.UPDATE_COVERAGE.value()
+                + ", blend=" + CausticaConfig.Rt.Sharc.TEMPORAL_BLEND.value()
+                + ", startBounce=" + CausticaConfig.Rt.Sharc.START_BOUNCE.value()
+                + ", strength=" + CausticaConfig.Rt.Sharc.STRENGTH.value()
+                + ", maxDistance=" + CausticaConfig.Rt.Sharc.MAX_DISTANCE.value()
+                + ", lifetime=" + CausticaConfig.Rt.Sharc.FRAME_LIFETIME.value()
+                + ", normal=" + CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value()
+                + ", cacheAddr=0x" + Long.toHexString(RtSharc.INSTANCE.address());
     }
 
     private static long sharcCacheAddress() {
@@ -594,6 +624,9 @@ public final class RtComposite {
     // Experimental SHaRC (Spatially Hashed Radiance Cache). Shader-only — the host only owns the
     // persistent cache buffer and publishes its device address (no native lib, no extra binding).
     private final RtSharc sharc = RtSharc.INSTANCE;
+    // Debug-state tracking for the SHaRC console logging (enable/disable + periodic summary).
+    private boolean sharcDebugWasActive;
+    private long sharcDebugLastLogFrame;
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
     private int displayW = -1;
