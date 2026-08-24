@@ -673,7 +673,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             int sharcStartBounce = int(worldPush.sharcParams2.x);
             if (bounce < sharcStartBounce) {
                 float3 localAdded = L - surfaceLightBaseline;
-                float3 localLight = localAdded / max(throughput, 1.0e-4);
+                float3 localLight = localAdded / max(throughput,
+                        float3(1.0e-4, 1.0e-4, 1.0e-4));
                 sharcWrite(worldPush, hitPos, n, localLight, sharcConfidence(localLight), seed);
             } else if (channel != 2 && !exactSpecular && worldPush.sharcParams.y > 0.0) {
                 float3 cachedRadiance;
