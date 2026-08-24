@@ -100,7 +100,7 @@ public bool sharcQuery(WorldPush push, float3 pos, float3 n,
     // estimate. Letting that estimate pop into the image right away is what produced the bright
     // flashes when the camera entered a previously unseen voxel. Wait for the entry to age a few
     // frames before the tracer is allowed to use it.
-    if (age < uint(worldPush.sharcParams3.x)) {
+    if (age < uint(push.sharcParams3.x)) {
         return false;
     }
     if (entry.radiance.w <= 0.0) {
