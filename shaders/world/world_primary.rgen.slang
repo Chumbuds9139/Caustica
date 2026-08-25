@@ -264,7 +264,9 @@ void main() {
     queue[pixelIndex] = packPathSegment(terminal, nextRecord);
 
     writeGuides(pix, dir, jndc, size, rayConeSpread);
-    if (pc.debugView != 0u) {
+    // 13 is the SHaRC cache view (SHARC_DEBUG_VIEW_ID in sharc.slang): the cache is queried by pass
+    // B's path tracer, so pass B owns that overlay and pass A must not paint its guide output here.
+    if (pc.debugView != 0u && pc.debugView != 13u) {
         writeDebugView(pix);
     }
 }

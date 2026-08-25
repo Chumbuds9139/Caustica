@@ -821,9 +821,10 @@ public final class RtVideoOptions {
             // NAME_AND_VALUE), so this must return only the value's text, not caption + value again.
             (caption, value) -> Component.translatable("caustica.options.rt.debugView." + value),
             // 10-12 inspect the SVGF denoiser's internal state and, unlike 1-7, leave the denoiser
-            // running (see RtComposite.SVGF_DEBUG_FIRST). 8/9 are not exposed here.
-            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12), Codec.INT),
-            Math.clamp(setting.value(), 0, 12),
+            // running (see RtComposite.SVGF_DEBUG_FIRST). 8/9 are not exposed here. 13 is the SHaRC
+            // cache query overlay (see sharc.slang): pass B paints it so it reflects real queries.
+            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13), Codec.INT),
+            Math.clamp(setting.value(), 0, 13),
             setting::set);
     }
 
@@ -1002,7 +1003,6 @@ public final class RtVideoOptions {
             sharcTemporalBlend(),
             sharcStartBounce(),
             sharcStrength(),
-            sharcMaxDistance(),
             sharcFrameLifetime(),
             sharcNormalThreshold(),
             sharcStableFrames(),
@@ -1028,7 +1028,7 @@ public final class RtVideoOptions {
     private static OptionInstance<Integer> sharcCacheEntries() {
         IntSetting setting = CausticaConfig.Rt.Sharc.CACHE_ENTRIES;
         int minShift = 11; // 2048
-        int maxShift = 18; // 262144
+        int maxShift = 20; // 1048576
         int initial = Math.clamp(31 - Integer.numberOfLeadingZeros(setting.value()), minShift, maxShift);
         return new OptionInstance<>(
             "caustica.options.sharc.cacheEntries",
@@ -1063,17 +1063,6 @@ public final class RtVideoOptions {
         return percent("caustica.options.sharc.strength", CausticaConfig.Rt.Sharc.STRENGTH);
     }
 
-    private static OptionInstance<Integer> sharcMaxDistance() {
-        FloatSetting setting = CausticaConfig.Rt.Sharc.MAX_DISTANCE;
-        return new OptionInstance<>(
-            "caustica.options.sharc.maxDistance",
-            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.maxDistance.tooltip")),
-            (caption, blocks) -> Options.genericValueLabel(caption, Component.literal(blocks + " blocks")),
-            new OptionInstance.IntRange(4, 256),
-            Math.clamp(Math.round(setting.value()), 4, 256),
-            blocks -> setting.set(blocks.floatValue()));
-    }
-
     private static OptionInstance<Integer> sharcFrameLifetime() {
         IntSetting setting = CausticaConfig.Rt.Sharc.FRAME_LIFETIME;
         return new OptionInstance<>(
@@ -1096,7 +1085,7 @@ public final class RtVideoOptions {
             "caustica.options.sharc.stableFrames",
             OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.sharc.stableFrames.tooltip")),
             (caption, value) -> Options.genericValueLabel(caption,
-                    Component.literal(value + " frames")),
+                    Component.literal(value + " samples")),
             new OptionInstance.IntRange(0, 30),
             Math.clamp(setting.value(), 0, 30),
             setting::set);

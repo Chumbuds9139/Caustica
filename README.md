@@ -32,7 +32,10 @@ changes while the renderer is being built.
 - Dedicated Nether and End skyboxes with per-dimension ambient fog
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 - Experimental NVIDIA SHaRC-style world-space radiance cache (Spatially Hashed Radiance Cache) to
-  shorten noisy multi-bounce path tails; toggleable with tuning options from the RT settings sub-menu
+  shorten noisy multi-bounce path tails — every shaded vertex warms the cache and back-propagates its
+  light to earlier bounces, while diffuse vertices past the start bounce reuse the cached outgoing
+  radiance instead of tracing on; toggleable with tuning options from the RT settings sub-menu and
+  inspectable via debug view 13
 
 ## Requirements
 

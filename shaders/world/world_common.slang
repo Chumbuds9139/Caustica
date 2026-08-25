@@ -137,14 +137,15 @@ public struct WorldPush {
     // It only changes the GGX roughness of metals; non-metals keep their authored response.
     public float4   materialParams;
     // Experimental SHaRC (Spatially Hashed Radiance Cache). A single flat spatial-hash cache buffer
-    // is allocated by the host and published as a raw device address; the tracer warms it on early
-    // bounces and consults it for later diffuse bounces to shorten path tails and reduce noise.
-    // sharcParams: x = cell size (blocks), y = cache strength 0..1, z = temporal blend, w = query distance.
+    // is allocated by the host and published as a raw device address; every shaded vertex warms it
+    // (and back-propagates its light to earlier vertices' entries), and diffuse vertices from
+    // startBounce on query it to replace their remaining path — see sharc.slang for the contract.
+    // sharcParams: x = cell size (blocks), y = cache strength 0..1 (scale on the cached radiance),
+    //              z = inverse temporal accumulation window (blend cap), w = reserved.
     // sharcParams2: x = first bounce that may query the cache, y = update coverage 0..1,
-    //               z = frame lifetime, w = normal agreement threshold.
-    // sharcParams3: x = minimum frame age before a freshly written entry may be queried (warm-up
-    //               guard against a new noisy cell popping in as a flash), y/z/w reserved.
-    // sharcGridOrigin: w = cache entry count; xyz unused (cache is keyed in world coordinates).
+    //               z = frame lifetime, w = normal agreement threshold (reject gate, not a scale).
+    // sharcParams3: x = minimum sample count before an entry may be queried, y/z/w reserved.
+    // sharcGridOrigin: xyz = terrain origin block in world coordinates, w = cache entry count.
     public uint64_t sharcCacheAddr;
     public float4   sharcParams;
     public float4   sharcParams2;

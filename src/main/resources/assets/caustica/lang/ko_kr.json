@@ -92,6 +92,7 @@
 	"caustica.options.rt.debugView.10": "SVGF: 히스토리 길이",
 	"caustica.options.rt.debugView.11": "SVGF: 분산",
 	"caustica.options.rt.debugView.12": "SVGF: 휘도 시그마",
+	"caustica.options.rt.debugView.13": "SHaRC 캐시",
 	"caustica.options.rt.lightsHeader": "RT Lighting",
 	"caustica.options.rt.tonemapHeader": "RT Tonemapping",
 	"caustica.options.rt.blockEmissiveIntensity": "Emissive Block Intensity",

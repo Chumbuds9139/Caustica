@@ -28,7 +28,12 @@ public final class RtSharc {
     /** Must match {@code SharcEntry} in {@code shaders/world/sharc.slang}. */
     public static final int ENTRY_BYTES = 48;
     public static final int MIN_ENTRIES = 2048;
-    public static final int MAX_ENTRIES = 1 << 18; // 262144
+    /**
+     * Upper capacity bound (1 Mi entries = 48 MiB). NVIDIA recommends power-of-two capacities of
+     * ~4M for their samples; single-slot hashing needs the headroom far more than their bucketed
+     * grid does, but 48 MiB is already generous next to everything else Caustica allocates.
+     */
+    public static final int MAX_ENTRIES = 1 << 20;
 
     private RtBuffer cache;
     private int entryCount;
