@@ -251,6 +251,19 @@ public final class RtComposite {
     private void syncSharcResources(RtContext ctx) {
         boolean active = RtSharc.INSTANCE.enabled();
         if (active) {
+            // Scene-change detection (dimension travel or world reload): same world coordinates,
+            // different scene. Clear the cache rather than letting staleness evict it over
+            // FRAME_LIFETIME frames of wrong light.
+            ClientLevel level = Minecraft.getInstance().level;
+            if (level != null) {
+                int dimension = dimensionId(level);
+                if (sharcPrevLevel != null && (sharcPrevLevel != level || sharcPrevDimension != dimension)) {
+                    CausticaMod.LOGGER.info("[SHaRC] scene changed; clearing radiance cache");
+                    RtSharc.INSTANCE.requestClear();
+                }
+                sharcPrevLevel = level;
+                sharcPrevDimension = dimension;
+            }
             RtSharc.INSTANCE.ensure(ctx);
             if (RtSharc.INSTANCE.clearRequested()) {
                 CausticaMod.LOGGER.info("[SHaRC] cache reset requested; clearing via vkCmdFillBuffer");
@@ -275,6 +288,9 @@ public final class RtComposite {
                 sharcDebugWasActive = false;
                 CausticaMod.LOGGER.info("[SHaRC] disabled");
             }
+            // Re-arm scene tracking: the cache is released on disable, so the next enable starts
+            // from an empty buffer and must not log a spurious "scene changed" clear.
+            sharcPrevLevel = null;
             RtSharc.INSTANCE.releaseIfDisabled(ctx);
         }
     }
@@ -286,10 +302,9 @@ public final class RtComposite {
                 + ", blend=" + CausticaConfig.Rt.Sharc.TEMPORAL_BLEND.value()
                 + ", startBounce=" + CausticaConfig.Rt.Sharc.START_BOUNCE.value()
                 + ", strength=" + CausticaConfig.Rt.Sharc.STRENGTH.value()
-                + ", maxDistance=" + CausticaConfig.Rt.Sharc.MAX_DISTANCE.value()
                 + ", lifetime=" + CausticaConfig.Rt.Sharc.FRAME_LIFETIME.value()
                 + ", normal=" + CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value()
-                + ", stableFrames=" + CausticaConfig.Rt.Sharc.STABLE_FRAMES.value()
+                + ", minSamples=" + CausticaConfig.Rt.Sharc.STABLE_FRAMES.value()
                 + ", cacheAddr=0x" + Long.toHexString(RtSharc.INSTANCE.address());
     }
 
@@ -297,7 +312,11 @@ public final class RtComposite {
         return RtSharc.INSTANCE.address();
     }
 
-    /** WorldPush.sharcParams: x cell size, y strength, z temporal blend, w max query distance. */
+    /**
+     * WorldPush.sharcParams: x cell size, y strength (scale on the cached radiance that replaces a
+     * vertex's path), z inverse temporal accumulation window (blend cap), w reserved (was max query
+     * distance — a query position is always inside its own cell, so the limit could never fire).
+     */
     private static Float4 sharcParams() {
         return new Float4(
                 CausticaConfig.Rt.Sharc.CELL_SIZE.value(),
@@ -315,14 +334,20 @@ public final class RtComposite {
                 CausticaConfig.Rt.Sharc.NORMAL_THRESHOLD.value());
     }
 
-    /** WorldPush.sharcParams3: x = minimum age before a new entry may be queried, y/z/w reserved. */
+    /** WorldPush.sharcParams3: x = minimum sample count before an entry may be queried, y/z/w reserved. */
     private static Float4 sharcParams3() {
         return new Float4(CausticaConfig.Rt.Sharc.STABLE_FRAMES.value(), 0.0f, 0.0f, 0.0f);
     }
 
-    /** WorldPush.sharcGridOrigin: xyz reserved, w cache entry count. */
-    private static Int4 sharcGridOrigin() {
-        return new Int4(0, 0, 0, RtSharc.INSTANCE.entryCount());
+    /**
+     * WorldPush.sharcGridOrigin: xyz = terrain origin block in WORLD coordinates (the same anchor
+     * the water wave domain and NRD use), w = cache entry count. The shader adds the origin to the
+     * rebased hit position to key the cache in absolute world coordinates, which are stable across
+     * camera movement and terrain rebases — anything derived from the camera (hitPos - camOffset is
+     * camera-relative) would smear entries across cells every frame, TAA jitter included.
+     */
+    private static Int4 sharcGridOrigin(RtTerrain terrain) {
+        return new Int4(terrain.blockX, terrain.blockY, terrain.blockZ, RtSharc.INSTANCE.entryCount());
     }
 
     // Finite sun/moon angular sizes let NEE shadow rays sample the light disk (soft, contact-hardening
@@ -633,6 +658,12 @@ public final class RtComposite {
     // Debug-state tracking for the SHaRC console logging (enable/disable + periodic summary).
     private boolean sharcDebugWasActive;
     private long sharcDebugLastLogFrame;
+    // Scene identity the SHaRC cache was last warmed in. The cache is keyed by world coordinates,
+    // which repeat across dimensions and world reloads, so a scene change must drop it (NVIDIA's
+    // integration checklist: clear cache resources on scene reload) instead of leaking up to
+    // FRAME_LIFETIME frames of the old scene's light into the new one.
+    private ClientLevel sharcPrevLevel;
+    private int sharcPrevDimension;
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
     private int displayW = -1;
@@ -1689,7 +1720,7 @@ public final class RtComposite {
                     sharcParams(),
                     sharcParams2(),
                     sharcParams3(),
-                    sharcGridOrigin()
+                    sharcGridOrigin(terrain)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

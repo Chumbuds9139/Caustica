@@ -104,6 +104,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // ReSTIR estimate diluted by (SPP-1) legacy RIS estimates. Deeper/random paths remain ordinary RIS.
     bool restirPathOn = restirEligiblePath && restirEnabled() && risOn;
     bool restirReceiverPending = restirPathOn;
+    // SHaRC back-propagation state: the last vertices that wrote cache entries, with the path
+    // throughput at registration (see sharc.slang). Every new shaded vertex, a sky miss and a
+    // cache-hit termination push their outgoing radiance back into these entries, which is what
+    // teaches the cache multi-bounce GI instead of only direct light.
+    SharcPathState sharcState = sharcInitPath();
+    // Update sparsity (NVIDIA's sparse Update pass): only a fraction of paths warms the cache, and
+    // a selected path updates at every vertex so each entry's samples stay complete. Evaluated once
+    // per path from the freshly mixed seed, so SPP samples and split leaves gate independently.
+    bool sharcUpdatePath = sharcEnabled() && sharcReady(worldPush)
+            && sharcPathSelected(worldPush, seed);
     // Independent light-proposal RNG. Screen-space coherent selection is intentionally deferred until
     // there is a real presampled RIS tile buffer; direct sharing made tile-shaped lighting noise visible.
     // Measured: making a 16x16 tile share this seed recovers at most 1.3ms, so a future pool should share
@@ -171,6 +181,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 Lspec += throughput * sky;
             } else {
                 Ldiff += throughput * sky;
+            }
+            // SHaRC: the sky is a real light source for every earlier path vertex. Propagating it
+            // back teaches their voxels the sky ambient their continuation rays would find — this is
+            // NVIDIA's SharcUpdateMiss. Only diffuse continuations propagate: a showCelestial
+            // segment's sky contains the sun/moon disc (it is rendered into specular reflections),
+            // and diffuse receivers already get that light from NEE — feeding the disc into the
+            // cache would inject exactly the fireflies the disc-gating exists to prevent.
+            if (sharcUpdatePath && !showCelestial) {
+                sharcPropagateToPath(worldPush, sharcState, ro, sky, throughput);
             }
             break;
         }
@@ -457,6 +476,45 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         float3 diffAlb = albedo * (1.0 - metal);
         float3 F0 = payload.f0;
 
+        // ---- Experimental SHaRC: cache query (NVIDIA's Render/Query pass).
+        //
+        // A cache entry holds the temporally accumulated OUTGOING radiance of the surfaces in this
+        // cell: their direct light AND the deeper light back-propagated into them. So on a hit the
+        // cached value REPLACES this vertex's entire shading plus the rest of the path —
+        // `L += throughput * cached` and stop, exactly the RTXGI sample's usage. No albedo and no
+        // 1/pi factor: the cached quantity is already outgoing radiance, and re-applying a BRDF here
+        // is what made the old integration invisible (its "GI tail" came out ~10x too dark).
+        //
+        // The query must run BEFORE any local term lands, otherwise the vertex's own NEE would be
+        // added on top of a value that already contains it. Guards: only diffuse-capable vertices
+        // past the start bounce, never the ReSTIR receiver vertex (it must shade its reservoir),
+        // and the arriving segment must be longer than one cell diagonal so a path can never read
+        // back the entry its own previous vertex just wrote (self-feedback / energy gain).
+        if (sharcEnabled() && sharcReady(worldPush)
+                && bounce >= int(worldPush.sharcParams2.x)
+                && channel != 2
+                && !exactSpecular
+                && worldPush.sharcParams.y > 0.0
+                && !restirReceiverPending
+                && payload.hitT > worldPush.sharcParams.x * SHARC_CELL_DIAGONAL) {
+            gv_sharcDbgQueried = 1u;
+            float3 sharcCached;
+            float sharcSamples;
+            if (sharcQuery(worldPush, hitPos, n, sharcCached, sharcSamples)) {
+                gv_sharcDbgHit = 1u;
+                gv_sharcDbgCount = max(gv_sharcDbgCount, sharcSamples);
+                float3 sharcGi = throughput * sharcCached * worldPush.sharcParams.y;
+                L += sharcGi;
+                // Cached GI is the diffuse lobe's tail; even an unclassified (channel 0) split-leaf
+                // vertex reached here via its diffuse continuation.
+                Ldiff += sharcGi;
+                // Feed the cached tail back one hop so upstream voxels learn multi-bounce GI
+                // (NVIDIA's cache resampling), then stop tracing this path.
+                sharcPropagateToPath(worldPush, sharcState, hitPos, sharcCached, throughput);
+                break;
+            }
+        }
+
         // Emissive surfaces (lava, glowstone, torches, ...) add radiance directly, colored by albedo.
         // RIS emitter NEE: the direct-hit emission term is gated only for emitters RIS actually samples
         // (payload emitter-in-list bit) — and then only off diffuse continuation rays (showCelestial
@@ -661,39 +719,31 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             }
         }
 
-        // ---- Experimental SHaRC: spatially-hashed world-space radiance cache.
+        // ---- Experimental SHaRC: cache update (NVIDIA's Update pass, inlined into the render trace).
         //
-        // Cache keys are WORLD coordinates, not camera-relative hitPos: hitPos shifts as the player
-        // walks (it is rebased onto the camera), so hashing it would smear entries across the world
-        // every frame and make the cached light flash as the camera moves. hitPos - camOffset is the
-        // rebased world-space position, which only changes when the terrain origin rebases.
+        // Cache keys are ABSOLUTE WORLD coordinates: hitPos is terrain-rebased, and sharc.slang adds
+        // the terrain origin from sharcGridOrigin.xyz before hashing. (The original integration
+        // hashed hitPos - camOffset, which is CAMERA-relative — see gv_hitCamRel in guides.slang —
+        // so every camera move, sub-pixel TAA jitter included, smeared entries into different cells
+        // and the cache could never converge.)
         //
-        // Early bounces (< startBounce) always trace and warm the cache from the surface's local
-        // radiance. Later diffuse bounces try the cache first: a warm entry is the cached environment
-        // light for this voxel, so it is used as the indirect ambient tail and the path stops. That
-        // shortens noisy multi-bounce tails and reuses nearby world-space light instead of re-tracing
-        // it every frame. Specular/glossy paths and exact mirrors are never replaced, so reflections
-        // keep their traced sharpness. A cache miss falls through to the ordinary continuation.
-        if (sharcEnabled() && sharcReady(worldPush)) {
-            float3 sharcPos = hitPos - worldPush.camOffset;
-            int sharcStartBounce = int(worldPush.sharcParams2.x);
-            if (bounce < sharcStartBounce) {
-                float3 localAdded = L - surfaceLightBaseline;
-                float3 localLight = localAdded / max(throughput,
-                        float3(1.0e-4, 1.0e-4, 1.0e-4));
-                sharcWrite(worldPush, sharcPos, n, localLight, sharcConfidence(localLight), seed);
-            } else if (channel != 2 && !exactSpecular && worldPush.sharcParams.y > 0.0) {
-                float3 cachedRadiance;
-                float cachedConfidence;
-                if (sharcQuery(worldPush, sharcPos, n, cachedRadiance, cachedConfidence)) {
-                    float3 sharcGi = throughput * diffAlb * INV_PI * cachedRadiance
-                            * worldPush.sharcParams.y * cachedConfidence;
-                    L += sharcGi;
-                    // Cached GI is a diffuse indirect-ambient estimate; it belongs in the diffuse lobe
-                    // even when this path had not classified yet (a cache hit at bounce >= 2 is always
-                    // from the diffuse continuation branch).
-                    Ldiff += sharcGi;
-                    break;
+        // EVERY shaded diffuse-capable vertex of an update path warms the cache — not just the
+        // early bounces. The old write-side restriction to bounce < startBounce left the cells that
+        // queries actually look up (deep, non-camera-visible surfaces) permanently cold, which is
+        // why the debug view showed a wall of red. The written value is the vertex's own outgoing
+        // radiance: everything the path added since surfaceLightBaseline (emission + NEE/RIS + hand
+        // light + SSS), demodulated by the path throughput. That light is also back-propagated into
+        // the previous vertices' entries, so each entry converges toward the full outgoing radiance
+        // of its surface — the direct-plus-indirect quantity the query above replaces a vertex with.
+        if (sharcUpdatePath && !exactSpecular) {
+            float3 localAdded = L - surfaceLightBaseline;
+            if (max(throughput.r, max(throughput.g, throughput.b)) > 1.0e-3
+                    && !any(isnan(localAdded)) && !any(isinf(localAdded))) {
+                float3 localOut = localAdded / throughput;
+                sharcPropagateToPath(worldPush, sharcState, hitPos, localOut, throughput);
+                uint sharcIndex;
+                if (sharcWrite(worldPush, hitPos, n, localOut, sharcIndex)) {
+                    sharcRegisterPathVertex(sharcState, sharcIndex, hitPos, throughput);
                 }
             }
         }
@@ -779,11 +829,15 @@ void main() {
         // frame, or a frame with no emitters cannot leave stale current-buffer history behind.
         restirInvalidate(pixelIndex);
     }
-    if (pc.debugView != 0u) {
+    if (pc.debugView != 0u && pc.debugView != SHARC_DEBUG_VIEW_ID) {
         return; // pass A owns guide visualization output
     }
     int2 pix = int2(dispatchIndex);
     uint spp = max(worldPush.spp, 1u);
+    // SHaRC debug view state, aggregated over every sample and split leaf this pixel traced.
+    gv_sharcDbgQueried = 0u;
+    gv_sharcDbgHit = 0u;
+    gv_sharcDbgCount = 0.0;
     ConstPtr<PackedPathSegment> queue = ConstPtr<PackedPathSegment>(pc.pathQueueAddr);
     float3 frameRadiance = float3(0.0, 0.0, 0.0);
     float3 frameDiff = float3(0.0, 0.0, 0.0);
@@ -850,6 +904,23 @@ void main() {
         if (lum > UNDENOISED_FIREFLY_MAX_LUMINANCE) {
             radiance *= UNDENOISED_FIREFLY_MAX_LUMINANCE / lum;
         }
+    }
+
+    // SHaRC cache debug view: green = a query hit (brightness tracks the entry's sample count, so
+    // the cache is seen warming up), red = a query missed (cold cell / rejected entry), dark grey =
+    // no query reached (path ended before the start bounce, specular, sky, or SHaRC off). This is
+    // the first-class replacement for the temporary red/green overlay used to diagnose the cache.
+    if (pc.debugView == SHARC_DEBUG_VIEW_ID) {
+        float3 sharcDbg;
+        if (gv_sharcDbgHit != 0u) {
+            float warm = clamp(gv_sharcDbgCount / 8.0, 0.0, 1.0);
+            sharcDbg = lerp(float3(0.05, 0.30, 0.05), float3(0.10, 1.00, 0.10), warm);
+        } else if (gv_sharcDbgQueried != 0u) {
+            sharcDbg = float3(0.55, 0.04, 0.04);
+        } else {
+            sharcDbg = float3(0.12, 0.12, 0.14);
+        }
+        radiance = sharcDbg;
     }
     outImage[pix] = float4(radiance, 1.0);
 

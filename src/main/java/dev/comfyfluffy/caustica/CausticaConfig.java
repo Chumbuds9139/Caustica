@@ -1071,50 +1071,83 @@ public final class CausticaConfig {
         /**
          * Experimental SHaRC (NVIDIA Spatial Hash Radiance Cache) integration.
          *
-         * <p>SHaRC is a world-space radiance cache: early bounces warm a voxel hash with the local
-         * light they observe, and later diffuse bounces query it instead of tracing another noisy
-         * continuation. The result is shorter path tails, less multi-bounce noise and a small
-         * performance win in brightly lit scenes. It is deliberately experimental — the shader-side
-         * cache is a Caustica approximation rather than the full NVIDIA RTXGI pipeline — so it is off
-         * by default and every tuning knob is exposed in the SHaRC settings sub-screen.
+         * <p>SHaRC is a world-space radiance cache following NVIDIA's design
+         * (https://github.com/NVIDIA-RTX/SHARC), collapsed into Caustica's single render pass:
+         * every shaded diffuse-capable vertex warms a voxel hash with its outgoing radiance AND
+         * back-propagates that light into the voxels of previous path vertices (which also learn
+         * sky ambient on misses), so entries converge toward the full outgoing radiance of their
+         * surfaces. From {@code startBounce} on, diffuse vertices query the cache <i>before</i>
+         * shading and, on a hit, the cached value replaces the vertex's entire remaining path —
+         * {@code L += throughput * cached}, exactly the RTXGI SDK sample's usage. The result is
+         * shorter path tails, much less multi-bounce noise and a performance win once the cache is
+         * warm. It is deliberately experimental — it is a Caustica-native Slang implementation of
+         * the algorithm rather than NVIDIA's shader headers — so it is off by default and every
+         * tuning knob is exposed in the SHaRC settings sub-screen (plus debug view 13, which paints
+         * per-pixel cache query results).
          */
         public static final class Sharc {
             public static final BooleanSetting ENABLED = bool("caustica.rt.sharc", "sharc.enabled", false);
-            /** Voxel edge length in blocks. Smaller cells are more precise but warm more slowly. */
+            /**
+             * Voxel edge length in blocks. Smaller cells are sharper but need more entries and warm
+             * more slowly; larger cells blur light across larger regions. Minecraft blocks are a
+             * metre, so 2 matches NVIDIA's typical near-camera voxel scale.
+             */
             public static final FloatSetting CELL_SIZE =
-                    clampedFloat("caustica.rt.sharc.cellSize", "sharc.cell-size", 4.0f, 1.0f, 64.0f);
-            /** Flat spatial-hash capacity in entries. Larger caches cover more world before thrashing. */
+                    clampedFloat("caustica.rt.sharc.cellSize", "sharc.cell-size", 2.0f, 1.0f, 64.0f);
+            /**
+             * Flat spatial-hash capacity in entries. Larger caches cover more world before hash
+             * collisions start rejecting writes. NVIDIA recommends ~4M entries for their samples;
+             * 256K (12 MiB) is a sane default here, and 1M (48 MiB) is available for big scenes.
+             */
             public static final IntSetting CACHE_ENTRIES =
-                    clampedInt("caustica.rt.sharc.cacheEntries", "sharc.cache-entries", 1 << 15,
-                            2048, 1 << 18);
-            /** Fraction of warm paths that actually write a cache entry. */
+                    clampedInt("caustica.rt.sharc.cacheEntries", "sharc.cache-entries", 1 << 18,
+                            2048, 1 << 20);
+            /** Fraction of shaded paths that actually write a cache entry. */
             public static final FloatSetting UPDATE_COVERAGE =
-                    clampedFloat("caustica.rt.sharc.updateCoverage", "sharc.update-coverage", 0.5f, 0.0f, 1.0f);
-            /** How much a fresh estimate blends into an existing entry (0 = never change it). */
+                    clampedFloat("caustica.rt.sharc.updateCoverage", "sharc.update-coverage", 0.35f, 0.0f, 1.0f);
+            /**
+             * Inverse temporal accumulation window: the entry mean is a per-frame window of roughly
+             * {@code 1 / blend} frames (0.125 = an 8-frame window, like NVIDIA's
+             * accumulationFrameNum). Lower is smoother and slower to react; higher tracks lighting
+             * changes faster but flickers.
+             */
             public static final FloatSetting TEMPORAL_BLEND =
-                    clampedFloat("caustica.rt.sharc.temporalBlend", "sharc.temporal-blend", 0.5f, 0.0f, 0.99f);
+                    clampedFloat("caustica.rt.sharc.temporalBlend", "sharc.temporal-blend", 0.125f, 0.0f, 0.99f);
             /** First bounce that may consult the cache. Earlier bounces still warm it. */
             public static final IntSetting START_BOUNCE =
                     clampedInt("caustica.rt.sharc.startBounce", "sharc.start-bounce", 2, 1, 6);
-            /** How strongly the cached indirect tail replaces a continued path. */
+            /**
+             * Scale applied to the cached outgoing radiance that replaces a vertex's shading and the
+             * rest of its path. 1.0 is the NVIDIA behaviour (full replacement, unbiased); lower
+             * values darken the cached GI tail in exchange for a softer cache transition.
+             */
             public static final FloatSetting STRENGTH =
-                    clampedFloat("caustica.rt.sharc.strength", "sharc.strength", 0.75f, 0.0f, 1.0f);
-            /** Maximum query distance (blocks) from a cell's centre before it is considered unusable. */
+                    clampedFloat("caustica.rt.sharc.strength", "sharc.strength", 1.0f, 0.0f, 1.0f);
+            /**
+             * Reserved. Kept (and still published in WorldPush.sharcParams.w) so existing configs
+             * keep loading, but the shader no longer reads it: a query position is always inside its
+             * own cell, so a "distance from cell centre" limit could never reject anything.
+             */
             public static final FloatSetting MAX_DISTANCE =
                     clampedFloat("caustica.rt.sharc.maxDistance", "sharc.max-distance", 96.0f, 4.0f, 256.0f);
             /** Frames an entry stays usable before it is treated as stale and allowed to be replaced. */
             public static final IntSetting FRAME_LIFETIME =
                     clampedInt("caustica.rt.sharc.frameLifetime", "sharc.frame-lifetime", 120, 1, 240);
-            /** Minimum cosine between the stored and query normals for a cache hit. */
+            /**
+             * Minimum cosine between the stored and query normals for a cache hit. A reject gate
+             * only — the cached radiance is never scaled by the normal agreement, which is what used
+             * to silently zero out marginal hits.
+             */
             public static final FloatSetting NORMAL_THRESHOLD =
                     clampedFloat("caustica.rt.sharc.normalThreshold", "sharc.normal-threshold", 0.35f, 0.0f, 1.0f);
             /**
-             * Minimum frame age before a freshly written cache entry can be used. A new cell holds a
-             * very noisy estimate; making the tracer wait a few frames before trusting it prevents the
-             * bright flashes that happen when a previously unseen voxel first appears.
+             * Minimum number of accumulated samples before an entry may be queried (the config key
+             * keeps its historical "stableFrames" name so existing configs keep loading). A fresh
+             * entry with a single sample is usable immediately — it is no noisier than the miss it
+             * prevents — but raising this holds brand-new cells back if pop-in flicker appears.
              */
             public static final IntSetting STABLE_FRAMES =
-                    clampedInt("caustica.rt.sharc.stableFrames", "sharc.stable-frames", 3, 0, 30);
+                    clampedInt("caustica.rt.sharc.stableFrames", "sharc.stable-frames", 1, 0, 30);
             /**
              * Debug logging. When on, Caustica logs SHaRC state transitions (enable/disable, buffer
              * allocation/resize, cache resets) and a periodic summary of the active tuning parameters
