@@ -251,6 +251,19 @@ public final class RtComposite {
     private void syncSharcResources(RtContext ctx) {
         boolean active = RtSharc.INSTANCE.enabled();
         if (active) {
+            // Scene-change detection (dimension travel or world reload): same world coordinates,
+            // different scene. Clear the cache rather than letting staleness evict it over
+            // FRAME_LIFETIME frames of wrong light.
+            ClientLevel level = Minecraft.getInstance().level;
+            if (level != null) {
+                int dimension = dimensionId(level);
+                if (sharcPrevLevel != null && (sharcPrevLevel != level || sharcPrevDimension != dimension)) {
+                    CausticaMod.LOGGER.info("[SHaRC] scene changed; clearing radiance cache");
+                    RtSharc.INSTANCE.requestClear();
+                }
+                sharcPrevLevel = level;
+                sharcPrevDimension = dimension;
+            }
             RtSharc.INSTANCE.ensure(ctx);
             if (RtSharc.INSTANCE.clearRequested()) {
                 CausticaMod.LOGGER.info("[SHaRC] cache reset requested; clearing via vkCmdFillBuffer");
@@ -275,6 +288,9 @@ public final class RtComposite {
                 sharcDebugWasActive = false;
                 CausticaMod.LOGGER.info("[SHaRC] disabled");
             }
+            // Re-arm scene tracking: the cache is released on disable, so the next enable starts
+            // from an empty buffer and must not log a spurious "scene changed" clear.
+            sharcPrevLevel = null;
             RtSharc.INSTANCE.releaseIfDisabled(ctx);
         }
     }
@@ -642,6 +658,12 @@ public final class RtComposite {
     // Debug-state tracking for the SHaRC console logging (enable/disable + periodic summary).
     private boolean sharcDebugWasActive;
     private long sharcDebugLastLogFrame;
+    // Scene identity the SHaRC cache was last warmed in. The cache is keyed by world coordinates,
+    // which repeat across dimensions and world reloads, so a scene change must drop it (NVIDIA's
+    // integration checklist: clear cache resources on scene reload) instead of leaking up to
+    // FRAME_LIFETIME frames of the old scene's light into the new one.
+    private ClientLevel sharcPrevLevel;
+    private int sharcPrevDimension;
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
     private int displayW = -1;
