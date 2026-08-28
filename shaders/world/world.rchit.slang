@@ -696,8 +696,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         // Enchantment/foil glint overlay (armour, held enchanted items, tridents): special-captured
         // like the portal surfaces — the collector's PRIM_GLINT tag drives this dedicated branch, so
         // the glint is an animated, self-lit shimmer rather than a flat texture drawn at reduced
-        // opacity. The any-hit shader has already discarded the transparent texels (vanilla's own
-        // glint shader discards alpha < 0.1), so the rays reaching here shade a real streak.
+        // opacity. world.rahit has already gated the ray (texel-brightness dither AND the armour-texture
+        // alpha gate, so the shimmer never paints the bare body), and the rays reaching here shade a
+        // real streak.
         if ((pr.flags & PRIM_GLINT) != 0u) {
             WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
             float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)

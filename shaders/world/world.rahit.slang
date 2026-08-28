@@ -188,8 +188,27 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             // stay mostly transparent, bright texels show the streak. (Packs that DO supply an alpha
             // mask are handled too: alpha multiplies the brightness, so transparent texels stay
             // transparent.)
-            float glintCoverage = clamp(texel.a * max(max(texel.r, texel.g), texel.b), 0.0, 1.0);
-            if (alphaDitherThreshold(salt) >= glintCoverage) {
+            //
+            // Vanilla additionally gates the glint to the ARMOUR SURFACE with an EQUAL depth test:
+            // the armour pass wrote depth only where the armour texture is opaque, so the glint never
+            // draws over the bare body/legs. Reproduce that here — the collector records the armour
+            // texture slot in aux1 (the armour layer's submission immediately precedes its glint):
+            // wherever that armour texture is transparent (alpha < 0.1, the same cutoff the armour
+            // cutout uses), discard the glint and let the ray fall through to the body beneath.
+            // `uv` is the unscrolled model UV, which is exactly the armour texture's UV (both passes
+            // render the same model geometry).
+            bool armourOpaque = true;
+            if (epr.aux1 != 0u) {
+                int armourSlot = asint(epr.aux1);
+                float4 armourTexel = entityAlbedoTex[NonUniformResourceIndex(armourSlot)].SampleLevel(uv, 0.0);
+                armourOpaque = armourTexel.a >= 0.1;
+            }
+            if (armourOpaque) {
+                float glintCoverage = clamp(texel.a * max(max(texel.r, texel.g), texel.b), 0.0, 1.0);
+                if (alphaDitherThreshold(salt) >= glintCoverage) {
+                    IgnoreHit();
+                }
+            } else {
                 IgnoreHit();
             }
         } else if (stochasticAlpha) {

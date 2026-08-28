@@ -116,6 +116,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     // its texture alpha passes the ray through, traversal continues to the base geometry behind it.
     private static final int ENCHANTMENT_GLINT_ORDER = 1;
 
+    // Bindless texture slot of the most recent non-glint model submission (the armour layer, in the
+    // vanilla armour path: EquipmentLayerRenderer submits the armour model and, when the item has
+    // foil, the SAME model with armorEntityGlint() immediately after). The glint submission copies
+    // this into capture.currentGlintArmorSlot so world.rahit can gate the shimmer to the armour
+    // surface (vanilla's EQUAL-depth semantics) instead of painting the bare body.
+    private int lastArmorTexSlot;
+
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
     private final RtEntityCapture parityCapture = new RtEntityCapture();
@@ -164,6 +171,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             this.outlineColor = 0;
             this.pendingOrder = 0;
             this.flameSubmittedThisEntity = false;
+            this.lastArmorTexSlot = 0;
         }
     }
 
@@ -228,6 +236,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // them, so an ordinary model after a tagged layer in the same capture cannot inherit them.
         capture.currentPortalFlags = 0;
         capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        // The armour layer's texture (submitted immediately before this) gates the glint to the armour
+        // surface — see lastArmorTexSlot. Non-glint submissions carry no armour context.
+        capture.currentGlintArmorSlot = glint ? lastArmorTexSlot : 0;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
@@ -268,6 +279,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             }
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
+        }
+        // Remember this submission's texture for the next glint submission (the armour layer is always
+        // followed by its glint in vanilla's EquipmentLayerRenderer). Glint submissions themselves are
+        // skipped so lastArmorTexSlot keeps pointing at the armour texture beneath them.
+        if (!glint) {
+            lastArmorTexSlot = capture.currentTexSlot;
         }
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
@@ -435,6 +452,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
         capture.currentPrimFlags = 0; // glint never arrives through baked quads — drop any stale tag
+        capture.currentGlintArmorSlot = 0; // no armour context on baked-quad paths
         // Held/displayed portal blocks (endermen, block displays in 26.1+) render as baked quads with
         // the portal sprite; tag them for the procedural portal branches.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -749,6 +767,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0;
         capture.currentPortalFlags = 0;
         capture.currentPrimFlags = 0; // the proxy box is never glint/weather tagged
+        capture.currentGlintArmorSlot = 0; // no armour context on the fallback box
         capture.clearUvRemap();
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
@@ -844,6 +863,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             capture.currentOrder = 0;
             capture.currentPortalFlags = 0;
             capture.currentPrimFlags = 0; // text is never glint/weather tagged
+            capture.currentGlintArmorSlot = 0; // no armour context on glyphs
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
         }
@@ -932,6 +952,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // cutout geometry.
         capture.currentPortalFlags = 0;
         capture.currentPrimFlags = 0;
+        capture.currentGlintArmorSlot = 0; // no armour context on the flame
         TextureAtlasSprite fire = fireSprite();
         if (fire == null) {
             return;
@@ -1019,6 +1040,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOpacity = 1.0f;
         capture.currentPortalFlags = 0;
         capture.currentPrimFlags = 0; // a leash ribbon is never glint/weather tagged
+        capture.currentGlintArmorSlot = 0; // no armour context on leashes
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -1240,6 +1262,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
         capture.currentPrimFlags = 0; // glint never arrives through FRAPI meshes — drop any stale tag
+        capture.currentGlintArmorSlot = 0; // no armour context on FRAPI meshes
         // Held/displayed portal blocks through FRAPI meshes (endermen, block displays): tag them for
         // the procedural portal branches, mirroring addQuad.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -1348,6 +1371,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
         capture.currentPortalFlags = 0; // per-submission; tagPortalSubmission below may set it
         capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        // Custom-geometry glint (e.g. a trident's foil) has no preceding armour submission, so no
+        // armour-texture gate applies; coverage falls back to the texel-brightness dither alone.
+        capture.currentGlintArmorSlot = 0;
         boolean stochasticAlpha = !glint && isTranslucent(renderType);
         capture.currentOpacity = 1.0f; // glint coverage comes from its texture alpha, not a fake opacity
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
