@@ -33,6 +33,15 @@ public static const int   WAVE_NEWTON_STEPS = 3;      // height-field ray iterat
 // repeating vanilla still-water tile sitting on top of the waves.
 public static const float WAVE_Q[WAVE_COUNT] = { 0.050, 0.058, 0.055, 0.048, 0.036, 0.024, 0.016 };
 
+// Live Animated Water tuning, pushed per frame in the waterOpacity lanes (see WorldPush.waterOpacity
+// in world_common.slang): y = wave height scale, z = animation speed scale, w = spectrum wave count.
+// The sliders in the Water settings sub-screen write these; the clamps below keep a bad push from
+// ever unbounding the spectrum walk or exploding the height field, and the authored constants above
+// stay the 1.0 reference. Default push (1.0, 1.0, 7) reproduces the stock look bit-for-bit.
+public float waterWaveStrengthScale() { return clamp(worldPush.waterOpacity.y, 0.0, 4.0); }
+public float waterWaveSpeedScale() { return clamp(worldPush.waterOpacity.z, 0.0, 4.0); }
+public int waterWaveCount() { return clamp(int(worldPush.waterOpacity.w + 0.5), 1, WAVE_COUNT); }
+
 public float waterWaveLodWeight(float wavelength, float footprint) {
     float cyclesPerPixel = max(footprint, 0.0) / max(wavelength, 1.0e-4);
     return 1.0 - smoothstep(0.25, 0.5, cyclesPerPixel);
@@ -47,13 +56,15 @@ public void waterWaveSpectrum<let WITH_DT : int>(float2 p, float t, float footpr
     // Per-wave steepness a·k: energy stays in the swell. The old 10-octave 0.5 m chop read as the
     // repeating vanilla still-water tile (azulejo) sitting on top of the waves.
     const float Q[WAVE_COUNT] = { 0.050, 0.058, 0.055, 0.048, 0.036, 0.024, 0.016 };
-    t *= WAVE_SPEED;
+    t *= WAVE_SPEED * waterWaveSpeedScale();
+    int waveCount = waterWaveCount();
     height = 0.0;
     heightDt = 0.0;
     grad = float2(0.0, 0.0);
     gradDt = float2(0.0, 0.0);
     float lambda = WAVE_LAMBDA0;
     for (int i = 0; i < WAVE_COUNT; i++) {
+        if (i >= waveCount) break; // player detail slider: drop short-wave components first
         float lodWeight = waterWaveLodWeight(lambda, footprint);
         if (lodWeight <= 0.0) break;
         float k = 2.0 * PI / lambda;
@@ -95,10 +106,13 @@ public void waterWaveSpectrum<let WITH_DT : int>(float2 p, float t, float footpr
         }
         lambda /= WAVE_LAMBDA_RATIO;
     }
-    height *= WATER_WAVE_STRENGTH;
-    heightDt *= WATER_WAVE_STRENGTH;
-    grad *= WATER_WAVE_STRENGTH;
-    gradDt *= WATER_WAVE_STRENGTH;
+    // The height/slope scale folds the player's Wave Height slider into the authored strength; the
+    // time derivatives scale with it (they derive from the same scaled amplitude).
+    float strength = WATER_WAVE_STRENGTH * waterWaveStrengthScale();
+    height *= strength;
+    heightDt *= strength;
+    grad *= strength;
+    gradDt *= strength;
 }
 
 public float2 waterWaveGrad(float2 p, float t, float footprint) {
@@ -128,7 +142,9 @@ public void waterWaveFieldTemporal(float2 p, float currentT, float previousT, fl
     float heightDt;
     float2 gradDt;
     waterWaveSpectrum<1>(p, currentT, footprint, height, grad, heightDt, gradDt);
-    float dt = (currentT - previousT) * WAVE_SPEED;
+    // Scaled-time rewind: the spectrum above evaluates at t' = t * WAVE_SPEED * speedScale, and the
+    // derivatives are w.r.t. that same scaled time, so the frame delta converts with both factors.
+    float dt = (currentT - previousT) * WAVE_SPEED * waterWaveSpeedScale();
     previousGrad = grad - dt * gradDt;
     previousHeight = height - dt * heightDt;
 }

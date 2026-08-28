@@ -161,7 +161,13 @@ public final class RtComposite {
         boolean enabled = CausticaConfig.Rt.Composite.PARALLAX_ENABLED.value();
         float strength = CausticaConfig.Rt.Composite.PARALLAX_STRENGTH.value();
         float depth = enabled ? strength * 0.125f : 0.0f;
-        float crossings = Math.min(128.0f, Math.max(16.0f, Math.round(32.0f * Math.max(1.0f, strength))));
+        // POM Quality slider: multiplies the strength-derived texel-crossing budget without touching
+        // the relief depth, so the player trades sampling level for fps independently of the look.
+        // The outer clamp keeps the pushed budget inside the shader's compiled bounds (the shader
+        // re-clamps it too — see PARALLAX_MIN/MAX_CROSSINGS in world_common.slang).
+        float quality = CausticaConfig.Rt.Composite.PARALLAX_QUALITY.value();
+        float crossings = Math.min(128.0f,
+                Math.max(16.0f, Math.round(32.0f * Math.max(1.0f, strength) * quality)));
         return new Float4(depth, crossings, 0.0f,
                 CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.value());
     }
@@ -1707,9 +1713,13 @@ public final class RtComposite {
                     // then the item's RGB tint lane.
                     hand.light(),
                     hand.color(),
-                    // Water-opacity lane: x = extra neutral per-block extinction scale (0 = default
-                    // clarity). Matches WorldPush.waterOpacity; y/z/w reserved.
-                    new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(), 0.0f, 0.0f, 0.0f),
+                    // Water lanes (WorldPush.waterOpacity): x = extra neutral per-block extinction
+                    // scale (0 = default clarity); y/z/w = live Animated Water tuning the spectrum
+                    // multiplies in (height scale, speed scale, wave count) — 1/1/7 = authored look.
+                    new Float4(CausticaConfig.Rt.Composite.WATER_OPACITY.value(),
+                            CausticaConfig.Rt.Composite.WATER_WAVE_STRENGTH.value(),
+                            CausticaConfig.Rt.Composite.WATER_WAVE_SPEED.value(),
+                            (float) CausticaConfig.Rt.Composite.WATER_WAVE_DETAIL.value()),
                     // Material appearance lane: x is the optional metallic polish amount. It is read
                     // every frame so dragging the slider needs neither a material rebuild nor reload.
                     new Float4(CausticaConfig.Rt.Composite.METALLIC_SHININESS.value(), 0.0f, 0.0f, 0.0f),
@@ -1720,7 +1730,12 @@ public final class RtComposite {
                     sharcParams(),
                     sharcParams2(),
                     sharcParams3(),
-                    sharcGridOrigin(terrain)
+                    sharcGridOrigin(terrain),
+                    // Trailing field (WorldPush.restirTuning): the live ReSTIR anti-flicker knobs
+                    // lighting.slang resolves against its compiled RESTIR_* caps.
+                    new Int4(CausticaConfig.Rt.Lights.RESTIR_TEMPORAL_HISTORY.value(),
+                            CausticaConfig.Rt.Lights.RESTIR_SPATIAL_NEIGHBOURS.value(),
+                            CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

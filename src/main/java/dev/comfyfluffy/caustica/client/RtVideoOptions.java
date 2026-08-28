@@ -24,70 +24,45 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
- * Builds the {@link OptionInstance} widgets shown in the RT section of the vanilla Video Settings screen
- * (injected by {@code VideoSettingsScreenMixin}). Each option is bound straight to a {@link CausticaConfig}
- * runtime setting: the initial value is read from the current config, and the value-update listener writes
- * back through {@code set(...)} so changes take effect on the next frame.
+ * Builds the {@link OptionInstance} widgets shown by the Ray Tracing settings hub and its sub-screens
+ * ({@code RtVideoOptionsScreen} / {@code RtSubScreens} / {@code RtSettingsSubScreen}, reached from
+ * Video Settings through {@code VideoSettingsScreenMixin}'s "Ray Tracing Settings..." button). Each
+ * option is bound straight to a {@link CausticaConfig} runtime setting: the initial value is read
+ * from the current config, and the value-update listener writes back through {@code set(...)} so
+ * changes take effect on the next frame.
+ *
+ * <p>The hub is a pure directory: every feature group (Quality, Upscaling/DLSS-RR, Frame Generation,
+ * Lighting &amp; ReSTIR, Sky, World &amp; Entities, Effects, Water, POM, Clouds, Exposure,
+ * Tonemapping, HDR, Terrain Streaming, Debug, SHaRC) opens its own sub-screen, and every sub-screen
+ * starts with a "Reset to Defaults" row covering exactly the settings its group exposes (the hub
+ * offers the matching global reset — see {@code RtSubScreens.allResettableSettings()}).
  *
  * <p>Only settings the renderer re-reads per-frame — or can apply through a bounded rebuild — are
  * exposed here. Toggles that would require a device or buffer-pool rebuild (worker threads,
  * max-entity capacities, PBR material flags) are intentionally left to the {@code -Dcaustica.*}
- * startup surface. Two exceptions are handled specially: DLSS-RR quality recreates the RR feature
- * live on change (see {@code RtDlssRr}), and the opacity-micromap toggle is read at section BUILD
- * time and answered with a full terrain rebuild (see {@code omm()}), so both are safe to expose.
+ * startup surface. A few exceptions are handled specially: DLSS-RR quality recreates the RR feature
+ * live on change (see {@code RtDlssRr}), and the opacity-micromap toggle/subdivision plus
+ * BLAS-compaction are read at section BUILD time and answered with a full terrain rebuild, so all
+ * of them are safe to expose.
  *
  * <p>Upscaling group: {@link #qualityOptions(Runnable)} starts with the upscaler selector
- * (Off / DLSS, plus FSR 3 once its backend lands — see {@code RtUpscalerSupport}), and the rows that
- * depend on that selection — the quality slider and the Frame Generation toggle — are built from the
- * currently selected upscaler. Changing the selector reopens the screen through the supplied refresh
- * callback so those rows switch together with the upscaler instead of lagging one screen behind.
+ * (Off / DLSS, plus FSR 3/XeSS where bundled — see {@code RtUpscalerSupport}), and the rows that
+ * depend on that selection are built from the currently selected upscaler. Changing the selector
+ * reopens the screen through the supplied refresh callback so those rows switch together with the
+ * upscaler instead of lagging one screen behind.
  */
 public final class RtVideoOptions {
     private RtVideoOptions() {
     }
 
-    /** General runtime-tunable RT options. Paired two-per-row by {@code OptionsList.addSmall}. */
-    public static OptionInstance<?>[] runtimeOptions() {
-        return new OptionInstance<?>[] {
-            spp(),
-            maxBounces(),
-            sunSize(),
-            entities(),
-            particles(),
-            weatherParticles(),
-            rainDensity(),
-            waterWaves(),
-            waterOpacity(),
-            // POM: the on/off toggle followed by its tuning sliders, shader-only and safe live.
-            parallaxEnabled(),
-            parallaxStrength(),
-            parallaxSmoothing(),
-            parallaxDistance(),
-            // Grouped: the three new effect/quality toggles sit together, and OptionsList.addSmall
-            // pairs them two per row, so they read as one block rather than scattered checkboxes.
-            subsurfaceScattering(),
-            fog(),
-            weatherLighting(),
-            // Clouds: the on/off toggle followed by its two tuning sliders, so the control that gates
-            // the other two reads immediately before them.
-            clouds(),
-            cloudStyle(),
-            cloudHeight(),
-            cloudThickness(),
-            cloudShadowStrength(),
-            cloudOpacity(),
-            denoiser(),
-            handFov(),
-            dlssQuality(),
-            dlssPreset(),
-            hdrEnabled(),
-            hdrPaperWhite(),
-            hdrPeak(),
-            debugView(),
-        };
-    }
-
-    // ===== Organized groups for the dedicated RT settings screen =====
+    // ===== Organized groups for the dedicated RT settings screen and its sub-screens =====
+    //
+    // Every group is one sub-screen's option block (see RtSubScreens); each sub-screen opens from a
+    // button on the hub screen and starts with a "Reset to Defaults" row covering exactly the
+    // settings its group touches. Only settings the renderer re-reads per frame — or that apply
+    // through a bounded rebuild (the OMM and BLAS-compaction rows request a full terrain rebuild) —
+    // are exposed: worker threads, entity buffer capacities and other allocation-time sizing stay
+    // on the -Dcaustica.* / config-file surface.
 
     /**
      * Quality section, headed by the upscaler selector. The selector's dependent rows — the quality
@@ -122,19 +97,83 @@ public final class RtVideoOptions {
             options.add(svgfDenoiser());
         }
         options.add(omm());
+        options.add(ommSubdivision());
         return options.toArray(OptionInstance<?>[]::new);
     }
 
-    public static OptionInstance<?>[] generalOptions() {
+    /**
+     * The upscaling sub-screen's rows: the same selector that heads the Quality section, then every
+     * knob of the selected backend — DLSS Ray Reconstruction gets quality, model preset and its
+     * denoise filter; FSR 3 / XeSS get their quality slider and the built-in denoiser. Changing the
+     * selector reopens the sub-screen (the qualityOptions pattern), so the rows below it always
+     * match the active backend.
+     */
+    public static OptionInstance<?>[] upscalingOptions(Runnable upscalerChanged) {
+        List<OptionInstance<?>> options = new ArrayList<>();
+        options.add(upscaler(upscalerChanged));
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
+            options.add(dlssQuality());
+            options.add(dlssPreset());
+            options.add(denoiser());
+        } else if (RtUpscalerSupport.MODE_FSR3.equals(mode)) {
+            options.add(fsrQuality());
+            options.add(svgfDenoiser());
+        } else if (RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            options.add(xessQuality());
+            options.add(svgfDenoiser());
+        } else {
+            options.add(svgfDenoiser());
+        }
+        return options.toArray(OptionInstance<?>[]::new);
+    }
+
+    /** Sky / celestial and first-person viewmodel rows. */
+    public static OptionInstance<?>[] skyOptions() {
         return new OptionInstance<?>[] {
             sunSize(),
+            moonSize(),
+            sunSouthTilt(),
+            handFov(),
+        };
+    }
+
+    /** Entity, particle, weather and overlay rows. */
+    public static OptionInstance<?>[] worldOptions() {
+        return new OptionInstance<?>[] {
             entities(),
             particles(),
             weatherParticles(),
             rainDensity(),
+            entityGlow(),
+            nameTags(),
+            blockOutline(),
+        };
+    }
+
+    /** Animated Water rows: the geometric wave toggle, the extinction slider and the spectrum knobs. */
+    public static OptionInstance<?>[] waterOptions() {
+        return new OptionInstance<?>[] {
             waterWaves(),
             waterOpacity(),
-            handFov(),
+            waterWaveStrength(),
+            waterWaveSpeed(),
+            waterWaveDetail(),
+        };
+    }
+
+    /**
+     * Terrain streaming + BLAS rows. The three per-pass budgets are read by RtTerrain's scheduler
+     * every pass, so a slider drag takes effect immediately; the BLAS flags are read at section
+     * build time, so their change handlers request a full terrain rebuild (same mechanism as the
+     * OMM toggle / F3+A) to make the new state uniform.
+     */
+    public static OptionInstance<?>[] streamingOptions() {
+        return new OptionInstance<?>[] {
+            asyncDispatchPerPass(),
+            resultsPerPass(),
+            maxInflightSections(),
+            blasCompaction(),
         };
     }
 
@@ -151,6 +190,7 @@ public final class RtVideoOptions {
         return new OptionInstance<?>[] {
             parallaxEnabled(),
             parallaxStrength(),
+            parallaxQuality(),
             parallaxSmoothing(),
             parallaxDistance(),
         };
@@ -160,6 +200,7 @@ public final class RtVideoOptions {
         return new OptionInstance<?>[] {
             clouds(),
             cloudStyle(),
+            cloudCoverage(),
             cloudHeight(),
             cloudThickness(),
             cloudShadowStrength(),
@@ -175,30 +216,49 @@ public final class RtVideoOptions {
         };
     }
 
+    /** Debug tooling rows: the buffer visualizer plus the logging/capture switches. */
     public static OptionInstance<?>[] debugOptions() {
         return new OptionInstance<?>[] {
             debugView(),
+            frameStats(),
+            ommStats(),
+            lightStats(),
+            lightDump(),
+            lightDumpRadius(),
         };
     }
 
+    /** Exposure rows: the mode picker and manual EV, then the auto-exposure internals. */
     public static OptionInstance<?>[] exposureOptions() {
         return new OptionInstance<?>[] {
             exposureMode(),
             manualEv(),
+            exposureKey(),
+            exposureMinEv(),
+            exposureMaxEv(),
+            adaptUp(),
+            adaptDown(),
         };
     }
 
     /**
      * Light-emission and sampling options. {@code heldItemLight} toggles the analytic light a luminous
      * held item casts; {@code dynamicIntensity} scales that light and other dynamic emitters. Both take
-     * effect the frame after they change.
+     * effect the frame after they change. The ReSTIR rows include the live anti-flicker tuning pushed
+     * in {@code WorldPush.restirTuning} (more history / neighbours = steadier light at the cost of
+     * ghosting and overhead, max-age = how long history may live).
      */
     public static OptionInstance<?>[] lightOptions() {
         return new OptionInstance<?>[] {
             heldItemLight(),
             blockEmissiveIntensity(),
             dynamicIntensity(),
+            minFillRatio(),
+            risCandidates(),
             restirSampling(),
+            restirHistory(),
+            restirSpatialNeighbours(),
+            restirMaxAge(),
         };
     }
 
@@ -213,17 +273,294 @@ public final class RtVideoOptions {
         };
     }
 
-    /** Legacy combined exposure + tonemap, kept for compatibility if needed */
-    public static OptionInstance<?>[] exposureAndTonemapOptions() {
+    /** Reflex advanced rows for the Frame Generation & Latency sub-screen (Reflex ≤ 20000 µs cap). */
+    public static OptionInstance<?>[] reflexOptions() {
         return new OptionInstance<?>[] {
-            exposureMode(),
-            manualEv(),
-            tonemapOperator(),
-            tonemapExposure(),
-            tonemapGamma(),
-            tonemapSaturation(),
-            tonemapContrast(),
+            bool("caustica.options.rt.reflexBoost", CausticaConfig.Rt.Reflex.LOW_LATENCY_BOOST),
+            reflexMinInterval(),
         };
+    }
+
+    private static OptionInstance<Integer> reflexMinInterval() {
+        IntSetting setting = CausticaConfig.Rt.Reflex.MINIMUM_INTERVAL_US;
+        return new OptionInstance<>(
+            "caustica.options.rt.reflexMinInterval",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.reflexMinInterval.tooltip")),
+            (caption, micros) -> Options.genericValueLabel(caption, micros == 0
+                    ? Component.translatable("caustica.options.rt.reflexMinInterval.off")
+                    : Component.literal(micros + " us")),
+            new OptionInstance.IntRange(0, 20000),
+            Math.clamp(setting.value(), 0, 20000),
+            setting::set);
+    }
+
+    // ===== New rows shared by the sub-screens (sky/world/water/POM/clouds/exposure/ReSTIR/streaming) =====
+
+    /** Angular radius of the moon disc, in tenths of a degree like {@link #sunSize()}. */
+    private static OptionInstance<Integer> moonSize() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.MOON_ANGULAR_RADIUS;
+        int initialTenths = Math.clamp(Math.round((float) Math.toDegrees(setting.value()) * 10.0f), 1, 80);
+        return new OptionInstance<>(
+            "caustica.options.rt.moonSize",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.moonSize.tooltip")),
+            (caption, tenths) -> Options.genericValueLabel(caption, Component.literal(String.format("%.1f°", tenths / 10.0))),
+            new OptionInstance.IntRange(1, 80),
+            initialTenths,
+            tenths -> setting.set(tenths / 10.0f));
+    }
+
+    /** How far south of the zenith the noon sun sits, in whole degrees (stored in radians). */
+    private static OptionInstance<Integer> sunSouthTilt() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.SUN_NOON_SOUTH_TILT;
+        int initialDegrees = Math.clamp(Math.round((float) Math.toDegrees(setting.value())), -80, 80);
+        return new OptionInstance<>(
+            "caustica.options.rt.sunSouthTilt",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.sunSouthTilt.tooltip")),
+            (caption, degrees) -> {
+                String sign = degrees > 0 ? "+" : "";
+                return Options.genericValueLabel(caption, Component.literal(sign + degrees + "°"));
+            },
+            new OptionInstance.IntRange(-80, 80),
+            initialDegrees,
+            degrees -> setting.set(degrees.floatValue()));
+    }
+
+    private static OptionInstance<Boolean> entityGlow() {
+        return bool("caustica.options.rt.glow", CausticaConfig.Rt.Entities.GLOW_ENABLED);
+    }
+
+    private static OptionInstance<Boolean> nameTags() {
+        return bool("caustica.options.rt.nameTags", CausticaConfig.Rt.Entities.NAME_TAGS_ENABLED);
+    }
+
+    private static OptionInstance<Boolean> blockOutline() {
+        return bool("caustica.options.rt.blockOutline", CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED);
+    }
+
+    /** Wave height multiplier: 0x flattens the sea even with Animated Water on, up to 4x for a storm. */
+    private static OptionInstance<Integer> waterWaveStrength() {
+        return multiplier("caustica.options.rt.waterWaveStrength",
+                CausticaConfig.Rt.Composite.WATER_WAVE_STRENGTH, 0, 40);
+    }
+
+    /** Wave animation speed: 0x freezes the sea in place, up to 4x for a time-lapse ocean. */
+    private static OptionInstance<Integer> waterWaveSpeed() {
+        return multiplier("caustica.options.rt.waterWaveSpeed",
+                CausticaConfig.Rt.Composite.WATER_WAVE_SPEED, 0, 40);
+    }
+
+    /**
+     * How many wave-spectrum components Animated Water evaluates. The authored maximum is 7 (28 m
+     * swell down to ~1.6 m chop); lowering it drops the short-wave detail first and is the cheapest
+     * way to speed up large ocean views.
+     */
+    private static OptionInstance<Integer> waterWaveDetail() {
+        IntSetting setting = CausticaConfig.Rt.Composite.WATER_WAVE_DETAIL;
+        return new OptionInstance<>(
+            "caustica.options.rt.waterWaveDetail",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.waterWaveDetail.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.waterWaveDetail.count", value)),
+            new OptionInstance.IntRange(1, 7),
+            Math.clamp(setting.value(), 1, 7),
+            setting::set);
+    }
+
+    /**
+     * POM sampling level: multiplies the per-hit texel-crossing budget on top of the depth-derived
+     * base (0.3x–4.0x; the config clamps the stored value to 0.25x–4.0x). Higher keeps fine relief
+     * intact at grazing angles on high-resolution packs; lower saves height-field samples.
+     */
+    private static OptionInstance<Integer> parallaxQuality() {
+        return multiplier("caustica.options.rt.parallaxQuality",
+                CausticaConfig.Rt.Composite.PARALLAX_QUALITY, 3, 40);
+    }
+
+    /** Clear-weather sky coverage; rain drives the deck toward overcast on top of this. */
+    private static OptionInstance<Integer> cloudCoverage() {
+        return percent("caustica.options.rt.cloudCoverage", CausticaConfig.Rt.Composite.CLOUD_COVERAGE);
+    }
+
+    private static OptionInstance<Integer> risCandidates() {
+        IntSetting setting = CausticaConfig.Rt.Lights.RIS_CANDIDATES;
+        return new OptionInstance<>(
+            "caustica.options.rt.risCandidates",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.risCandidates.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, value == 0
+                    ? Component.translatable("options.off")
+                    : Component.literal(value + "")),
+            new OptionInstance.IntRange(0, 32),
+            Math.clamp(setting.value(), 0, 32),
+            setting::set);
+    }
+
+    /** Drops sparse emissive footprints from the light buffer (0% keeps everything). */
+    private static OptionInstance<Integer> minFillRatio() {
+        return percent("caustica.options.rt.minFillRatio", CausticaConfig.Rt.Lights.MIN_FILL_RATIO);
+    }
+
+    // ---- ReSTIR anti-flicker knobs (pushed in WorldPush.restirTuning) ----
+
+    /** Temporal effective-sample cap: more history = steadier light, more ghosting on moving lights. */
+    private static OptionInstance<Integer> restirHistory() {
+        IntSetting setting = CausticaConfig.Rt.Lights.RESTIR_TEMPORAL_HISTORY;
+        return new OptionInstance<>(
+            "caustica.options.rt.restirHistory",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.restirHistory.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.restirHistory.samples", value)),
+            new OptionInstance.IntRange(1, 16),
+            Math.clamp(setting.value(), 1, 16),
+            setting::set);
+    }
+
+    /** Spatial neighbour reservoirs queried per pixel; 0 keeps the purely temporal ReSTIR path. */
+    private static OptionInstance<Integer> restirSpatialNeighbours() {
+        IntSetting setting = CausticaConfig.Rt.Lights.RESTIR_SPATIAL_NEIGHBOURS;
+        return new OptionInstance<>(
+            "caustica.options.rt.restirSpatial",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.restirSpatial.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.restirSpatial.count", value)),
+            new OptionInstance.IntRange(0, 8),
+            Math.clamp(setting.value(), 0, 8),
+            setting::set);
+    }
+
+    /** How many frames a reservoir may live before history rejects it. */
+    private static OptionInstance<Integer> restirMaxAge() {
+        IntSetting setting = CausticaConfig.Rt.Lights.RESTIR_MAX_AGE;
+        return new OptionInstance<>(
+            "caustica.options.rt.restirMaxAge",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.restirMaxAge.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption,
+                    Component.translatable("caustica.options.rt.restirMaxAge.frames", value)),
+            new OptionInstance.IntRange(4, 240),
+            Math.clamp(setting.value(), 4, 240),
+            setting::set);
+    }
+
+    // ---- Auto-exposure internals ----
+
+    /** The key value auto exposure targets (scene middle grey), as a 0.01–1.00 slider. */
+    private static OptionInstance<Integer> exposureKey() {
+        return hundredths("caustica.options.rt.exposureKey", CausticaConfig.Rt.Exposure.KEY, 1, 100);
+    }
+
+    private static OptionInstance<Integer> exposureEvSlider(String captionKey, FloatSetting setting) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, tenths) -> {
+                float ev = tenths / 10.0f;
+                String sign = ev > 0.0f ? "+" : "";
+                return Options.genericValueLabel(caption,
+                        Component.literal(sign + String.format(Locale.ROOT, "%.1f EV", ev)));
+            },
+            new OptionInstance.IntRange(-80, 80),
+            Math.clamp(Math.round(setting.value() * 10.0f), -80, 80),
+            tenths -> setting.set(tenths / 10.0f));
+    }
+
+    /** Darkest exposure the auto mode may reach (the two sliders swap roles if crossed). */
+    private static OptionInstance<Integer> exposureMinEv() {
+        return exposureEvSlider("caustica.options.rt.exposureMinEv", CausticaConfig.Rt.Exposure.MIN_EV);
+    }
+
+    /** Brightest exposure the auto mode may reach. */
+    private static OptionInstance<Integer> exposureMaxEv() {
+        return exposureEvSlider("caustica.options.rt.exposureMaxEv", CausticaConfig.Rt.Exposure.MAX_EV);
+    }
+
+    /** How fast auto exposure brightens toward its target (scale/second). */
+    private static OptionInstance<Integer> adaptUp() {
+        return hundredths("caustica.options.rt.adaptUp", CausticaConfig.Rt.Exposure.ADAPT_UP, 1, 400);
+    }
+
+    /** How fast auto exposure darkens toward its target (scale/second). */
+    private static OptionInstance<Integer> adaptDown() {
+        return hundredths("caustica.options.rt.adaptDown", CausticaConfig.Rt.Exposure.ADAPT_DOWN, 1, 400);
+    }
+
+    // ---- Terrain streaming / BLAS rows ----
+
+    private static OptionInstance<Integer> intSlider(String captionKey, IntSetting setting, int min, int max) {
+        return new OptionInstance<>(
+            captionKey,
+            OptionInstance.cachedConstantTooltip(Component.translatable(captionKey + ".tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, value),
+            new OptionInstance.IntRange(min, max),
+            Math.clamp(setting.value(), min, max),
+            setting::set);
+    }
+
+    private static OptionInstance<Integer> asyncDispatchPerPass() {
+        return intSlider("caustica.options.rt.asyncDispatch", CausticaConfig.Rt.Terrain.ASYNC_DISPATCH_PER_PASS, 0, 256);
+    }
+
+    private static OptionInstance<Integer> resultsPerPass() {
+        return intSlider("caustica.options.rt.resultsPerPass", CausticaConfig.Rt.Terrain.COMPLETION_RESULTS_PER_PASS, 0, 256);
+    }
+
+    private static OptionInstance<Integer> maxInflightSections() {
+        return intSlider("caustica.options.rt.maxInflight", CausticaConfig.Rt.Terrain.MAX_INFLIGHT_SECTIONS, 4, 128);
+    }
+
+    /**
+     * BLAS compaction halves acceleration-structure memory at a slightly longer build. Read at
+     * section build time, so the change handler requests a full rebuild (same mechanism as the OMM
+     * toggle) instead of leaving old sections in the previous state.
+     */
+    private static OptionInstance<Boolean> blasCompaction() {
+        return OptionInstance.createBoolean(
+            "caustica.options.rt.blasCompaction",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.blasCompaction.tooltip")),
+            CausticaConfig.Rt.Terrain.BLAS_COMPACTION.value(),
+            value -> {
+                CausticaConfig.Rt.Terrain.BLAS_COMPACTION.set(value);
+                RtTerrain.requestFullClear();
+            });
+    }
+
+    /**
+     * OMM micro-triangle subdivision level, read when a section BLAS is built (see RtTerrainOmm).
+     * Like the toggle below it, a change only takes hold for NEW builds, so the handler requests a
+     * full terrain rebuild to make the level uniform immediately.
+     */
+    private static OptionInstance<Integer> ommSubdivision() {
+        IntSetting setting = CausticaConfig.Rt.Omm.SUBDIVISION;
+        return new OptionInstance<>(
+            "caustica.options.rt.ommSubdivision",
+            OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.ommSubdivision.tooltip")),
+            (caption, value) -> Options.genericValueLabel(caption, value),
+            new OptionInstance.IntRange(0, 6),
+            Math.clamp(setting.value(), 0, 6),
+            value -> {
+                setting.set(value);
+                RtTerrain.requestFullClear();
+            });
+    }
+
+    // ---- Debug rows ----
+
+    private static OptionInstance<Boolean> frameStats() {
+        return bool("caustica.options.rt.frameStats", CausticaConfig.Rt.FrameStats.ENABLED);
+    }
+
+    private static OptionInstance<Boolean> ommStats() {
+        return bool("caustica.options.rt.ommStats", CausticaConfig.Rt.Omm.STATS);
+    }
+
+    private static OptionInstance<Boolean> lightStats() {
+        return bool("caustica.options.rt.lightStats", CausticaConfig.Rt.Lights.STATS);
+    }
+
+    private static OptionInstance<Boolean> lightDump() {
+        return bool("caustica.options.rt.lightDump", CausticaConfig.Rt.Lights.DUMP);
+    }
+
+    private static OptionInstance<Integer> lightDumpRadius() {
+        return intSlider("caustica.options.rt.lightDumpRadius", CausticaConfig.Rt.Lights.DUMP_RADIUS, 1, 64);
     }
 
     private static OptionInstance<String> exposureMode() {
@@ -784,6 +1121,36 @@ public final class RtVideoOptions {
         return Options.genericValueLabel(
                 Component.translatable("caustica.options.rt.reflex"),
                 Component.translatable(CausticaConfig.Rt.Reflex.ENABLED.value() ? "options.on" : "options.off"));
+    }
+
+    /**
+     * The Frame Generation engine selector for the FSR 3 / XeSS paths: Caustica's own motion-vector
+     * interpolation engine (any GPU, multi-frame up to 4x) versus the signed AMD FSR 3.1 runtime
+     * (fixed at 2x — it writes exactly one interpolated frame per dispatch). Flipping it changes
+     * what the multiplier selector can offer, so the click rebuilds the screen. Returns null on
+     * other paths: DLSS mode has its own hardware engine (or the native fallback on non-DLSS-G
+     * GPUs), and with no upscaler the toggle would do nothing.
+     */
+    public static Button fgEngineButton(Runnable onChanged) {
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (!RtUpscalerSupport.MODE_FSR3.equals(mode) && !RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            return null;
+        }
+        CausticaConfig.BooleanSetting setting = CausticaConfig.Rt.Fg.NATIVE_ENGINE;
+        Button button = Button.builder(fgEngineLabel(), clicked -> {
+            setting.set(!setting.value());
+            clicked.setMessage(fgEngineLabel());
+            onChanged.run();
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.fgEngine.tooltip")));
+        return button;
+    }
+
+    private static Component fgEngineLabel() {
+        return Options.genericValueLabel(
+                Component.translatable("caustica.options.rt.fgEngine"),
+                Component.translatable(CausticaConfig.Rt.Fg.NATIVE_ENGINE.value()
+                        ? "caustica.options.rt.fgEngine.native" : "caustica.options.rt.fgEngine.fsr31"));
     }
 
     private static OptionInstance<Boolean> hdrEnabled() {

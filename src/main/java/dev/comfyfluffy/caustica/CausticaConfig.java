@@ -58,6 +58,8 @@ public final class CausticaConfig {
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
             Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
+            Rt.Composite.WATER_WAVE_STRENGTH, Rt.Composite.WATER_WAVE_SPEED, Rt.Composite.WATER_WAVE_DETAIL,
+            Rt.Composite.PARALLAX_QUALITY,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES,
             Rt.DlssRr.ENABLED, Rt.DlssRr.PRESET, Rt.DlssRr.QUALITY, Rt.Fg.ENABLED,
@@ -67,7 +69,8 @@ public final class CausticaConfig {
             Rt.Sharc.TEMPORAL_BLEND, Rt.Sharc.START_BOUNCE, Rt.Sharc.STRENGTH, Rt.Sharc.MAX_DISTANCE,
             Rt.Sharc.FRAME_LIFETIME, Rt.Sharc.NORMAL_THRESHOLD, Rt.Sharc.STABLE_FRAMES, Rt.Sharc.DEBUG,
             Rt.Reflex.ENABLED, Rt.Lights.HELD_ITEM_LIGHT, Rt.Lights.DYNAMIC_INTENSITY, Rt.Lights.BLOCK_INTENSITY,
-            Rt.Lights.RESTIR_SAMPLING, Rt.Hand.FOV_FOLLOWS_CAMERA,
+            Rt.Lights.RESTIR_SAMPLING, Rt.Lights.RESTIR_TEMPORAL_HISTORY, Rt.Lights.RESTIR_SPATIAL_NEIGHBOURS,
+            Rt.Lights.RESTIR_MAX_AGE, Rt.Hand.FOV_FOLLOWS_CAMERA,
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
         };
     }
@@ -101,7 +104,10 @@ public final class CausticaConfig {
                         + " weather-lighting: attenuate sun/moon light and darken the sky during rain and\n"
                         + " thunderstorms. Off keeps clear-sky lighting in all weather.\n"
                         + " denoiser: the DLSS Ray Reconstruction denoise+upscale filter. Off presents the raw\n"
-                        + " path-traced image at full resolution (noisy reference view). Requires dlss-rr.enabled.");
+                        + " path-traced image at full resolution (noisy reference view). Requires dlss-rr.enabled.\n"
+                        + " water-wave-strength/-speed/-detail: height multiplier, animation speed and spectrum\n"
+                        + " component count for Animated Water. parallax-quality: multiplier on the POM\n"
+                        + " texel-crossing budget (sampling level), independent of parallax-strength (relief depth).");
         FILE.setComment("materials",
                 " Material appearance controls. metallic-shininess reduces roughness only on authored metallic\n"
                         + " surfaces; 0 preserves resource-pack material data and 1 gives metals their strongest shine.");
@@ -164,7 +170,11 @@ public final class CausticaConfig {
                         + " validated light reservoirs across frames and nearby pixels; off keeps the original\n"
                         + " independent RIS estimator. ris-candidates = 0 disables emitter NEE entirely\n"
                         + " (emitters just gather on direct hit). min-fill-ratio drops sparse emissive\n"
-                        + " footprints from the light buffer. stats/dump/dump-radius are debug logging.");
+                        + " footprints from the light buffer. stats/dump/dump-radius are debug logging.\n"
+                        + " restir-temporal-history / restir-spatial-neighbours / restir-max-age are the live\n"
+                        + " anti-flicker tuning pushed in WorldPush.restirTuning: more history and more\n"
+                        + " neighbours damp sampling flicker at the price of ghosting/overhead; max-age bounds\n"
+                        + " how long a reservoir may survive (4..240, the packed age field is 8-bit).");
         FILE.setComment("tonemap",
                 " Scene tonemapping after exposure and before writing the vanilla SDR target. operator selects\n"
                         + " the curve; exposure-ev is an extra post-exposure bias; gamma/saturation/contrast\n"
@@ -222,6 +232,15 @@ public final class CausticaConfig {
 
         void set(T value);
 
+        /**
+         * Restores the stored value to the hardcoded default. This is NOT {@code set(defaultValue())}:
+         * {@code set} treats its argument as EXTERNAL input (for {@link FloatSetting} that means
+         * re-applying the input transform, e.g. degrees -&gt; radians), while the stored default already
+         * lives in the internal value domain. The settings UI's "Reset to Defaults" buttons call this so
+         * every widget class snaps back to the factory value exactly.
+         */
+        void resetToDefault();
+
         void reloadFromSystemProperties();
 
         /** Writes this setting's current value into the given config at {@link #tomlPath()}. */
@@ -269,6 +288,11 @@ public final class CausticaConfig {
         @Override
         public void set(Boolean value) {
             this.value = value != null ? value : defaultValue;
+        }
+
+        @Override
+        public void resetToDefault() {
+            this.value = defaultValue;
         }
 
         @Override
@@ -334,6 +358,11 @@ public final class CausticaConfig {
         @Override
         public void set(Integer value) {
             this.value = sanitize.applyAsInt(value != null ? value : defaultValue);
+        }
+
+        @Override
+        public void resetToDefault() {
+            this.value = defaultValue;
         }
 
         @Override
@@ -430,6 +459,14 @@ public final class CausticaConfig {
         }
 
         @Override
+        public void resetToDefault() {
+            // Store the default directly: defaultValue is already in the INTERNAL domain, so routing it
+            // through set() would re-apply inputTransform (a degrees default would be converted to
+            // radians twice) and the "reset" would land nowhere near the real default.
+            this.value = defaultValue;
+        }
+
+        @Override
         public void reloadFromSystemProperties() {
             String prop = System.getProperty(key);
             if (prop == null) {
@@ -511,6 +548,11 @@ public final class CausticaConfig {
         }
 
         @Override
+        public void resetToDefault() {
+            this.value = defaultValue;
+        }
+
+        @Override
         public void reloadFromSystemProperties() {
             set(System.getProperty(key, defaultValue));
         }
@@ -568,6 +610,11 @@ public final class CausticaConfig {
         }
 
         @Override
+        public void resetToDefault() {
+            this.value = null;
+        }
+
+        @Override
         public void reloadFromSystemProperties() {
             this.value = System.getProperty(key);
         }
@@ -617,6 +664,27 @@ public final class CausticaConfig {
             public static final FloatSetting WATER_OPACITY =
                     clampedFloat("caustica.rt.waterOpacity", "composite.water-opacity", 0.0f, 0.0f, 1.0f);
             /**
+             * Water wave height multiplier, applied on top of the authored spectrum (0 = a perfectly
+             * flat sheet even with Animated Water on, 1 = the tuned default, up to 4 = storm swell).
+             * Shader-read on the next frame; safe to drag live.
+             */
+            public static final FloatSetting WATER_WAVE_STRENGTH =
+                    clampedFloat("caustica.rt.waterWaveStrength", "composite.water-wave-strength", 1.0f, 0.0f, 4.0f);
+            /**
+             * Water wave animation speed multiplier on top of the authored deep-water dispersion clock
+             * (0 = frozen sea, 1 = default, up to 4 = time-lapse). Changing it mid-session warps the
+             * wave phase once; the animation stays continuous afterwards.
+             */
+            public static final FloatSetting WATER_WAVE_SPEED =
+                    clampedFloat("caustica.rt.waterWaveSpeed", "composite.water-wave-speed", 1.0f, 0.0f, 4.0f);
+            /**
+             * How many spectrum components the wave field evaluates (the authored maximum is 7, from
+             * 28 m swell down to ~1.6 m chop). Lower counts cut GPU cost over large water views at the
+             * price of losing the short-wave detail.
+             */
+            public static final IntSetting WATER_WAVE_DETAIL =
+                    clampedInt("caustica.rt.waterWaveDetail", "composite.water-wave-detail", 7, 1, 7);
+            /**
              * Extra polish applied only to surfaces authored as metallic. 0 preserves the resource
              * pack's LabPBR roughness; 1 reduces metallic roughness to 15% of its authored value.
              * This changes the GGX lobe rather than adding bloom, so it makes reflections sharper
@@ -642,6 +710,15 @@ public final class CausticaConfig {
             /** Camera distance (blocks) at which relief fades out; full through 80% of the range. */
             public static final FloatSetting PARALLAX_DISTANCE =
                     clampedFloat("caustica.rt.parallaxDistance", "composite.parallax-distance", 64.0f, 16.0f, 256.0f);
+            /**
+             * POM sampling quality: a multiplier on the per-hit texel-crossing budget RtComposite
+             * derives from the relief depth (and the shader clamps into its own compiled bounds). The
+             * "level" of POM detail per block face: higher keeps fine relief intact at grazing angles
+             * and on high-resolution packs; lower saves height-field samples when the GPU is the
+             * bottleneck. Does not change the relief depth — pair with {@link #PARALLAX_STRENGTH}.
+             */
+            public static final FloatSetting PARALLAX_QUALITY =
+                    clampedFloat("caustica.rt.parallaxQuality", "composite.parallax-quality", 1.0f, 0.25f, 4.0f);
             /**
              * LabPBR subsurface scattering. Light entering the back of a thin surface (leaves, grass,
              * ice plants) scatters through toward the viewer via a forward-biased Henyey-Greenstein
@@ -857,6 +934,31 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting RESTIR_SAMPLING =
                     bool("caustica.rt.restir", "lights.restir-sampling", true);
+            /**
+             * ReSTIR anti-flicker knobs, pushed per frame in {@code WorldPush.restirTuning} and read by
+             * {@code lighting.slang} against the compiled RESTIR_* hard caps — the sliders the player
+             * touches when reservoir sampling flickers.
+             *
+             * <p>TEMPORAL_HISTORY is the temporal effective-sample cap: how much last frame's validated
+             * reservoirs count for. More history damps flicker at the price of ghosting when lights
+             * move; less tracks changes faster but reintroduces sampling noise.
+             */
+            public static final IntSetting RESTIR_TEMPORAL_HISTORY =
+                    clampedInt("caustica.rt.restirTemporalHistory", "lights.restir-temporal-history", 4, 1, 16);
+            /**
+             * Spatial reservoir neighbours queried per pixel each frame. More neighbours smooth the
+             * light estimate (fewer flashes, more overheads); 0 disables spatial reuse and keeps the
+             * purely temporal ReSTIR path.
+             */
+            public static final IntSetting RESTIR_SPATIAL_NEIGHBOURS =
+                    clampedInt("caustica.rt.restirSpatialNeighbours", "lights.restir-spatial-neighbours", 4, 0, 8);
+            /**
+             * Frames a reservoir is allowed to live before history rejects it. Longer ages converge
+             * more (less flicker) but can keep stale light around after big lighting changes. Capped
+             * at 240 so the packed 8-bit age field can never overflow.
+             */
+            public static final IntSetting RESTIR_MAX_AGE =
+                    clampedInt("caustica.rt.restirMaxAge", "lights.restir-max-age", 30, 4, 240);
             public static final IntSetting RIS_CANDIDATES =
                     intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0);
             public static final FloatSetting MIN_FILL_RATIO =
