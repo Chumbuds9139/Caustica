@@ -866,26 +866,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         return;
     }
 
-    // Water is a clear dielectric: biome tint only, geometric normal only. Never sample the still/flow
-    // atlas sprite — that 16×16 repeating square is the azulejo the Animated Water path exists to
-    // replace. Raygen intersects the height field when the toggle is on.
-    if (materialHeader.model == MATERIAL_WATER) {
-        payload.albedo = half3(tint);
-        payload.normal = half3(n);
-        payload.hitT = RayTCurrent();
-        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        float waterF0 = 0.02;
-        payload.f0 = half3(waterF0, waterF0, waterF0);
-        payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
-                materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
-        payloadSetDielectric(payload, MATERIAL_WATER, entering);
-        return;
-    }
-
     payload.albedo = half3(srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
     payload.hitT = RayTCurrent();
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h); // static terrain: camera-only motion vector
-    uint material = MATERIAL_OPAQUE;
 
     // normal.w packs the 0..1 block-light level plus a +2 offset flag for non-SOLID (cutout /
     // translucent) render layers, set at extraction so the hit can opt SOLID terrain out of SSS below.
@@ -897,11 +880,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
     n = surface.normal;
     payload.albedo *= half(surface.ao);
-    // Block-breaking overlay: opaque/cutout terrain (water skips — fluids aren't breakable). Evaluate
-    // it after normal mapping so decal projection uses the same shading orientation as the old path.
-    if (material != MATERIAL_WATER) {
-        payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
-    }
+    payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
     // Column side walls replace the mapped normal only after the decal, so the crack projection keeps
     // choosing its axis from the face the block is actually broken on.
     if (terrainParallax.wall) {
@@ -909,10 +888,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     }
     payload.normal = half3(n);
     payload.f0 = half3(surface.f0);
-    payloadSetPacked(payload, material, surface.roughness, surface.metalness,
+    payloadSetPacked(payload, MATERIAL_OPAQUE, surface.roughness, surface.metalness,
             surface.emission, surface.sss, materialHeader.params.z, materialHeader.params.w,
             materialEmissionSource(materialHeader, surface.emission));
-    payloadSetDielectric(payload, material, entering);
+    payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;
