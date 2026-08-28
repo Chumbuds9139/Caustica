@@ -196,16 +196,25 @@ public final class RtVideoOptions {
         };
     }
 
-    public static OptionInstance<?>[] cloudOptions() {
-        return new OptionInstance<?>[] {
-            clouds(),
-            cloudStyle(),
-            cloudCoverage(),
-            cloudHeight(),
-            cloudThickness(),
-            cloudShadowStrength(),
-            cloudOpacity(),
-        };
+    /**
+     * The clouds sub-screen rows. {@code styleChanged} reopens the screen when the deck style flips,
+     * and the classic deck's coverage slider is left out entirely: coverage is baked into the flat
+     * texture in that style, so showing the row would offer a knob that changes nothing — the
+     * sub-screen replaces it with {@link #cloudCoverageDisabledHint()}'s greyed-out explanation.
+     * Volumetric reads the live coverage field, so the slider stays.
+     */
+    public static OptionInstance<?>[] cloudOptions(Runnable styleChanged) {
+        List<OptionInstance<?>> options = new ArrayList<>();
+        options.add(clouds());
+        options.add(cloudStyle(styleChanged));
+        if (!"classic".equals(CausticaConfig.Rt.Composite.CLOUD_STYLE.get())) {
+            options.add(cloudCoverage());
+        }
+        options.add(cloudHeight());
+        options.add(cloudThickness());
+        options.add(cloudShadowStrength());
+        options.add(cloudOpacity());
+        return options.toArray(OptionInstance<?>[]::new);
     }
 
     public static OptionInstance<?>[] hdrOptions() {
@@ -770,8 +779,12 @@ public final class RtVideoOptions {
      * clouds — the same cloud is simply drawn flat or with depth — and the cloud shadows are unchanged
      * between them. Volumetric costs real GPU time (it marches the slab and light-marches for
      * self-shadowing); classic is nearly free.
+     *
+     * <p>{@code styleChanged} reopens the screen so the coverage slider swaps to its disabled
+     * placeholder (or back) as soon as the style flips — classic decks bake coverage into the
+     * texture, so the slider has no effect there.
      */
-    private static OptionInstance<String> cloudStyle() {
+    private static OptionInstance<String> cloudStyle(Runnable styleChanged) {
         StringSetting setting = CausticaConfig.Rt.Composite.CLOUD_STYLE;
         return new OptionInstance<>(
             "caustica.options.rt.cloudStyle",
@@ -781,7 +794,30 @@ public final class RtVideoOptions {
             (caption, value) -> Component.translatable("caustica.options.rt.cloudStyle." + value),
             new OptionInstance.Enum<>(CLOUD_STYLES, Codec.STRING),
             CLOUD_STYLES.contains(setting.get()) ? setting.get() : "classic",
-            setting::set);
+            value -> {
+                setting.set(value);
+                styleChanged.run();
+            });
+    }
+
+    /**
+     * The coverage slider's classic-mode placeholder. The classic deck is one flat sprite whose
+     * coverage is baked into the texture (like vanilla's clouds.png), so in that style the slider
+     * changes nothing: the clouds sub-screen swaps it for this greyed-out row, which also tells the
+     * player why. Returns {@code null} when the volumetric style is selected — i.e. "coverage is
+     * usable, no placeholder row".
+     */
+    public static Button cloudCoverageDisabledHint() {
+        if (!"classic".equals(CausticaConfig.Rt.Composite.CLOUD_STYLE.get())) {
+            return null;
+        }
+        Button button = Button.builder(
+                Component.translatable("caustica.options.rt.cloudCoverage.classicUnavailable"), clicked -> {})
+            .width(310).build();
+        button.active = false;
+        button.setTooltip(Tooltip.create(Component.translatable(
+                "caustica.options.rt.cloudCoverage.classicUnavailable.tooltip")));
+        return button;
     }
 
     /**

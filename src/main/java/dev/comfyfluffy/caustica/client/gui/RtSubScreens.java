@@ -124,12 +124,18 @@ public final class RtSubScreens {
                 reopen -> List.of(RtSettingsSubScreen.Section.of(null, RtVideoOptions.pomOptions())));
     }
 
-    /** The cloud deck: style, coverage, altitude, thickness, shadow and opacity. */
+    /**
+     * The cloud deck: style, coverage, altitude, thickness, shadow and opacity. Flipping the style
+     * reopens the screen: the coverage slider only drives the volumetric deck, so in classic mode it
+     * swaps to {@link RtVideoOptions#cloudCoverageDisabledHint()}'s disabled placeholder (null in
+     * volumetric mode — the row simply vanishes).
+     */
     public static RtSettingsSubScreen clouds(Screen parent) {
         return new RtSettingsSubScreen(parent, options(),
                 Component.translatable("caustica.options.rt.cloudsHeader"),
                 cloudsSettings(), RtSubScreens::clouds,
-                reopen -> List.of(RtSettingsSubScreen.Section.of(null, RtVideoOptions.cloudOptions())));
+                reopen -> List.of(RtSettingsSubScreen.Section.of(null, RtVideoOptions.cloudOptions(reopen),
+                        RtVideoOptions.cloudCoverageDisabledHint())));
     }
 
     /** Manual/auto exposure and the whole auto-exposure internal state. */
