@@ -737,6 +737,23 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // desyncs the rest of the path).
     bool entering = dot(WorldRayDirection(), n) < 0.0;
 
+    // Water is a clear dielectric: biome tint + geometric normal, never the still/flow atlas sprite.
+    // That 16×16 repeating square is the azulejo Animated Water replaces with a height field in raygen.
+    if (materialHeader.model == MATERIAL_WATER) {
+        float3 vdir = -WorldRayDirection();
+        if (dot(n, vdir) < 0.0) n = -n;
+        payload.albedo = half3(tint);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        float waterF0 = 0.02;
+        payload.f0 = half3(waterF0, waterF0, waterF0);
+        payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
+                materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
+        payloadSetDielectric(payload, MATERIAL_WATER, entering);
+        return;
+    }
+
     // Lever B: per-triangle corner UVs in primitive order. uvs[3*pid + k] is a contiguous,
     // directly-addressed load (no index buffer, no scattered vertex-UV gather), so it issues as soon as
     // pid is known and its latency overlaps the prim fetch instead of serialising behind an index load.
@@ -849,14 +866,26 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         return;
     }
 
-    // Water (tint.w == 1) carries the pure biome water tint (no grey water-texture multiply): raygen
-    // shades the surface as a clear dielectric and only needs the tint to derive the per-channel
-    // Beer–Lambert absorption. Opaque terrain uses textured albedo.
-    payload.albedo = half3(materialHeader.model == MATERIAL_WATER
-            ? tint : srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
+    // Water is a clear dielectric: biome tint only, geometric normal only. Never sample the still/flow
+    // atlas sprite — that 16×16 repeating square is the azulejo the Animated Water path exists to
+    // replace. Raygen intersects the height field when the toggle is on.
+    if (materialHeader.model == MATERIAL_WATER) {
+        payload.albedo = half3(tint);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        float waterF0 = 0.02;
+        payload.f0 = half3(waterF0, waterF0, waterF0);
+        payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
+                materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
+        payloadSetDielectric(payload, MATERIAL_WATER, entering);
+        return;
+    }
+
+    payload.albedo = half3(srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
     payload.hitT = RayTCurrent();
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h); // static terrain: camera-only motion vector
-    uint material = materialHeader.model == MATERIAL_WATER ? MATERIAL_WATER : MATERIAL_OPAQUE;
+    uint material = MATERIAL_OPAQUE;
 
     // normal.w packs the 0..1 block-light level plus a +2 offset flag for non-SOLID (cutout /
     // translucent) render layers, set at extraction so the hit can opt SOLID terrain out of SSS below.

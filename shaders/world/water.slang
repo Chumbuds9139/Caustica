@@ -21,10 +21,12 @@ import world_core;
 
 public static const float WATER_WAVE_STRENGTH = 0.9;  // slope + height scale (higher = taller, choppier waves)
 public static const float WAVE_SPEED = 0.8;           // global time scale; dispersion keeps relative speeds physical
-public static const int   WAVE_COUNT = 10;            // λ = 18 m … 0.49 m (each octave 1.5× shorter)
+public static const int   WAVE_COUNT = 7;             // λ = 28 m … ~1.6 m (golden-ratio steps; no 1-block tile chop)
+public static const float WAVE_LAMBDA0 = 28.0;
+public static const float WAVE_LAMBDA_RATIO = 1.6180339887; // incommensurate so crests cannot lock into a grid
 public static const float WAVE_G = 9.81;
 public static const float2 WAVE_WIND = normalize(float2(1.0, 0.35)); // dominant travel direction
-public static const float WAVE_MEANDER = 1.35;        // crest phase-wobble amplitude (rad) on the long components
+public static const float WAVE_MEANDER = 1.55;        // crest phase-wobble amplitude (rad) on the long components
 public static const float WAVE_MAX_HEIGHT = 0.55;     // Newton search bound (blocks); > any in-phase crest
 public static const int   WAVE_NEWTON_STEPS = 3;      // height-field ray iterations from the rest-plane hit
 
@@ -39,41 +41,43 @@ public float waterWaveLodWeight(float wavelength, float footprint) {
 public void waterWaveSpectrum<let WITH_DT : int>(float2 p, float t, float footprint,
                                           out float height, out float2 grad,
                                           out float heightDt, out float2 gradDt) {
-    // Per-wave steepness a·k: gentle in the long swell, concentrated in the mid/short chop.
-    const float Q[WAVE_COUNT] = { 0.038, 0.044, 0.052, 0.062, 0.072, 0.074, 0.070, 0.060, 0.048, 0.036 };
+    // Per-wave steepness a·k: energy stays in the swell. The old 10-octave 0.5 m chop read as the
+    // repeating vanilla still-water tile (azulejo) sitting on top of the waves.
+    const float Q[WAVE_COUNT] = { 0.050, 0.058, 0.055, 0.048, 0.036, 0.024, 0.016 };
     t *= WAVE_SPEED;
     height = 0.0;
     heightDt = 0.0;
     grad = float2(0.0, 0.0);
     gradDt = float2(0.0, 0.0);
-    float lambda = 18.0;
+    float lambda = WAVE_LAMBDA0;
     for (int i = 0; i < WAVE_COUNT; i++) {
         float lodWeight = waterWaveLodWeight(lambda, footprint);
         if (lodWeight <= 0.0) break;
         float k = 2.0 * PI / lambda;
         float w = sqrt(WAVE_G * k);   // deep-water dispersion: phase speed √(g/k)
-        // Heading: deterministic irregular spread about the wind, widening down the spectrum. A second
-        // incommensurate term breaks the rectangular tile that a single sin(i) heading locked into.
-        float spread = (0.18 + 0.14 * float(i)) * sin(float(i) * 2.4 + 1.3)
-                     + 0.16 * sin(float(i) * 3.7 + 0.6);
+        // Heading: wide irregular spread about the wind, with incommensurate offsets so wavefronts
+        // cannot lock into a rectangular lattice.
+        float spread = (0.28 + 0.22 * float(i)) * sin(float(i) * 2.399 + 1.3)
+                     + 0.31 * sin(float(i) * 3.883 + 0.6)
+                     + 0.17 * sin(float(i) * 5.236 + 2.1);
         float cs = cos(spread), sn = sin(spread);
         float2 d = float2(WAVE_WIND.x * cs - WAVE_WIND.y * sn, WAVE_WIND.x * sn + WAVE_WIND.y * cs);
-        float ph = k * dot(d, p) - w * t + 1.7 * float(i) * float(i);
+        float ph = k * dot(d, p) - w * t + 2.399 * float(i) * float(i);
         float2 dph = k * d;
         float phDt = -w;                      // ∂φ/∂t
         float2 dphDt = float2(0.0, 0.0);      // ∂(∇φ)/∂t
-        if (i < 4) { // meander only the components whose fronts are long enough to read as lines
+        if (i < 6) { // meander every swell component whose front would otherwise rule a straight line
             float2 pd = float2(-d.y, d.x);
-            float wph = 0.4 * k * dot(pd, p) + 0.5 * w * t;
+            float wph = 0.37 * k * dot(pd, p) + 0.47 * w * t;
             ph += WAVE_MEANDER * sin(wph);
-            dph += (WAVE_MEANDER * cos(wph) * 0.4 * k) * pd;
+            dph += (WAVE_MEANDER * cos(wph) * 0.37 * k) * pd;
             if (WITH_DT != 0) {
-                float wphDt = 0.5 * w;
+                float wphDt = 0.47 * w;
                 phDt += WAVE_MEANDER * cos(wph) * wphDt;
-                dphDt = (-WAVE_MEANDER * sin(wph) * wphDt * 0.4 * k) * pd;
+                dphDt = (-WAVE_MEANDER * sin(wph) * wphDt * 0.37 * k) * pd;
             }
         }
-        float S = 1.2 + 0.12 * float(i); // crest sharpness: the short chop is choppier
+        float S = 1.15 + 0.08 * float(i); // mild crest sharpening; keep the profile as waves, not tiles
         float sinPh = sin(ph);
         float cosPh = cos(ph);
         float e = exp(S * (sinPh - 1.0));
@@ -86,7 +90,7 @@ public void waterWaveSpectrum<let WITH_DT : int>(float2 p, float t, float footpr
             gradDt += a * S * e
                     * (phDt * (-sinPh + S * cosPh * cosPh) * dph + cosPh * dphDt);
         }
-        lambda /= 1.5;
+        lambda /= WAVE_LAMBDA_RATIO;
     }
     height *= WATER_WAVE_STRENGTH;
     heightDt *= WATER_WAVE_STRENGTH;
