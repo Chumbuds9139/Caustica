@@ -176,7 +176,7 @@ public static const uint FEATURE_SHARC = 512u;           // experimental spatial
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
-public static const uint WORLD_FLAG_WAVES = 16u;   // bit4: animated water wave normals
+public static const uint WORLD_FLAG_WAVES = 16u;   // bit4: animated geometric water waves
 public static const uint WORLD_FLAG_POM_SMOOTHING = 32u; // bit5: bilinear LabPBR normal/surface sampling
 // POM walks the LabPBR height field as a grid of per-texel box columns (world.rchit parallaxTrace), so
 // the walk is bounded by texel crossings rather than by a fixed layer count: a head-on view resolves in

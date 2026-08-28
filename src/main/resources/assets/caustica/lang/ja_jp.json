@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "エンティティの発光アウトライン",
 	"caustica.options.rt.glow.tooltip": "発光中のエンティティに、バニラの発光効果アウトライン（壁越し）を描画します。",
 	"caustica.options.rt.waterWaves": "アニメーションする水",
-	"caustica.options.rt.waterWaves.tooltip": "水面の法線をアニメーションさせ、動く波のハイライトを表示します。",
+	"caustica.options.rt.waterWaves.tooltip": "繰り返す正方形テクスチャではなく、水面そのものを波として変位させます。峰と谷が動き、ハイライトとコースティクスもそれに追従します。",
 	"caustica.options.rt.waterOpacity": "水の不透明度",
 	"caustica.options.rt.waterOpacity.tooltip": "水を通る光の量。暗い場所で DLSS Ray Reconstruction が水の周りにハローを描く場合は上げてください。",
 	"caustica.options.rt.sss": "サブサーフェススキャタリング",

@@ -125,7 +125,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // (so the first ray already carries the right relative index and absorption); for a segment split off
     // a dielectric it is whatever the parent was travelling through.
     MediumStack medium = seg.medium;
-    bool waterWaves = waterWavesEnabled(); // animated wave-normal perturbation
+    bool waterWaves = waterWavesEnabled(); // animated geometric water waves
     // Sky-disc gate (see world.rmiss): the sun/moon disc is shown to the primary ray and to rays spawned
     // by a specular/dielectric bounce (mirror reflections + refractions of the sun/moon), but hidden from
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
@@ -243,10 +243,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // pushes or pops a participating medium, and the segment travelled inside it is attenuated by
         // that medium's extinction rather than by a tint multiply at the interface.
         //
-        // Water is the only material that adds anything: the animated wave normal, and a medium marked
-        // for the caustic term. Which side of the face we are on comes from the geometry
-        // (payloadDielectricEntering), so a stray or missing face cannot desync the medium for the rest
-        // of the path.
+        // Water is the only material that adds anything: the animated geometric wave (height-field
+        // intersection + matching normal), and a medium marked for the caustic term. Which side of the
+        // face we are on comes from the geometry (payloadDielectricEntering), so a stray or missing
+        // face cannot desync the medium for the rest of the path.
         if (material == MATERIAL_WATER || material == MATERIAL_DIELECTRIC) {
             // A dielectric has no local shading term. At the path cap its continuation cannot be traced,
             // so avoid computing an unused Fresnel choice, medium update, and roulette step.
@@ -258,15 +258,18 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             float3 tint = payload.albedo;
             float transmission = clamp(payloadTransmission(), 0.0, 1.0);
 
-            // Ripple the (near-flat) surface normal before any Fresnel/guide use → glints, broken
-            // reflections, wobbling refraction. The wave domain is world-stable: rebased hit XZ plus the
-            // pushed anchor (terrain origin mod 4096) survives the per-move terrain rebase.
+            // Lift the (near-flat) rest-plane hit onto the wave height field before any Fresnel use →
+            // real crests/troughs, glints, broken reflections, wobbling refraction. The wave domain is
+            // world-stable: rebased hit XZ plus the pushed anchor (terrain origin mod 4096) survives
+            // the per-move terrain rebase.
             float3 geometricNormal = n; // unrippled; ray origins offset along this
+            WaterWaves waterSurf = flatWaterWaves(hitPos, payload.hitT, geometricNormal);
             if (isWater && waterWaves) {
-                float2 waterDomain = hitPos.xz + worldPush.waterAnchor.xy;
                 float waterFootprint = rayConeWidth / max(abs(dot(-rd, geometricNormal)), 0.2);
-                n = applyWaterWaves(geometricNormal, waterDomain,
-                                    worldPush.waterParams.w, waterFootprint);
+                waterSurf = evaluateWaterWaves(ro, rd, payload.hitT, geometricNormal,
+                        worldPush.waterParams.w, worldPush.waterParams.w, waterFootprint);
+                n = waterSurf.normal;
+                hitPos = waterSurf.position;
             }
 
             // The medium this face opens into, and the one it returns to on the way out — which is what
@@ -287,11 +290,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
                 rd = reflect(rd, n);
-                ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
+                ro = isWater && waterWaves
+                        ? waterWaveContinueOrigin(waterSurf, rd, SURF_BIAS)
+                        : offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
             } else {
                 if (dot(transmittedDir, transmittedDir) <= 0.0) break; // TIR with F < 1 cannot happen
                 rd = normalize(transmittedDir);
-                ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, transmitBias);
+                ro = isWater && waterWaves
+                        ? waterWaveContinueOrigin(waterSurf, rd, transmitBias)
+                        : offsetSurfaceOrigin(hitPos, geometricNormal, rd, transmitBias);
                 // Crossing into or out of the volume. Absorption is the medium's job from here, so the
                 // tint is NOT also multiplied into the throughput — that would double-count it.
                 if (entering) {

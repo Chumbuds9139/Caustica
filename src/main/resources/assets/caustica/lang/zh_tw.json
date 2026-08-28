@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "實體發光輪廓",
 	"caustica.options.rt.glow.tooltip": "為發光實體繪製原版發光效果輪廓（可穿牆顯示）。",
 	"caustica.options.rt.waterWaves": "動態水面",
-	"caustica.options.rt.waterWaves.tooltip": "對水面法線進行動畫處理，以顯示移動波浪高光。",
+	"caustica.options.rt.waterWaves.tooltip": "把水面位移成真正的動態波浪，而不是一塊重複的方貼圖。波峰和波谷會移動，高光與焦散也隨之變化。",
 	"caustica.options.rt.waterOpacity": "水的不透明度",
 	"caustica.options.rt.waterOpacity.tooltip": "穿過水的光量。若 DLSS Ray Reconstruction 在暗處於水周圍產生光暈，請調高此選項。",
 	"caustica.options.rt.sss": "次表面散射",

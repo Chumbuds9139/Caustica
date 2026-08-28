@@ -114,22 +114,14 @@ public PathSegment tracePrimary(PathSegment seg,
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = n;
         float3 previousNormal = n;
+        WaterWaves waterSurf = flatWaterWaves(hitPos, payload.hitT, geometricNormal);
         if (isWater && waterWaves) {
-            float2 waterDomain = hitPos.xz + worldPush.waterAnchor.xy;
             float waterFootprint = rayConeWidth / max(abs(dot(-rd, geometricNormal)), 0.2);
-            if (bounce == 0 && abs(geometricNormal.y) >= 0.5) {
-                float2 currentGrad;
-                float2 previousGrad;
-                waterWaveGradTemporal(waterDomain, worldPush.waterParams.w,
-                                      worldPush.waterAnchor.z, waterFootprint, currentGrad, previousGrad);
-                float orientation = geometricNormal.y >= 0.0 ? 1.0 : -1.0;
-                n = orientation * normalize(float3(-currentGrad.x, 1.0, -currentGrad.y));
-                previousNormal = orientation
-                        * normalize(float3(-previousGrad.x, 1.0, -previousGrad.y));
-            } else {
-                n = applyWaterWaves(geometricNormal, waterDomain,
-                                    worldPush.waterParams.w, waterFootprint);
-            }
+            waterSurf = evaluateWaterWaves(ro, rd, payload.hitT, geometricNormal,
+                    worldPush.waterParams.w, worldPush.waterAnchor.z, waterFootprint);
+            n = waterSurf.normal;
+            previousNormal = waterSurf.previousNormal;
+            hitPos = waterSurf.position;
         }
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
@@ -147,9 +139,9 @@ public PathSegment tracePrimary(PathSegment seg,
             gv_albedo = float3(0.0, 0.0, 0.0);
             gv_hitCamRel = hitPos - worldPush.camOffset;
             gv_motionUseRefracted = false;
-            gv_motionObjDisp = isWater ? float3(0.0, 0.0, 0.0) : payload.motionPrev;
+            gv_motionObjDisp = isWater ? waterSurf.motionPrev : payload.motionPrev;
             gv_spec = makeSpecSurface(gv_hitCamRel, n, previousNormal, geometricNormal,
-                                      isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
+                                      isWater ? waterSurf.motionPrev : float3(payload.motionPrev),
                                       gv_rough, float3(F, F, F));
             if (dot(transmittedDir, transmittedDir) > 0.0) {
                 MediumStack guideMedium = medium;
@@ -167,8 +159,12 @@ public PathSegment tracePrimary(PathSegment seg,
                 // the medium stack carries it as extinction and the walk applies it physically.
                 float3 guideFilter = max(exp(-min(medium.current.extinction * payload.hitT,
                         float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
-                resolveTransmissionGuide(hitPos, transmittedDir, geometricNormal,
-                        guideMedium, transmitBias, rayConeWidth, rayConeSpread, guideFilter);
+                float3 guideDir = normalize(transmittedDir);
+                float3 guideOrigin = isWater && waterWaves
+                        ? waterWaveContinueOrigin(waterSurf, guideDir, transmitBias)
+                        : offsetSurfaceOrigin(hitPos, geometricNormal, guideDir, transmitBias);
+                resolveTransmissionGuide(guideOrigin, transmittedDir,
+                        guideMedium, rayConeWidth, rayConeSpread, guideFilter);
             }
         }
 
@@ -185,7 +181,9 @@ public PathSegment tracePrimary(PathSegment seg,
             }
             float3 deferredDir = normalize(transmittedDir);
             PathSegment deferred = makePathSegment(
-                    offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
+                    isWater && waterWaves
+                            ? waterWaveContinueOrigin(waterSurf, deferredDir, transmitBias)
+                            : offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
                     deferredDir, throughput * (1.0 - F), transmittedMedium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
                     true);
@@ -193,7 +191,9 @@ public PathSegment tracePrimary(PathSegment seg,
             nextRecord = splitRecord;
             float3 reflectedDir = reflect(rd, n);
             PathSegment reflected = makePathSegment(
-                    offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
+                    isWater && waterWaves
+                            ? waterWaveContinueOrigin(waterSurf, reflectedDir, SURF_BIAS)
+                            : offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
                     true);

@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "엔티티 발광 윤곽선",
 	"caustica.options.rt.glow.tooltip": "발광 중인 엔티티 주위에 바닐라 발광 효과 윤곽선(벽 너머 표시)을 그립니다.",
 	"caustica.options.rt.waterWaves": "애니메이션 물",
-	"caustica.options.rt.waterWaves.tooltip": "움직이는 물결 하이라이트를 위해 물 표면 노멀을 애니메이션합니다.",
+	"caustica.options.rt.waterWaves.tooltip": "반복되는 사각 텍스처 대신 물 표면을 실제 파도로 변위합니다. 마루와 골이 움직이고, 하이라이트와 코스틱도 함께 움직입니다.",
 	"caustica.options.rt.waterOpacity": "물 불투명도",
 	"caustica.options.rt.waterOpacity.tooltip": "물을 통과하는 빛의 양. 어두운 곳에서 DLSS Ray Reconstruction이 물 주변에 헤일로를 그리면 올리세요.",
 	"caustica.options.rt.sss": "표면 하부 산란",
