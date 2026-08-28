@@ -263,6 +263,27 @@ public static const uint TERRAIN_PRIM_PORTAL_END = 4u;
 // unlit too. The sheets stay real BLAS geometry, so terrain still occludes them and the heightmap
 // clip still works — only the lighting response is removed.
 public static const uint PRIM_WEATHER = 16u;
+// Prim.flags (entity prims): an enchantment/foil glint overlay captured by RtEntityCollector. Tagging
+// lets world.rchit shade it with a dedicated branch — an animated, self-lit shimmer (the same special
+// capture the portal surfaces get) instead of a scene-lit paint — while world.rahit keeps the vanilla
+// alpha cutout (discard texels below 0.1), so the armour/body shows where the texture has no streak.
+// Entity-only bit: terrain never sets it, and the weather bit (16) is unambiguous there.
+public static const uint PRIM_GLINT = 8u;
+// Vanilla's glint shader scrolls its sample UV diagonally over time via a per-frame TextureMat; the
+// hit shaders apply the same drift so the whole streak pattern moves (a static any-hit mask over a
+// scrolling colour would freeze the streak shapes). Texture widths per second, matched to the old
+// item-shimmer pace (the 26.x armor_entity_glint transform scrolls at a different, slower rate).
+public static const float GLINT_SCROLL_U = 0.25;
+public static const float GLINT_SCROLL_V = 0.125;
+
+// Shared glint-UV scroll (see PRIM_GLINT). Both world.rahit (coverage gate) and world.rchit (shading)
+// must sample the same scrolled texel, so this single transform keeps the any-hit gate and the
+// closest-hit colour in lock-step on the moving pattern.
+public float2 glintScrolledUv(MaterialHeader header, float2 uv, float time) {
+    float2 localUv = (uv - header.albedoUv.xy) * header.albedoUv.zw;
+    float2 scrolled = frac(localUv + float2(time * GLINT_SCROLL_U, time * GLINT_SCROLL_V));
+    return header.albedoUv.xy + scrolled / header.albedoUv.zw;
+}
 
 // Largest finite half. The payload's half3 lanes carry HDR values (sky radiance most of all), so
 // producers clamp to this instead of letting the conversion round up to +inf.

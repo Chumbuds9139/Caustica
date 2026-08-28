@@ -201,6 +201,7 @@ public final class RtWeatherCapture {
         // geometry (terrain occlusion and the heightmap clip are kept) but stop participating in
         // lighting, the way vanilla's own weather pass is effectively unlit.
         capture.currentPrimFlags = RtEntityCapture.PRIM_FLAG_WEATHER;
+        capture.currentGlintArmorSlot = 0; // weather never carries a glint armour context
         try {
             captured += captureColumns(capture, out, state.rainColumns, camPos, RAIN_MAX_ALPHA,
                     state.radius, intensity, RAIN_LOCATION, budget - captured);
