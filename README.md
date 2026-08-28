@@ -26,6 +26,10 @@ changes while the renderer is being built.
 - HDR output
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support, including toggleable subsurface scattering
+- Deep settings UI: practically every renderer feature has its own sub-screen (upscaling, frame
+  generation engine, ReSTIR anti-flicker tuning, water waves, POM depth/quality, clouds, exposure,
+  terrain streaming...), and every sub-screen starts with a "Reset to Defaults" button — plus a
+  global one on the hub — so experimentation can never strand you on a botched configuration
 - Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
 - Volumetric 3D clouds in classic (vanilla-style boxes) or photoreal cumulus form,
   with adjustable thickness, opacity and cloud shadows, visible in reflections

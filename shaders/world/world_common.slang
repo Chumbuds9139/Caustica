@@ -127,11 +127,13 @@ public struct WorldPush {
     // Linear RGB tint of the held light, resolved per item on the CPU (RtComposite.heldLight):
     // torch warm orange, soul torch cyan, lava deep orange-red... Only read when handLight.w > 0.
     public float4   handLightColor;
-    // Water-opacity control: x is extra NEUTRAL (per-channel-equal) extinction per block added on
-    // top of the biome-tint absorption, 0 = the tuned default clarity. Higher values make water
+    // Water controls: x is extra NEUTRAL (per-channel-equal) extinction per block added on top of
+    // the biome-tint absorption, 0 = the tuned default clarity. Higher values make water
     // progressively less see-through (the floor/rock behind fades) — the mitigation for the halo
     // DLSS-RR draws around translucent water in near-dark scenes, which is driven by the transmitted
-    // lobe's dynamic range. y/z/w reserved.
+    // lobe's dynamic range. y/z/w are the live Animated Water tuning multiplied into the wave
+    // spectrum (see water.slang): y = wave height scale, z = animation speed scale, w = spectrum
+    // wave count. 1.0/1.0/7 in those lanes reproduces the authored look exactly.
     public float4   waterOpacity;
     // Material appearance controls: x is extra polish for authored metallic surfaces, 0..1.
     // It only changes the GGX roughness of metals; non-metals keep their authored response.
@@ -151,6 +153,12 @@ public struct WorldPush {
     public float4   sharcParams2;
     public float4   sharcParams3;
     public int4     sharcGridOrigin;
+    // ReSTIR live anti-flicker tuning (lights.restir-temporal-history / -spatial-neighbours /
+    // -max-age), pushed per frame and resolved by lighting.slang against the compiled RESTIR_*
+    // hard caps. x = temporal effective-sample cap (more history = less flicker, more ghosting),
+    // y = spatial neighbour count (0 = temporal only), z = max reservoir age in frames, w reserved.
+    // Kept in the BDA struct rather than the 128-byte push-constant block, which is already full.
+    public uint4    restirTuning;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

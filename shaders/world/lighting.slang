@@ -27,8 +27,9 @@ public struct Reservoir {
 
 public static const uint RESTIR_SPATIAL_SAMPLES = 4u;
 // Hard stability bounds. M=16 is split into four fresh candidates, four temporal effective samples,
-// and two from each of four spatial neighbours. ReSTIR therefore does less fresh-light work than the
-// default RIS M=8 and has an observable performance path, while history never grows with age.
+// and two from each of four spatial neighbours — those last two pools are player-tunable (see the
+// restirTuning accessors below), capped at 16 temporal / 8 spatial, so the defaults follow this
+// split and history still never grows past RESTIR_MAX_M.
 public static const uint RESTIR_FRESH_CANDIDATES = 4u;
 public static const float RESTIR_MAX_M = 16.0;
 public static const float RESTIR_CURRENT_M_CAP = 4.0;
@@ -43,7 +44,17 @@ public static const float RESTIR_MAX_SAMPLE_LUMINANCE = 16.0;
 public static const float RESTIR_MAX_WEIGHT_SUM = 4096.0; // MAX_M * MAX_W * MAX_SAMPLE_LUMINANCE
 public static const float RESTIR_JACOBIAN_MIN = 0.2;
 public static const float RESTIR_JACOBIAN_MAX = 5.0;
+// Default reservoir history age; the LIVE limit is the player's restir-max-age slider below, and
+// 240 is the real ceiling for both (the packed age field is 8-bit).
 public static const uint RESTIR_MAX_AGE = 30u;
+// Live anti-flicker tuning from the Lighting settings sub-screen (lights.restir-temporal-history /
+// -spatial-neighbours / -max-age), pushed per frame in WorldPush.restirTuning and re-clamped here to
+// the same ranges the config enforces, so a bad push can't inflate the reservoir budget beyond
+// RESTIR_MAX_M, sample more neighbours than the spatial budget allows, or overflow the packed
+// 8-bit age field.
+public float restirTemporalMCap() { return clamp(float(worldPush.restirTuning.x), 1.0, RESTIR_MAX_M); }
+public uint restirSpatialSampleCount() { return min(worldPush.restirTuning.y, 2u * RESTIR_SPATIAL_SAMPLES); }
+public uint restirMaxAge() { return clamp(worldPush.restirTuning.z, 1u, 240u); }
 
 public Reservoir resEmpty() {
     Reservoir r;
@@ -412,7 +423,7 @@ public bool restirLoadCandidate(PackedRestirReservoir record, float3 expectedPre
     uint age = (record.meta >> 16u) & 0xffu;
     uint generation = (record.meta >> 24u) & 0x7fu;
     bool storedTwoSided = (record.meta & 0x80000000u) != 0u;
-    if (storedM == 0u || age > RESTIR_MAX_AGE || storedTwoSided != twoSided
+    if (storedM == 0u || age > restirMaxAge() || storedTwoSided != twoSided
             || generation != (pc.lightGeneration & 0x7fu)
             || !(record.W > 0.0) || !(record.area > 0.0)) {
         return false; // the !(x>0) form rejects NaN as well as zero/negative values
@@ -513,7 +524,7 @@ public void restirMerge(inout Reservoir dst, Reservoir source, float maxM,
         dst.area = source.area;
         dst.phat = safeTarget;
         dst.packedLe = source.packedLe;
-        dst.age = min(source.age + 1u, RESTIR_MAX_AGE);
+        dst.age = min(source.age + 1u, restirMaxAge());
     }
 }
 
@@ -617,7 +628,7 @@ public Reservoir restirSpatiotemporal(Reservoir initial, uint2 pixel, uint2 dime
         uint previousIndex = uint(previousPixel.y) * dimensions.x + uint(previousPixel.x);
         if (restirLoadCandidate(history[previousIndex], expectedPreviousSurface, n, twoSided,
                 max(0.20, cameraDistance * 0.01), 0.95, candidate)) {
-            candidate.M = min(candidate.M, RESTIR_TEMPORAL_M_CAP);
+            candidate.M = min(candidate.M, restirTemporalMCap());
             restirMerge(result, candidate, RESTIR_MAX_M, hitPos, n, v, rd,
                     diffAlb, F0, rough, twoSided, sss, seed);
         }
@@ -627,7 +638,7 @@ public Reservoir restirSpatiotemporal(Reservoir initial, uint2 pixel, uint2 dime
         uint spatialHash = pixel.x * 1973u + pixel.y * 9277u
                 + worldPush.frameIndex * 26699u;
         spatialHash = pcg(spatialHash);
-        for (uint i = 0u; i < RESTIR_SPATIAL_SAMPLES; ++i) {
+        for (uint i = 0u; i < restirSpatialSampleCount(); ++i) {
             int2 neighbour = previousPixel + restirSpatialOffset(i, spatialHash);
             if (any(neighbour < int2(0, 0)) || any(neighbour >= int2(dimensions))) continue;
             uint neighbourIndex = uint(neighbour.y) * dimensions.x + uint(neighbour.x);
