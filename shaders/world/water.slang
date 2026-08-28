@@ -23,12 +23,15 @@ public static const float WATER_WAVE_STRENGTH = 0.9;  // slope + height scale (h
 public static const float WAVE_SPEED = 0.8;           // global time scale; dispersion keeps relative speeds physical
 public static const int   WAVE_COUNT = 7;             // λ = 28 m … ~1.6 m (golden-ratio steps; no 1-block tile chop)
 public static const float WAVE_LAMBDA0 = 28.0;
-public static const float WAVE_LAMBDA_RATIO = 1.6180339887; // incommensurate so crests cannot lock into a grid
+public static const float WAVE_LAMBDA_RATIO = 1.618034; // incommensurate so crests cannot lock into a grid
 public static const float WAVE_G = 9.81;
 public static const float2 WAVE_WIND = normalize(float2(1.0, 0.35)); // dominant travel direction
 public static const float WAVE_MEANDER = 1.55;        // crest phase-wobble amplitude (rad) on the long components
 public static const float WAVE_MAX_HEIGHT = 0.55;     // Newton search bound (blocks); > any in-phase crest
 public static const int   WAVE_NEWTON_STEPS = 3;      // height-field ray iterations from the rest-plane hit
+// Per-wave steepness a·k: energy stays in the swell. The old 10-octave 0.5 m chop read as the
+// repeating vanilla still-water tile sitting on top of the waves.
+public static const float WAVE_Q[WAVE_COUNT] = { 0.050, 0.058, 0.055, 0.048, 0.036, 0.024, 0.016 };
 
 public float waterWaveLodWeight(float wavelength, float footprint) {
     float cyclesPerPixel = max(footprint, 0.0) / max(wavelength, 1.0e-4);
@@ -82,7 +85,7 @@ public void waterWaveSpectrum<let WITH_DT : int>(float2 p, float t, float footpr
         float cosPh = cos(ph);
         float e = exp(S * (sinPh - 1.0));
         // a = Q/k; h = a·e^{S(sin φ−1)}; ∇h = a·S·cos φ·e^{S(sin φ−1)}·∇φ
-        float a = lodWeight * (Q[i] / k);
+        float a = lodWeight * (WAVE_Q[i] / k);
         height += a * e;
         grad += a * S * cosPh * e * dph;
         if (WITH_DT != 0) {

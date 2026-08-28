@@ -740,14 +740,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Water is a clear dielectric: biome tint + geometric normal, never the still/flow atlas sprite.
     // That 16×16 repeating square is the azulejo Animated Water replaces with a height field in raygen.
     if (materialHeader.model == MATERIAL_WATER) {
-        float3 vdir = -WorldRayDirection();
-        if (dot(n, vdir) < 0.0) n = -n;
+        if (dot(n, -WorldRayDirection()) < 0.0) n = -n;
         payload.albedo = half3(tint);
         payload.normal = half3(n);
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        float waterF0 = 0.02;
-        payload.f0 = half3(waterF0, waterF0, waterF0);
+        payload.f0 = half3(0.02h, 0.02h, 0.02h);
         payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
                 materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
         payloadSetDielectric(payload, MATERIAL_WATER, entering);
