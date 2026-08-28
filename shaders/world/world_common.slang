@@ -271,7 +271,8 @@ public static const uint PRIM_WEATHER = 16u;
 public static const uint PRIM_GLINT = 8u;
 // Vanilla's glint shader scrolls its sample UV diagonally over time via a per-frame TextureMat; the
 // hit shaders apply the same drift so the whole streak pattern moves (a static any-hit mask over a
-// scrolling colour would freeze the streak shapes). Texture widths per second.
+// scrolling colour would freeze the streak shapes). Texture widths per second, matched to the old
+// item-shimmer pace (the 26.x armor_entity_glint transform scrolls at a different, slower rate).
 public static const float GLINT_SCROLL_U = 0.25;
 public static const float GLINT_SCROLL_V = 0.125;
 

@@ -486,13 +486,19 @@ float dhMaterialSss(uint material) {
 // Vanilla's glint is an animated, unlit shimmer: its fragment shader discards texels below 0.1 alpha
 // and outputs the raw texture colour with no lightmap, while the sample UV scrolls diagonally via a
 // per-frame TextureMat (GLINT_SCROLL_* / glintScrolledUv in world_common, shared with world.rahit so
-// the coverage gate and the shading sample move together). The RT equivalent is a dedicated self-lit
-// surface — the same special-capture pattern the portal surfaces use. world.rahit already gated the
-// hit on the texture alpha (vanilla's discard), so the rays that reach the glint branch shade a real
-// streak; the armour shows through where there is none.
-// Self-lit shimmer: the streak colour radiates at luminance * this multiplier so it reads bright over
-// the armour instead of being darkened by scene light (vanilla's glint ignores lighting entirely).
+// the coverage gate and the shading sample move together). In 26.x the glint textures carry NO alpha
+// (the armour glint is a plain grayscale map), so the shimmer look actually comes from the additive
+// pipeline blend (BlendFunction.GLINT: dst + src^2) and the pattern lives in the texel BRIGHTNESS.
+// world.rahit reproduces that blend as per-brightness stochastic coverage; the rays that reach this
+// branch therefore shade a real, bright streak. The purple comes from the texture being purple by
+// default (a resource pack can override it to any colour); grayscale textures get a vanilla-like
+// purple multiplier so the streak reads as the familiar enchantment colour. Self-lit (emission =
+// luminance * GLINT_EMISSION) keeps the shimmer bright over the armour instead of being darkened by
+// scene light — vanilla's glint ignores lighting entirely.
 static const float GLINT_EMISSION = 3.0;
+// Tint for grayscale glint textures (the vanilla 26.x armour map). The classic enchantment purple in
+// linear space, modulated by the texel value; packs that ship an actual colour are used as-is.
+static const float3 GLINT_GRAYSCALE_TINT = float3(1.30, 0.42, 1.55);
 
 [shader("closesthit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
@@ -699,9 +705,16 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             // pattern in lock-step (see glintScrolledUv in world_common).
             float2 glintUv = glintScrolledUv(header, euvCoord, glintTime);
             float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(glintUv, entityLod);
+            float3 glintRgb = srgbToLinear(glintTexel.rgb);
+            // Grayscale 26.x glint maps (no colour channel) are tinted purple like vanilla's default
+            // texture; actual coloured glint textures are used as-is.
+            float grayscale = (abs(glintRgb.r - glintRgb.g) + abs(glintRgb.g - glintRgb.b)) * 0.5;
+            if (grayscale < 0.02) {
+                glintRgb = glintRgb * GLINT_GRAYSCALE_TINT;
+            }
             // Unlit like vanilla's glint shader: the streak colour radiates (self-lit) instead of being
             // darkened by the scene, so the shimmer stays bright over the armour.
-            float3 glintColor = srgbToLinear(glintTexel.rgb) * pr.tint.rgb;
+            float3 glintColor = glintRgb * pr.tint.rgb;
             payload.albedo = half3(glintColor);
             payload.normal = half3(n);
             payload.hitT = RayTCurrent();

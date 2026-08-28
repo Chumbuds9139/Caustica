@@ -141,9 +141,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         }
         float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(sampleUv, 0.0);
         // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint
-        // this is 1.0 — the glint is special-captured (PRIM_GLINT), so coverage comes from the texture's
-        // own alpha and the cutout below is vanilla's glint discard (alpha < 0.1): a ray either shades a
-        // real shimmer streak in world.rchit's glint branch or falls through to the armour/body behind.
+        // this is 1.0 — the glint is special-captured (PRIM_GLINT) and its coverage is derived below
+        // from the texel's BRIGHTNESS (26.x glint textures have no alpha channel; see the glint branch
+        // in the gate), so the armour/body shows through where the texture is dark.
         //
         // How a zero in this lane is read depends on the instance kind, because the two kinds disagree
         // about what a zero MEANS:
@@ -174,10 +174,25 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         if (!particleKind && epr.aux0 == 0u) {
             primCoverage = 1.0;
         }
-        if (stochasticAlpha) {
-            uint salt = pid * 1664525u
-                    ^ (InstanceID() & IDX_MASK) * 1013904223u
-                    ^ asuint(RayTCurrent());
+        bool glint = instanceKind == ENTITY_BIT && (epr.flags & PRIM_GLINT) != 0u;
+        uint salt = pid * 1664525u
+                ^ (InstanceID() & IDX_MASK) * 1013904223u
+                ^ asuint(RayTCurrent());
+        if (glint) {
+            // 26.x glint textures carry NO alpha channel (the armour glint is a plain grayscale map,
+            // so texel.a is 1.0 everywhere and vanilla's "discard alpha < 0.1" never fires). The
+            // overlay look comes from the pipeline's additive blend (BlendFunction.GLINT = SRC_COLOR,
+            // ONE → dst + src^2): the pattern lives in the texture's BRIGHTNESS, not its alpha.
+            // Reproduce that as per-texel stochastic coverage — the texel's own brightness decides how
+            // often a ray shades the shimmer instead of falling through to the armour: dark texels
+            // stay mostly transparent, bright texels show the streak. (Packs that DO supply an alpha
+            // mask are handled too: alpha multiplies the brightness, so transparent texels stay
+            // transparent.)
+            float glintCoverage = clamp(texel.a * max(max(texel.r, texel.g), texel.b), 0.0, 1.0);
+            if (alphaDitherThreshold(salt) >= glintCoverage) {
+                IgnoreHit();
+            }
+        } else if (stochasticAlpha) {
             if (alphaDitherThreshold(salt) >= clamp(texel.a * primCoverage, 0.0, 1.0)) {
                 IgnoreHit();
             }
