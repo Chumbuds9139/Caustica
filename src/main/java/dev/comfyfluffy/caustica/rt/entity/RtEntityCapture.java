@@ -60,13 +60,17 @@ public final class RtEntityCapture implements VertexConsumer {
     // block-entity portal geometry (EndPortalRenderer's quad, endermen holding portal blocks) with
     // the procedural portal surfaces instead of the flat atlas texture.
     int currentPortalFlags;
-    // Extra per-prim flags for the current submission, OR-ed into the same flags lane. Only the weather
-    // capture uses this today (PRIM_FLAG_WEATHER): rain/snow sheets must reach raygen tagged so they can
-    // be shaded UNLIT — the path tracer's light response was visibly breaking them. Particles share the
-    // flags lane but never carry portal tags, so the weather bit is unambiguous there.
+    // Extra per-prim flags for the current submission, OR-ed into the same flags lane. Two consumers
+    // today: the weather capture (PRIM_FLAG_WEATHER: rain/snow sheets must reach raygen tagged so they
+    // can be shaded UNLIT — the path tracer's light response was visibly breaking them) and the glint
+    // paths (PRIM_FLAG_GLINT: enchantment/foil overlays are special-captured like the portal surfaces,
+    // so world.rchit shades them with an animated self-lit branch). Particles share the flags lane but
+    // never carry portal tags, so these bits are unambiguous there.
     int currentPrimFlags;
     /** Mirrors world_common.slang's PRIM_WEATHER. */
     static final int PRIM_FLAG_WEATHER = 16;
+    /** Mirrors world_common.slang's PRIM_GLINT (entity-only bit; terrain never sets it). */
+    static final int PRIM_FLAG_GLINT = 8;
     // When a model textures from an atlas sprite (block entities: chests/signs/beds via a Material),
     // its ModelPart UVs are 0..1 in a virtual texture and must be remapped into the sprite's atlas
     // region — the work vanilla's sprite-coordinate-expander VertexConsumer does, which we bypass.

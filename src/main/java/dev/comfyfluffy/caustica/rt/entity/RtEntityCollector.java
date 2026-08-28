@@ -106,12 +106,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     // Identity pose fallback for submitFlame when the caller hands over an empty PoseStack
     // (read-only; transformPosition never mutates it).
     private static final Matrix4f IDENTITY_POSE = new Matrix4f();
-    // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
-    // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
-    // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
-    private static final float ENCHANTMENT_GLINT_OPACITY = 0.28f;
+    // Enchantment/foil glint overlays are special-captured exactly like the portal surfaces: the
+    // collector tags the submission (PRIM_FLAG_GLINT) and world.rchit shades it with a dedicated
+    // branch — an animated, self-lit shimmer — instead of a scene-lit texture. Coverage is the glint
+    // texture's own alpha (vanilla's glint shader discards texels below 0.1), so the armour/body shows
+    // through where there is no streak and the shimmer is solid where there is one. The old
+    // uniform-0.28-opacity stochastic shell is gone.
     // Push glint decals just above the armour surface so the any-hit shader sees the overlay first; when
-    // it stochastically ignores the glint, traversal continues to the base geometry behind it.
+    // its texture alpha passes the ray through, traversal continues to the base geometry behind it.
     private static final int ENCHANTMENT_GLINT_ORDER = 1;
 
     private RtEntityCapture capture;
@@ -219,15 +221,18 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0)
                 + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
-        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
-        // Reset the portal tag: it is per-submission (set only by the portal paths below), so an
-        // ordinary model after a portal layer in the same capture cannot inherit the abyss shading.
+        // Glint is never faked translucent: its texture alpha gates coverage (vanilla's own discard), so
+        // the prim keeps full opacity and the ray either shades the shimmer or passes to the armour.
+        capture.currentOpacity = 1.0f;
+        // Reset the per-submission tags (portal + weather/glint): they are set only by the paths that own
+        // them, so an ordinary model after a tagged layer in the same capture cannot inherit them.
         capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
-        boolean stochasticAlpha = glint || isTranslucent(renderType);
+        boolean stochasticAlpha = !glint && isTranslucent(renderType);
         capture.currentAlphaBucket = glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType);
         // End-portal block entities draw their cosmic abyss quad through this path; tag it so
         // world.rchit shades it procedurally instead of sampling the flat end_portal texture.
@@ -429,6 +434,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        capture.currentPrimFlags = 0; // glint never arrives through baked quads — drop any stale tag
         // Held/displayed portal blocks (endermen, block displays in 26.1+) render as baked quads with
         // the portal sprite; tag them for the procedural portal branches.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -741,6 +747,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0;
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0; // the proxy box is never glint/weather tagged
         capture.clearUvRemap();
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
@@ -834,6 +842,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
             capture.currentOpacity = 1.0f;
             capture.currentOrder = 0;
+            capture.currentPortalFlags = 0;
+            capture.currentPrimFlags = 0; // text is never glint/weather tagged
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
         }
@@ -917,9 +927,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             return;
         }
         flameSubmittedThisEntity = true; // vanilla's dispatcher asked for the flame this entity
-        // Never inherit a portal tag from an earlier submission in the same capture (e.g. an enderman
-        // holding a portal block that is also on fire): the flame is plain textured cutout geometry.
+        // Never inherit a portal or glint/weather tag from an earlier submission in the same capture
+        // (e.g. an enderman holding a portal block that is also on fire): the flame is plain textured
+        // cutout geometry.
         capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0;
         TextureAtlasSprite fire = fireSprite();
         if (fire == null) {
             return;
@@ -1005,6 +1017,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
         capture.currentOpacity = 1.0f;
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0; // a leash ribbon is never glint/weather tagged
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -1225,6 +1239,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        capture.currentPrimFlags = 0; // glint never arrives through FRAPI meshes — drop any stale tag
         // Held/displayed portal blocks through FRAPI meshes (endermen, block displays): tag them for
         // the procedural portal branches, mirroring addQuad.
         tagPortalSubmission(capture, portalFlagsForSprite(sprite));
@@ -1332,8 +1347,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
         capture.currentPortalFlags = 0; // per-submission; tagPortalSubmission below may set it
-        boolean stochasticAlpha = glint || isTranslucent(renderType);
-        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
+        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        boolean stochasticAlpha = !glint && isTranslucent(renderType);
+        capture.currentOpacity = 1.0f; // glint coverage comes from its texture alpha, not a fake opacity
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         capture.currentTexSlot = lines ? RtEntityTextures.INSTANCE.whiteSlot()

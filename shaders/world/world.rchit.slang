@@ -482,6 +482,18 @@ float dhMaterialSss(uint material) {
     return 0.0;
 }
 
+// ---- Enchantment glint --------------------------------------------------------------------------
+// Vanilla's glint is an animated, unlit shimmer: its fragment shader discards texels below 0.1 alpha
+// and outputs the raw texture colour with no lightmap, while the sample UV scrolls diagonally via a
+// per-frame TextureMat (GLINT_SCROLL_* / glintScrolledUv in world_common, shared with world.rahit so
+// the coverage gate and the shading sample move together). The RT equivalent is a dedicated self-lit
+// surface — the same special-capture pattern the portal surfaces use. world.rahit already gated the
+// hit on the texture alpha (vanilla's discard), so the rays that reach the glint branch shade a real
+// streak; the armour shows through where there is none.
+// Self-lit shimmer: the streak colour radiates at luminance * this multiplier so it reads bright over
+// the armour instead of being darkened by scene light (vanilla's glint ignores lighting entirely).
+static const float GLINT_EMISSION = 3.0;
+
 [shader("closesthit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     float2 attribs = attr.barycentrics;
@@ -673,6 +685,34 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0, portalEmission, 0.0,
                     1.0, 0.0, EMISSION_SOURCE_UNIFORM);
             payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            return;
+        }
+        // Enchantment/foil glint overlay (armour, held enchanted items, tridents): special-captured
+        // like the portal surfaces — the collector's PRIM_GLINT tag drives this dedicated branch, so
+        // the glint is an animated, self-lit shimmer rather than a flat texture drawn at reduced
+        // opacity. The any-hit shader has already discarded the transparent texels (vanilla's own
+        // glint shader discards alpha < 0.1), so the rays reaching here shade a real streak.
+        if ((pr.flags & PRIM_GLINT) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)
+            // Same scrolled UV world.rahit used for the coverage gate, so both sample the moving
+            // pattern in lock-step (see glintScrolledUv in world_common).
+            float2 glintUv = glintScrolledUv(header, euvCoord, glintTime);
+            float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(glintUv, entityLod);
+            // Unlit like vanilla's glint shader: the streak colour radiates (self-lit) instead of being
+            // darkened by the scene, so the shimmer stays bright over the armour.
+            float3 glintColor = srgbToLinear(glintTexel.rgb) * pr.tint.rgb;
+            payload.albedo = half3(glintColor);
+            payload.normal = half3(n);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.04h, 0.04h, 0.04h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0,
+                    luminance(glintColor) * GLINT_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+            payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            // Entity emissive geometry (armour overlays, the flame, held lights): raygen applies the
+            // dynamic/entity emission scale and two-sided lighting to it, like every other entity hit.
+            payload.flags |= PAYLOAD_DYNAMIC_ENTITY;
             return;
         }
         // POM on the opaque entity BLAS geometry only; cutout/translucent entities keep the exact UV

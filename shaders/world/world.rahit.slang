@@ -20,7 +20,10 @@ import math;
 [[vk::binding(0, 1)]] Sampler2D entityAlbedoTex[];
 
 static const float ALPHA_CUTOFF = 0.5;        // terrain (matches the cutout block models)
-static const float ENTITY_ALPHA_CUTOFF = 0.1; // entities: only discard near-fully-transparent texels
+// Entities: only discard near-fully-transparent texels. For enchantment glint this is exactly
+// vanilla's own discard (rendertype glint shaders drop texels below 0.1) — glint texels above it are
+// real, self-lit streak surfaces shaded by world.rchit's PRIM_GLINT branch.
+static const float ENTITY_ALPHA_CUTOFF = 0.1;
 // Faint baseline extinction added to every translucent hit regardless of its color, so perfectly clear
 // glass/ice still dims a shadow ray a little instead of being fully invisible to it (real glass isn't a
 // perfect transmitter either). Additive with the color-derived extinction below, not a floor/clamp — a
@@ -120,10 +123,27 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float2 uv = bary.x * uvs[i0] + bary.y * uvs[i1] + bary.z * uvs[i2];
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
-        float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(uv, 0.0);
-        // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint this
-        // multiplier is deliberately < 1 because vanilla's opaque purple glint texture is fixed-function
-        // blended over the armour; texture alpha alone would make it an opaque ray-traced shell.
+        MaterialHeader materialHeader;
+        bool stochasticAlpha = false;
+        if (instanceKind == ENTITY_BIT) {
+            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
+            stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
+        }
+        // Enchantment glint (PRIM_GLINT): the whole streak pattern scrolls with time — vanilla's
+        // per-frame TextureMat. Sample the SAME scrolled UV world.rchit shades with (glintScrolledUv),
+        // so the coverage gate and the shading agree on the moving pattern; a static mask over a
+        // scrolling colour would freeze the streak shapes and kill the animation.
+        float2 sampleUv = uv;
+        if (instanceKind == ENTITY_BIT && (epr.flags & PRIM_GLINT) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)
+            sampleUv = glintScrolledUv(materialHeader, uv, glintTime);
+        }
+        float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(sampleUv, 0.0);
+        // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint
+        // this is 1.0 — the glint is special-captured (PRIM_GLINT), so coverage comes from the texture's
+        // own alpha and the cutout below is vanilla's glint discard (alpha < 0.1): a ray either shades a
+        // real shimmer streak in world.rchit's glint branch or falls through to the armour/body behind.
         //
         // How a zero in this lane is read depends on the instance kind, because the two kinds disagree
         // about what a zero MEANS:
@@ -153,12 +173,6 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float primCoverage = clamp(asfloat(epr.aux0), 0.0, 1.0);
         if (!particleKind && epr.aux0 == 0u) {
             primCoverage = 1.0;
-        }
-        bool stochasticAlpha = false;
-        MaterialHeader materialHeader;
-        if (instanceKind == ENTITY_BIT) {
-            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
-            stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
         }
         if (stochasticAlpha) {
             uint salt = pid * 1664525u
