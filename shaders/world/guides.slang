@@ -58,8 +58,8 @@ public float maskedFogDepth(float3 hitPos, float hitDepth) {
     return depth * exposure;
 }
 
-// Static surfaces reuse one normal for all three roles. Water overrides them (wave-displaced shading
-// normal now and last frame, flat geometric normal for the bias) via the six-argument form.
+// Static surfaces reuse one normal for all three roles. Water overrides them (height-field shading
+// point, waved normal now and last frame, flat geometric normal for the bias) via the six-argument form.
 public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previousNormal,
                             float3 biasNormal, float3 motionPrev, float roughness, float3 albedo) {
     SpecSurface s;
@@ -199,13 +199,15 @@ public static const float GUIDE_TRANSMITTANCE_MIN = 1.0e-3;
 // the destination albedo with NO water attenuation — read as a halo around water. NRD and SVGF
 // demodulate by the same texture (and re-modulate by it downstream), so their round trip stays exact;
 // only the domain they filter in improves.
-public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
-                              float3 surfaceBiasNormal, MediumStack medium, float rayBias,
+public void resolveTransmissionGuide(float3 origin, float3 transmittedDir,
+                              MediumStack medium,
                               float rayConeWidth, float rayConeSpread, float3 guideFilter) {
     if (dot(transmittedDir, transmittedDir) <= 0.0) return;
 
     float3 direction = normalize(transmittedDir);
-    float3 ro = offsetSurfaceOrigin(surfacePos, surfaceBiasNormal, direction, rayBias);
+    // `origin` arrives already offset off the foreground interface (Pass A uses
+    // waterWaveContinueOrigin so a crest/trough cannot immediately re-hit the rest-plane mesh).
+    float3 ro = origin;
 
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
@@ -248,12 +250,14 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = normalize(payload.normal);
         float3 interfaceNormal = geometricNormal;
+        WaterWaves waterSurf = flatWaterWaves(interfacePos, payload.hitT, geometricNormal);
         if (isWater && waterWavesEnabled()) {
             float waterFootprint = rayConeWidth
                     / max(abs(dot(-direction, geometricNormal)), 0.2);
-            interfaceNormal = applyWaterWaves(geometricNormal,
-                    interfacePos.xz + worldPush.waterAnchor.xy,
-                    worldPush.waterParams.w, waterFootprint);
+            waterSurf = evaluateWaterWaves(ro, direction, payload.hitT, geometricNormal,
+                    worldPush.waterParams.w, worldPush.waterParams.w, waterFootprint);
+            interfaceNormal = waterSurf.normal;
+            interfacePos = waterSurf.position;
         }
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
@@ -276,8 +280,11 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             mediumPop(medium);
         }
         direction = normalize(nextDirection);
-        ro = offsetSurfaceOrigin(interfacePos, geometricNormal, direction,
-                isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
+        ro = isWater && waterWavesEnabled()
+                ? waterWaveContinueOrigin(waterSurf, direction,
+                        isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS)
+                : offsetSurfaceOrigin(interfacePos, geometricNormal, direction,
+                        isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
     }
 }
 

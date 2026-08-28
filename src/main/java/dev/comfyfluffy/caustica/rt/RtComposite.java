@@ -1576,7 +1576,7 @@ public final class RtComposite {
             }
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
-            // submerged, fixing the air→water first-segment orientation) + W1 wave normals. Bit 1 used to
+            // submerged, fixing the air→water first-segment orientation) + W1 geometric waves. Bit 1 used to
             // gate a Lambertian fallback BRDF that nothing ever turned off; the GGX path is unconditional
             // now, so that bit is unused rather than reassigned, to avoid a stale reader elsewhere.
             // This word describes the frame's PHYSICAL state; player-facing effect toggles live in the
@@ -1595,7 +1595,7 @@ public final class RtComposite {
                 }
             }
             if (waterWaves()) {
-                flags |= 0b10000; // W1: animated water wave normals
+                flags |= 0b10000; // W1: animated geometric water waves
             }
             if (CausticaConfig.Rt.Composite.PARALLAX_SMOOTHING.value()) {
                 flags |= 0b100000; // bit5: bilinear LabPBR normal/surface sampling (POM columns stay texel-exact)

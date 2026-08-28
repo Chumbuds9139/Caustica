@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "Contour lumineux des entités",
 	"caustica.options.rt.glow.tooltip": "Dessine le contour vanilla de l'effet Luminescence (à travers les murs) autour des entités lumineuses.",
 	"caustica.options.rt.waterWaves": "Eau animée",
-	"caustica.options.rt.waterWaves.tooltip": "Anime les normales de surface de l'eau pour des reflets de vagues en mouvement.",
+	"caustica.options.rt.waterWaves.tooltip": "Déplace la surface de l'eau en vraies vagues animées, au lieu d'une texture carrée qui se répète. Crêtes et creux bougent, ainsi que leurs reflets et caustiques.",
 	"caustica.options.rt.waterOpacity": "Opacité de l'eau",
 	"caustica.options.rt.waterOpacity.tooltip": "Quantité de lumière traversant l'eau. Augmentez-la si DLSS Ray Reconstruction dessine un halo autour de l'eau dans les endroits sombres.",
 	"caustica.options.rt.sss": "Diffusion sous-surfacique",

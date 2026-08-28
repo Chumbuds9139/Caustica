@@ -66,7 +66,7 @@
 	"caustica.options.rt.glow": "Contorno brilhante de entidades",
 	"caustica.options.rt.glow.tooltip": "Desenha o contorno vanilla do efeito Brilhante (através de paredes) ao redor de entidades brilhantes.",
 	"caustica.options.rt.waterWaves": "Água animada",
-	"caustica.options.rt.waterWaves.tooltip": "Anima as normais da superfície da água para brilhos de ondas em movimento.",
+	"caustica.options.rt.waterWaves.tooltip": "Desloca a superfície da água em ondas animadas de verdade, em vez de uma textura quadrada se repetindo. Cristas e vales se movem, junto com os brilhos e as cáusticas.",
 	"caustica.options.rt.waterOpacity": "Opacidade da água",
 	"caustica.options.rt.waterOpacity.tooltip": "Quanta luz passa pela água. Aumente se o DLSS Ray Reconstruction criar um halo ao redor da água em lugares escuros.",
 	"caustica.options.rt.sss": "Espalhamento subsuperficial",

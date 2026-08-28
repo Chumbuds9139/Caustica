@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "Контур свечения сущностей",
 	"caustica.options.rt.glow.tooltip": "Рисует ванильный контур эффекта свечения (сквозь стены) вокруг светящихся сущностей.",
 	"caustica.options.rt.waterWaves": "Анимированная вода",
-	"caustica.options.rt.waterWaves.tooltip": "Анимирует нормали поверхности воды для движущихся бликов волн.",
+	"caustica.options.rt.waterWaves.tooltip": "Смещает поверхность воды настоящими анимированными волнами, а не повторяющейся квадратной текстурой. Гребни и впадины движутся вместе с бликами и каустикой.",
 	"caustica.options.rt.waterOpacity": "Непрозрачность воды",
 	"caustica.options.rt.waterOpacity.tooltip": "Сколько света проходит сквозь воду. Увеличьте, если DLSS Ray Reconstruction рисует ореол вокруг воды в тёмных местах.",
 	"caustica.options.rt.sss": "Подповерхностное рассеивание",

@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "Leuchtkontur von Entitäten",
 	"caustica.options.rt.glow.tooltip": "Zeichnet die Vanilla-Kontur des Glowing-Effekts (durch Wände) um leuchtende Entitäten.",
 	"caustica.options.rt.waterWaves": "Animiertes Wasser",
-	"caustica.options.rt.waterWaves.tooltip": "Animiert Wasseroberflächen-Normalen für bewegte Wellenlichter.",
+	"caustica.options.rt.waterWaves.tooltip": "Verformt die Wasseroberfläche zu echten animierten Wellen statt einer sich wiederholenden Textur. Berge und Täler bewegen sich, ebenso ihre Glanzlichter und Kaustiken.",
 	"caustica.options.rt.waterOpacity": "Wasser-Deckkraft",
 	"caustica.options.rt.waterOpacity.tooltip": "Wie viel Licht durch Wasser fällt. Erhöhen, wenn DLSS Ray Reconstruction an dunklen Orten einen Halo um Wasser zeichnet.",
 	"caustica.options.rt.sss": "Streuung unter der Oberfläche",

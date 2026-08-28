@@ -66,7 +66,7 @@
 	"caustica.options.rt.glow": "Entity Glow Outline",
 	"caustica.options.rt.glow.tooltip": "Draw the vanilla Glowing-effect outline (through walls) around glowing entities.",
 	"caustica.options.rt.waterWaves": "Animated Water",
-	"caustica.options.rt.waterWaves.tooltip": "Animate water-surface normals for moving wave highlights.",
+	"caustica.options.rt.waterWaves.tooltip": "Displace the water surface into real animated waves instead of scrolling a repeating texture. Crests and troughs move, and so do their highlights and caustics.",
 	"caustica.options.rt.waterOpacity": "Water Opacity",
 	"caustica.options.rt.waterOpacity.tooltip": "How much light passes through water. Raise this if DLSS Ray Reconstruction draws a halo around water in dark places.",
 	"caustica.options.rt.sss": "Subsurface Scattering",

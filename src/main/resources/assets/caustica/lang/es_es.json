@@ -25,7 +25,7 @@
 	"caustica.options.rt.glow": "Contorno brillante de entidades",
 	"caustica.options.rt.glow.tooltip": "Dibuja el contorno del efecto Brillo de Minecraft vanilla (a través de paredes) alrededor de las entidades brillantes.",
 	"caustica.options.rt.waterWaves": "Agua animada",
-	"caustica.options.rt.waterWaves.tooltip": "Anima las normales de la superficie del agua para reflejos de olas en movimiento.",
+	"caustica.options.rt.waterWaves.tooltip": "Desplaza la superficie del agua en olas animadas de verdad, no una textura cuadrada que se repite. Crestas y valles se mueven, igual que sus brillos y cáusticas.",
 	"caustica.options.rt.waterOpacity": "Opacidad del agua",
 	"caustica.options.rt.waterOpacity.tooltip": "Cuánta luz atraviesa el agua. Súbela si DLSS Ray Reconstruction dibuja un halo alrededor del agua en lugares oscuros.",
 	"caustica.options.rt.sss": "Dispersión subsuperficial",

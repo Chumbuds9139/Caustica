@@ -737,6 +737,21 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // desyncs the rest of the path).
     bool entering = dot(WorldRayDirection(), n) < 0.0;
 
+    // Water is a clear dielectric: biome tint + geometric normal, never the still/flow atlas sprite.
+    // That 16×16 repeating square is the azulejo Animated Water replaces with a height field in raygen.
+    if (materialHeader.model == MATERIAL_WATER) {
+        if (dot(n, -WorldRayDirection()) < 0.0) n = -n;
+        payload.albedo = half3(tint);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(0.02h, 0.02h, 0.02h);
+        payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
+                materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
+        payloadSetDielectric(payload, MATERIAL_WATER, entering);
+        return;
+    }
+
     // Lever B: per-triangle corner UVs in primitive order. uvs[3*pid + k] is a contiguous,
     // directly-addressed load (no index buffer, no scattered vertex-UV gather), so it issues as soon as
     // pid is known and its latency overlaps the prim fetch instead of serialising behind an index load.
@@ -849,14 +864,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         return;
     }
 
-    // Water (tint.w == 1) carries the pure biome water tint (no grey water-texture multiply): raygen
-    // shades the surface as a clear dielectric and only needs the tint to derive the per-channel
-    // Beer–Lambert absorption. Opaque terrain uses textured albedo.
-    payload.albedo = half3(materialHeader.model == MATERIAL_WATER
-            ? tint : srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
+    payload.albedo = half3(srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
     payload.hitT = RayTCurrent();
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h); // static terrain: camera-only motion vector
-    uint material = materialHeader.model == MATERIAL_WATER ? MATERIAL_WATER : MATERIAL_OPAQUE;
 
     // normal.w packs the 0..1 block-light level plus a +2 offset flag for non-SOLID (cutout /
     // translucent) render layers, set at extraction so the hit can opt SOLID terrain out of SSS below.
@@ -868,11 +878,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
     n = surface.normal;
     payload.albedo *= half(surface.ao);
-    // Block-breaking overlay: opaque/cutout terrain (water skips — fluids aren't breakable). Evaluate
-    // it after normal mapping so decal projection uses the same shading orientation as the old path.
-    if (material != MATERIAL_WATER) {
-        payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
-    }
+    payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
     // Column side walls replace the mapped normal only after the decal, so the crack projection keeps
     // choosing its axis from the face the block is actually broken on.
     if (terrainParallax.wall) {
@@ -880,10 +886,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     }
     payload.normal = half3(n);
     payload.f0 = half3(surface.f0);
-    payloadSetPacked(payload, material, surface.roughness, surface.metalness,
+    payloadSetPacked(payload, MATERIAL_OPAQUE, surface.roughness, surface.metalness,
             surface.emission, surface.sss, materialHeader.params.z, materialHeader.params.w,
             materialEmissionSource(materialHeader, surface.emission));
-    payloadSetDielectric(payload, material, entering);
+    payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;
