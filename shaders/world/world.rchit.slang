@@ -869,8 +869,8 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
     // ---- Portals. RtTerrainMesher routes the nether/end portal sprites into the SOLID bucket and
     // tags their prims (TERRAIN_PRIM_PORTAL_*), so they never take the glass-dielectric path above:
-    // the Nether portal is a self-lit animated swirl, the End portal mirrors the overworld's night
-    // sky (midnight-blue dome + the real starfield), view-parallax like vanilla's end-portal shader.
+    // the Nether portal is a self-lit animated swirl, the End portal shows the overworld's real
+    // starfield over a pure-black void, view-parallax like vanilla's end-portal shader.
     uint terrainFlags = pr.flags;
     if ((terrainFlags & TERRAIN_PRIM_PORTAL_NETHER) != 0u) {
         WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];

@@ -499,10 +499,10 @@ final class RtTerrainMesher {
             q.sprite = sprite;
             q.materialId = materials.resolve(sprite, state, q.translucent);
             // Portal blocks never take the translucent/glass path: the nether portal is a self-lit
-            // animated swirl and the end portal mirrors the overworld's night sky, both shaded by
-            // dedicated branches in world.rchit. Force them into the SOLID bucket and tag their
-            // prims; the nether portal resolves through the emitting variant so it also becomes a
-            // RIS light.
+            // animated swirl and the end portal shows the overworld's starfield over a black void,
+            // both shaded by dedicated branches in world.rchit. Force them into the SOLID bucket
+            // and tag their prims; the nether portal resolves through the emitting variant so it
+            // also becomes a RIS light.
             q.portal = portalKind(sprite);
             // Belt-and-braces: tag by the block state too, so a resource pack that retextures the
             // portal blocks (or a version whose end-portal model uses a different sprite) still gets
