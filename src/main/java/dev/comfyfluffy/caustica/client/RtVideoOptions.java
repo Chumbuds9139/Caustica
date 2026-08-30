@@ -180,7 +180,6 @@ public final class RtVideoOptions {
     public static OptionInstance<?>[] effectsOptions() {
         return new OptionInstance<?>[] {
             subsurfaceScattering(),
-            fog(),
             weatherLighting(),
             metallicShininess(),
         };
@@ -744,11 +743,6 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Boolean> subsurfaceScattering() {
         return bool("caustica.options.rt.sss", CausticaConfig.Rt.Composite.SSS);
-    }
-
-    /** Selective outdoor distance fog; cave and indoor pixels are excluded by a depth/sky mask. */
-    private static OptionInstance<Boolean> fog() {
-        return bool("caustica.options.rt.fog", CausticaConfig.Rt.Composite.FOG);
     }
 
     /** Rain/thunderstorm sun-and-sky dimming. Off keeps clear-sky lighting in every weather state. */

@@ -57,7 +57,7 @@ public final class CausticaConfig {
         @SuppressWarnings("unused")
         Object[] touch = {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
-            Rt.Composite.FOG, Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
+            Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
             Rt.Composite.WATER_WAVE_STRENGTH, Rt.Composite.WATER_WAVE_SPEED, Rt.Composite.WATER_WAVE_DETAIL,
             Rt.Composite.PARALLAX_QUALITY,
             Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
@@ -734,16 +734,6 @@ public final class CausticaConfig {
             public static final BooleanSetting SSS =
                     bool("caustica.rt.sss", "composite.subsurface-scattering", true);
             /**
-             * Depth-masked outdoor distance fog. The primary pass writes a per-pixel effective fog
-             * depth after testing whether the visible point has an unobstructed path to the sky, so
-             * covered cave and indoor pixels remain clear instead of receiving uniform emissive haze.
-             *
-             * <p>This is shader-only and takes effect on the next frame. Off skips both the sky-mask
-             * visibility query and the final fog composite; dimension skyboxes are left untouched.
-             */
-            public static final BooleanSetting FOG =
-                    bool("caustica.rt.fog", "composite.fog", true);
-            /**
              * Weather-driven lighting. Rain and thunderstorms attenuate the sun/moon NEE radiance,
              * darken and desaturate the sky toward an overcast grey, hide the celestial discs and the
              * stars behind the cloud deck, and add a light haze to the air.
@@ -1003,7 +993,7 @@ public final class CausticaConfig {
              *
              * <p>Scales the per-column alpha the same way distance does — through stochastic coverage,
              * so lowering it thins the streaks into a drizzle rather than dimming their colour. 1 is
-             * the full vanilla downpour; 0 hides precipitation entirely (the overcast sky, fog and
+             * the full vanilla downpour; 0 hides precipitation entirely (the overcast sky and
              * light attenuation still follow the weather itself, which is a separate toggle).
              */
             public static final FloatSetting RAIN_DENSITY =

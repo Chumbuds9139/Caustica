@@ -100,7 +100,7 @@ public final class RtSubScreens {
                 reopen -> List.of(RtSettingsSubScreen.Section.of(null, RtVideoOptions.worldOptions())));
     }
 
-    /** SSS, fog, weather lighting and metallic polish. */
+    /** SSS, weather lighting and metallic polish. */
     public static RtSettingsSubScreen effects(Screen parent) {
         return new RtSettingsSubScreen(parent, options(),
                 Component.translatable("caustica.options.rt.effectsHeader"),
@@ -254,7 +254,6 @@ public final class RtSubScreens {
     private static List<CausticaConfig.RuntimeSetting<?>> effectsSettings() {
         return List.of(
                 CausticaConfig.Rt.Composite.SSS,
-                CausticaConfig.Rt.Composite.FOG,
                 CausticaConfig.Rt.Composite.WEATHER_LIGHTING,
                 CausticaConfig.Rt.Composite.METALLIC_SHININESS);
     }

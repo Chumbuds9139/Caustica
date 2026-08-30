@@ -33,7 +33,7 @@ changes while the renderer is being built.
 - Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
 - Volumetric 3D clouds in classic (vanilla-style boxes) or photoreal cumulus form,
   with adjustable thickness, opacity and cloud shadows, visible in reflections
-- Dedicated Nether and End skyboxes with per-dimension ambient fog
+- Dedicated Nether and End skyboxes
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 - Experimental NVIDIA SHaRC-style world-space radiance cache (Spatially Hashed Radiance Cache) to
   shorten noisy multi-bounce path tails — every shaded vertex warms the cache and back-propagates its
