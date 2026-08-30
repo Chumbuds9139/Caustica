@@ -692,6 +692,14 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0, portalEmission, 0.0,
                     1.0, 0.0, EMISSION_SOURCE_UNIFORM);
             payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            // The End portal is fully unlit (like the terrain portal): raygen adds only its own
+            // emission and ends the path, and the zero F0 guarantees no specular response — a
+            // nearby torch can neither glint on nor illuminate the starfield. The Nether portal
+            // keeps the ordinary lit surface above.
+            if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+                payload.f0 = half3(0.0h, 0.0h, 0.0h);
+                payload.flags |= PAYLOAD_END_PORTAL_UNLIT;
+            }
             return;
         }
         // Enchantment/foil glint overlay (armour, held enchanted items, tridents): special-captured
@@ -911,10 +919,15 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         payload.normal = half3(n);
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        payload.f0 = half3(0.04h, 0.04h, 0.04h);
+        // No specular response: the portal is a pure self-lit surface, so it can never reflect a
+        // light source (a torch's glint used to show up on it).
+        payload.f0 = half3(0.0h, 0.0h, 0.0h);
         payloadSetPacked(payload, MATERIAL_OPAQUE, 0.9, 0.0,
                 luminance(nightSky) * END_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
         payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+        // Fully unlit: raygen adds only the portal's own emission and ends the path, so no scene
+        // light (torch, sun, GI) can illuminate or reflect off the starfield.
+        payload.flags |= PAYLOAD_END_PORTAL_UNLIT;
         if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
             payload.flags |= PAYLOAD_EMITTER_IN_LIST;
         }

@@ -471,6 +471,30 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         float3 diffAlb = albedo * (1.0 - metal);
         float3 F0 = payload.f0;
 
+        // End portal night sky: fully UNLIT. The portal's radiance is purely its own emission
+        // (albedo * emission, same term the emissive block below would add), and the path ends
+        // right here — before NEE, hand light, RIS, the SHaRC cache query and the indirect bounce.
+        // Without this, a torch placed near the portal showed up as a specular glint (F0) and a
+        // diffuse wash over the starfield, and the bounce could even carry that light back into
+        // the scene. The emitter gate mirrors the regular emission term below: a portal that RIS
+        // samples as a light source is not double-counted on diffuse continuations.
+        if ((payload.flags & PAYLOAD_END_PORTAL_UNLIT) != 0u) {
+            float emission = payloadEmission();
+            bool gateEmitter = risOn && payloadEmitterInList();
+            if (emission > 0.0 && (!gateEmitter || showCelestial)) {
+                float emissionScale = isDynamicEntityEarly ? worldPush.lightScales.y : worldPush.lightScales.x;
+                float3 emissive = throughput * albedo * emission * max(emissionScale, 0.0);
+                L += emissive;
+                // Emission has no lobe; REBLUR convention is to carry it in the diffuse signal.
+                if (channel == 2) {
+                    Lspec += emissive;
+                } else {
+                    Ldiff += emissive;
+                }
+            }
+            break;
+        }
+
         // ---- Experimental SHaRC: cache query (NVIDIA's Render/Query pass).
         //
         // A cache entry holds the temporally accumulated OUTGOING radiance of the surfaces in this
