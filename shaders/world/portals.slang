@@ -1,6 +1,7 @@
 // Procedural portal surfaces for world.rchit: the Nether portal's animated swirl and the End
-// portal's cosmic abyss (deep black void with a fine starfield). Kept fully self-contained (no
-// imports) so world.rmiss can keep its own endSky/stars copies without an import cycle.
+// portal's night sky (a deep midnight-blue dome under the overworld's own starfield). Kept fully
+// self-contained (no imports) so world.rmiss can keep its own endSky/stars copies without an
+// import cycle.
 
 // Dave Hoskins' hash13 (the same hash world.rmiss uses for its starfields).
 float portalHash13(float3 p3) {
@@ -19,15 +20,20 @@ float2 portalCubeUv(float3 dir, out float face) {
     return uv;
 }
 
-// ---- End portal abyss. A deep-black void with a fine, discrete starfield over a smooth organic
-// background. No per-cell dot patterns: the background is interpolated value noise (bilinear hash
-// interpolation), which is continuous and never repeats in a tile/grid geometry. All values are
-// kept dark — the void stays black and only the small star points carry visible light.
-static const float  PORTAL_STAR_CELLS     = 64.0;  // 64x64 cells per cube face
-static const float  PORTAL_STAR_THRESHOLD = 0.78;  // 22% of cells carry a star
-static const float  PORTAL_STAR_HALF      = 0.08;  // small points (~0.15% of the face), like real stars
-static const float3 PORTAL_VOID_DEEP      = float3(0.0018, 0.0009, 0.0045); // near-black void
-static const float3 PORTAL_VOID_BAND      = float3(0.0055, 0.0028, 0.0105); // faint horizontal band
+// ---- End portal night sky. A window into the overworld's night: a deep midnight-blue gradient
+// (darkest overhead, lighter indigo toward the rim) under the SAME starfield the real night sky
+// shows — identical per-cell placement, cube projection and celestial-axis rotation as
+// world.rmiss's stars(), so the portal mirrors the sky's actual star pattern and wheels with the
+// world's star angle. The old deep-purple void read as a flat magenta slab; the night sky is a
+// visible blue dome with soft, self-lit stars. The background keeps the interpolated value noise
+// (bilinear hash interpolation), which is continuous and never repeats in a tile/grid geometry.
+static const float3 PORTAL_NIGHT_ZENITH  = float3(0.012, 0.030, 0.085); // deep midnight blue
+static const float3 PORTAL_NIGHT_HORIZON = float3(0.050, 0.095, 0.190); // lighter indigo at the rim
+// Star parameters match world.rmiss's STAR_CELLS / STAR_THRESHOLD / STAR_HALF, so each star lands
+// exactly where the overworld sky puts it.
+static const float  PORTAL_STAR_CELLS     = 21.0;
+static const float  PORTAL_STAR_THRESHOLD = 0.86;
+static const float  PORTAL_STAR_HALF      = 0.045;
 
 // Smooth interpolated value noise over a coarse grid — the corners are hashed, the interior is
 // bilinearly smoothed, so the result is organic mottling with no visible cells or dots.
@@ -42,21 +48,23 @@ float portalValueNoise(float2 p, float face) {
     return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
 }
 
-float3 endPortalAbyss(float3 rayDir, float time) {
-    // Gentle drift — a tiny fraction of the (unit) ray direction, so the starfield slowly creeps
-    // without ever pinning all portal pixels to one direction (which made a single giant star).
-    // sin/cos keep the offset bounded forever instead of growing linearly with the wrapped clock.
-    float3 drift = float3(sin(time * 0.05) * 0.015, cos(time * 0.037) * 0.015, sin(time * 0.023) * 0.015);
-    float3 dir = normalize(rayDir + drift);
+// Same rotation helper world.rmiss uses to wheel the sky starfield about the celestial pole.
+float3 portalRotateAxis(float3 v, float3 axis, float ang) {
+    float c = cos(ang), s = sin(ang);
+    return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
+float3 endPortalNightSky(float3 rayDir, float time, float4 celestial) {
+    // Night gradient mirrors the overworld's ambient ramp (darker overhead, brighter at the rim).
+    // `band` peaks when the portal is viewed edge-on, so the surface reads deepest when looked at
+    // steeply and glows softly toward the rim — a dome, not a flat fill.
+    float band = 1.0 - abs(rayDir.y);
+    float3 col = lerp(PORTAL_NIGHT_ZENITH, PORTAL_NIGHT_HORIZON, band * band);
+
+    // Faint blue mottling (three octaves of interpolated value noise, anchored to the cube face
+    // like the original abyss) so the surface has organic depth without any grid or dot pattern.
     float face;
-    float2 uv = portalCubeUv(dir, face);
-
-    // Deep void gradient, near black; the horizontal band is only slightly lighter.
-    float band = 1.0 - abs(dir.y);
-    float3 col = lerp(PORTAL_VOID_DEEP, PORTAL_VOID_BAND, band * band);
-
-    // Smooth organic background: three octaves of interpolated value noise. The coarse base octave
-    // is a large diffuse wash; the finer octaves add gentle variation. No per-cell dots, no grid.
+    float2 uv = portalCubeUv(rayDir, face);
     {
         float n = 0.0;
         float amp = 0.6;
@@ -67,25 +75,37 @@ float3 endPortalAbyss(float3 rayDir, float time) {
             np = np * 2.13 + 1.71;
             amp *= 0.5;
         }
-        // n in roughly [0, 1.05]; scale into a very subtle dark violet wash.
+        // n in roughly [0, 1.05]; scale into a very subtle blue depth wash.
         n = saturate(n);
-        col += (0.0025 + 0.0090 * n) * float3(0.55, 0.35, 0.85);
+        col += (0.004 + 0.012 * n) * float3(0.62, 0.78, 1.00);
     }
 
-    // Fine star points: small, round, dim-to-moderate so they read as discrete stars on black.
-    float2 g = uv * PORTAL_STAR_CELLS;
-    float3 id = float3(floor(g), face);
-    if (portalHash13(id) >= PORTAL_STAR_THRESHOLD) {
-        float sz = PORTAL_STAR_HALF * (0.5 + 0.5 * portalHash13(id + 53.0));
-        float inset = sz * 0.8;
+    // The overworld night starfield: same cells, placement, rotation and colours as world.rmiss's
+    // stars(), so the portal shows the real sky's stars. Brighter than the sky copy (the sky dims
+    // its stars by 0.2 * starBrightness) and given a slow per-star twinkle so the portal stays
+    // alive without breaking the sky alignment with a drift.
+    float3 sdir = portalRotateAxis(rayDir, normalize(celestial.xyz), -celestial.w);
+    float starFace;
+    float2 starUv = portalCubeUv(sdir, starFace);
+    float2 g = starUv * PORTAL_STAR_CELLS;
+    float3 id = float3(floor(g), starFace);
+    if (portalHash13(id) < PORTAL_STAR_THRESHOLD) {
+        float sz = PORTAL_STAR_HALF * (0.6 + 0.8 * portalHash13(id + 53.0));
+        float inset = sz * 1.5;
         float2 center = inset + (1.0 - 2.0 * inset)
                 * float2(portalHash13(id + 11.0), portalHash13(id + 23.0));
         float2 q = frac(g) - center;
-        float star = 1.0 - smoothstep(sz * 0.6, sz, length(q)); // round point, not a box
+        float ang = portalHash13(id + 91.0) * 6.2831853;
+        float cs = cos(ang), sn = sin(ang);
+        q = float2(cs * q.x - sn * q.y, sn * q.x + cs * q.y);
+        float box = max(abs(q.x), abs(q.y));
+        float star = 1.0 - smoothstep(sz * 0.6, sz, box);
         if (star > 0.0) {
-            float3 starCol = lerp(float3(0.70, 0.76, 1.00), float3(1.0, 0.94, 0.98), portalHash13(id + 137.0));
-            float bright = 0.5 + 0.5 * portalHash13(id + 71.0);
-            col += star * starCol * (0.08 + 0.18 * bright);
+            float bright = 0.55 + 0.45 * portalHash13(id + 71.0);
+            float twinkle = 0.85 + 0.15 * sin(time * 1.6 + portalHash13(id + 173.0) * 6.2831853);
+            float3 starCol = lerp(float3(0.78, 0.60, 0.42), float3(0.50, 0.62, 0.95),
+                    portalHash13(id + 137.0));
+            col += star * starCol * (0.55 + 0.55 * bright) * twinkle;
         }
     }
     return col;
@@ -97,7 +117,7 @@ static const float NETHER_PORTAL_SCROLL_U = 0.012;
 static const float NETHER_PORTAL_SCROLL_V = 0.008;
 // Self-lit glow: the swirl's own colour radiates at luminance * this multiplier.
 static const float NETHER_PORTAL_EMISSION = 6.0;
-// Abyss brightness: the void is used nearly as-is (dark), with a modest emission so the portal
-// glows faintly instead of reading as a black hole.
+// Night-sky brightness: the gradient is used as-is; the emission carries the soft glow so the
+// portal reads as a gently luminous starry dome instead of a black hole (or a flat magenta slab).
 static const float END_PORTAL_BRIGHTNESS = 1.0;
-static const float END_PORTAL_EMISSION = 2.0;
+static const float END_PORTAL_EMISSION = 2.5;

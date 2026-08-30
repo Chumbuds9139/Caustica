@@ -669,9 +669,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             float3 portalColor;
             float portalEmission;
             if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
-                float3 abyss = endPortalAbyss(WorldRayDirection(), portalTime);
-                portalColor = abyss * END_PORTAL_BRIGHTNESS;
-                portalEmission = luminance(abyss) * END_PORTAL_EMISSION;
+                float3 nightSky = endPortalNightSky(WorldRayDirection(), portalTime,
+                        worldPush.celestial);
+                portalColor = nightSky * END_PORTAL_BRIGHTNESS;
+                portalEmission = luminance(nightSky) * END_PORTAL_EMISSION;
             } else {
                 // Nether swirl on entity-held portal blocks: same in-sprite scroll as terrain.
                 float2 localUv = (euvCoord - header.albedoUv.xy) * header.albedoUv.zw;
@@ -868,8 +869,8 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
     // ---- Portals. RtTerrainMesher routes the nether/end portal sprites into the SOLID bucket and
     // tags their prims (TERRAIN_PRIM_PORTAL_*), so they never take the glass-dielectric path above:
-    // the Nether portal is a self-lit animated swirl, the End portal is the End sky's cosmic abyss
-    // (deep void purple + starfield), view-parallax like vanilla's end-portal shader.
+    // the Nether portal is a self-lit animated swirl, the End portal mirrors the overworld's night
+    // sky (midnight-blue dome + the real starfield), view-parallax like vanilla's end-portal shader.
     uint terrainFlags = pr.flags;
     if ((terrainFlags & TERRAIN_PRIM_PORTAL_NETHER) != 0u) {
         WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
@@ -903,14 +904,16 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if ((terrainFlags & TERRAIN_PRIM_PORTAL_END) != 0u) {
         WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
         float portalTime = worldPush.waterParams.w;
-        float3 abyss = endPortalAbyss(WorldRayDirection(), portalTime);
-        payload.albedo = half3(abyss * END_PORTAL_BRIGHTNESS);
+        // The portal's starfield wheels with the world's celestial axis (same rotation world.rmiss
+        // applies to the sky), so it stays locked to the real night sky's stars.
+        float3 nightSky = endPortalNightSky(WorldRayDirection(), portalTime, worldPush.celestial);
+        payload.albedo = half3(nightSky * END_PORTAL_BRIGHTNESS);
         payload.normal = half3(n);
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payload.f0 = half3(0.04h, 0.04h, 0.04h);
         payloadSetPacked(payload, MATERIAL_OPAQUE, 0.9, 0.0,
-                luminance(abyss) * END_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+                luminance(nightSky) * END_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
         payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
         if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
             payload.flags |= PAYLOAD_EMITTER_IN_LIST;

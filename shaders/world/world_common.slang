@@ -249,7 +249,7 @@ public struct LightGridSpan {
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 // TerrainPrim.flags bits 1..2: portal surfaces tagged by RtTerrainMesher. The mesher routes their
 // quads into the SOLID bucket (never the translucent/glass path), and world.rchit shades them with
-// the dedicated portal branches (Nether swirl / End abyss) instead of the block texture.
+// the dedicated portal branches (Nether swirl / End night sky) instead of the block texture.
 public static const uint TERRAIN_PRIM_PORTAL_NETHER = 2u;
 public static const uint TERRAIN_PRIM_PORTAL_END = 4u;
 // Prim.flags (entity prims): a vanilla rain/snow sheet captured by RtWeatherCapture. Shares the flags

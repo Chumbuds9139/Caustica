@@ -61,7 +61,7 @@ final class RtTerrainMesher {
     /** {@code TerrainPrim.flags} bit 0: this emissive quad is in the RIS light buffer. Mirrored in
      *  {@code world_common.slang} (TERRAIN_PRIM_IN_LIGHT_BUFFER); RtLightCollector ORs it in. */
     static final int TERRAIN_PRIM_IN_LIGHT_BUFFER = 1;
-    /** {@code TerrainPrim.flags} bits 1..2: portal surfaces (nether swirl / end abyss). Mirrored in
+    /** {@code TerrainPrim.flags} bits 1..2: portal surfaces (nether swirl / end night sky). Mirrored in
      *  {@code world_common.slang} (TERRAIN_PRIM_PORTAL_*) and consumed by {@code world.rchit}. */
     static final int TERRAIN_PRIM_PORTAL_NETHER = 2;
     static final int TERRAIN_PRIM_PORTAL_END = 4;
@@ -231,8 +231,9 @@ final class RtTerrainMesher {
                     }
                     if (state.getRenderShape() != RenderShape.MODEL) {
                         // The end portal block has no render model in vanilla (the starfield is a
-                        // special shader over an invisible block); emit an abyss-shaded proxy plane at
-                        // the block's base so the ray tracer does not just see through the portal hole.
+                        // special shader over an invisible block); emit a night-sky-shaded proxy plane
+                        // at the block's base so the ray tracer does not just see through the portal
+                        // hole.
                         if (state.is(Blocks.END_PORTAL)) {
                             capture.emitEndPortalProxy(state, lx, ly, lz);
                         }
@@ -498,9 +499,10 @@ final class RtTerrainMesher {
             q.sprite = sprite;
             q.materialId = materials.resolve(sprite, state, q.translucent);
             // Portal blocks never take the translucent/glass path: the nether portal is a self-lit
-            // animated swirl and the end portal is the End sky's abyss, both shaded by dedicated
-            // branches in world.rchit. Force them into the SOLID bucket and tag their prims; the
-            // nether portal resolves through the emitting variant so it also becomes a RIS light.
+            // animated swirl and the end portal mirrors the overworld's night sky, both shaded by
+            // dedicated branches in world.rchit. Force them into the SOLID bucket and tag their
+            // prims; the nether portal resolves through the emitting variant so it also becomes a
+            // RIS light.
             q.portal = portalKind(sprite);
             // Belt-and-braces: tag by the block state too, so a resource pack that retextures the
             // portal blocks (or a version whose end-portal model uses a different sprite) still gets
@@ -524,7 +526,7 @@ final class RtTerrainMesher {
             }
         }
 
-        /** Classify a block sprite as a portal surface (nether swirl / end abyss), or PORTAL_NONE. */
+        /** Classify a block sprite as a portal surface (nether swirl / end night sky), or PORTAL_NONE. */
         private static int portalKind(TextureAtlasSprite sprite) {
             if (sprite == null) {
                 return PORTAL_NONE;
@@ -704,10 +706,11 @@ final class RtTerrainMesher {
         /**
          * Emit the invisible end portal block as one double-sided proxy plane at the base of the block
          * (the placement vanilla's end-portal shader uses), tagged TERRAIN_PRIM_PORTAL_END so
-         * world.rchit shades it with the End sky's abyss instead of sampling any texture. The block
-         * has no model, so this path is model-free: the quad is written straight into the solid bucket
-         * with white tint, an up-facing normal (the closest-hit orients it toward the viewer) and
-         * well-formed corner UVs for the ray-cone footprint math (unused by the portal shading).
+         * world.rchit shades it with the procedural night sky (endPortalNightSky) instead of
+         * sampling any texture. The block has no model, so this path is model-free: the quad is
+         * written straight into the solid bucket with white tint, an up-facing normal (the
+         * closest-hit orients it toward the viewer) and well-formed corner UVs for the ray-cone
+         * footprint math (unused by the portal shading).
          */
         void emitEndPortalProxy(BlockState state, int lx, int ly, int lz) {
             Geom g = cur.opaque();
@@ -723,8 +726,9 @@ final class RtTerrainMesher {
             idx.add(base); idx.add(base + 2); idx.add(base + 3);
             addTriUv(g, 0f, 0f, 1f, 0f, 1f, 1f);
             addTriUv(g, 0f, 0f, 1f, 1f, 0f, 1f);
-            // The abyss carries its own light, so resolve the plain opaque fallback (no emission
-            // source: the portal must not become a RIS emitter outside the light semantics).
+            // The night sky carries its own light, so resolve the plain opaque fallback (no
+            // emission source: the portal must not become a RIS emitter outside the light
+            // semantics).
             int materialId = materials.resolve(null, state, false);
             FloatArrayList prim = g.prim;
             for (int t = 0; t < 2; t++) {
