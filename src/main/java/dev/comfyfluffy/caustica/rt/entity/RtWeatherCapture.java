@@ -249,7 +249,7 @@ public final class RtWeatherCapture {
      * linear so the sheets thicken naturally instead of snapping to full.
      *
      * <p>Deliberately applied here rather than to {@code weather.x}: that lane also drives the sun/moon
-     * attenuation and the fog, and reshaping <em>those</em> is what would make the sky lag the storm.
+     * attenuation, and reshaping <em>that</em> is what would make the sky lag the storm.
      */
     private static float visualIntensity(float rainLevel) {
         float t = Mth.clamp(rainLevel, 0.0f, 1.0f);

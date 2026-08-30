@@ -1,7 +1,7 @@
 # Cloud rework — findings and plan
 
-Working notes for the second half of the weather work. Part 1 (rain fixes + fog) is in
-`RtWeatherCapture` / `RtComposite.overworldFog`; this file covers the clouds.
+Working notes for the second half of the weather work. Part 1 (rain fixes) is in
+`RtWeatherCapture`; this file covers the clouds.
 
 ## Why the clouds keep producing new bugs
 
@@ -59,8 +59,8 @@ Verified against the 26.2 source, not from memory:
    punched holes. PR #25 also touches this (drives coverage *and* opacity to 1 and adds a
    `CLOUD_SOLID_COVERAGE` short-circuit).
 
-4. **Water not affected by rain/fog.** Fixed in part 1 — pass A skipped `evalAmbientFog` over the
-   camera→interface prefix. See `world.rgen.slang`.
+4. **Water not affected by rain.** Fixed in part 1 — the cloud/atmosphere prefix is composited in
+   `world.rgen.slang` once the camera→interface hop is recovered.
 
 ## Performance (30-40 → 10-20 fps on an RTX 2060)
 
@@ -102,8 +102,8 @@ Cheapest large wins, in order:
 ## Coordination note
 
 PR #25 ("Fix storm cloud coverage and rain atmosphere") is still open and already addresses bugs 2 and 3
-with small targeted patches, and also raises `rainLight`/`rainSky` in `weatherState`. Part 1 of this work
-touches `weatherState`'s neighbourhood (`ambientFog`) but not those lines. Before starting the rework,
+with small targeted patches, and also raises `rainLight`/`rainSky` in `weatherState`. Part 1 of this work touches `weatherState`'s neighbourhood
+but not those lines. Before starting the rework,
 decide whether to merge #25 first and build on it, or supersede it — doing both independently will
 conflict in `cloudState` and `clouds.slang`.
 

@@ -701,7 +701,7 @@ float cloudVolumeDensity(WorldPush push, float3 posRel, float heightFrac) {
     float billow = (1.0 - abs(d1 * 2.0 - 1.0)) * 0.7 + (1.0 - abs(d2 * 2.0 - 1.0)) * 0.3;
 
     // Erosion concentrated at the extremes: the crown breaks into lobes and the base frays, but the
-    // middle of the cloud stays solid. Uniform erosion is what makes procedural clouds look like fog.
+    // middle of the cloud stays solid. Uniform erosion is what makes procedural clouds read as a flat volume.
     float extremes = smoothstep(0.55, 1.0, hf) * 0.85 + smoothstep(0.18, 0.0, hf) * 0.5;
     float edge = 1.0 - coverage;
     float erosion = billow * (edge * 0.55 + extremes * 0.45);
@@ -824,7 +824,7 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     float stepLen = (t1 - t0) / float(marchSteps);
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
     // Classic clouds are opaque boxes, not haze: they need a much higher extinction so a box saturates
-    // within its own thickness instead of reading as translucent fog. Vanilla's clouds you cannot see
+    // within its own thickness instead of reading as translucent haze. Vanilla's clouds you cannot see
     // through, and that is the property being reproduced.
     // Extinction is normalised by the slab depth: a 100-block bank and a 10-block sheet reach the same
     // optical depth straight down, so THICKNESS controls shape and OPACITY controls see-through, with
@@ -911,10 +911,10 @@ public float3 cloudSkyAmbient(WorldPush push) {
  * Clouds crossed along ONE ray segment, as premultiplied scattered radiance plus the transmittance the
  * background keeps. Both styles answer in this same form.
  *
- * This shape is deliberate: it is exactly how {@code medium.slang} reports the ambient fog, so callers
- * composite clouds with the identical two lines they already use for fog
- * ({@code L += throughput * scatter; throughput *= transmittance;}) and clouds inherit fog's correct
- * behaviour over reflections, refractions and indirect bounces for free.
+ * This shape is deliberate: callers composite clouds with two lines
+ * ({@code L += throughput * scatter; throughput *= transmittance;}), and being a premultiplied
+ * participating-medium term inside the path integral is what gives clouds correct behaviour over
+ * reflections, refractions and indirect bounces for free.
  *
  * `maxDistance` is the distance to the nearest scene hit along the ray (or a large value when the ray
  * escapes to the sky). Bounding the cloud by it is the fix for the "world shows through the clouds"

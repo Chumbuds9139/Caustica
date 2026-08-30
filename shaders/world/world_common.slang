@@ -96,9 +96,6 @@ public struct WorldPush {
     // single source of truth for how much the weather dims things, so Java's NEE radiance and the sky
     // shader can never disagree about how dark a storm is.
     public float4   weather;          // x rain 0..1, y thunder 0..1, z sky darkening, w light attenuation
-    // Atmospheric medium composited from a per-pixel effective primary depth. Sky visibility clears
-    // covered Overworld caves; Nether/End retain their authored full-depth haze; misses stay untouched.
-    public float4   ambientFog;       // xyz in-scatter radiance, w density per block (0 = no fog)
     // Flat vanilla-style cloud deck (clouds.slang). Coverage already folds in the weather on the Java
     // side (RtComposite.cloudState), so the shader reads one resolved state rather than re-deriving the
     // storm ramp the sky darkening also depends on. The two slider lanes (shadow strength, opacity) are
@@ -163,7 +160,7 @@ public struct WorldPush {
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
 // Rayleigh/Mie/ozone atmosphere with the sun/moon cycle; the other two dimensions have no celestial
-// cycle at all, so they draw their own skybox. The skybox colours are independent of ambientFog.
+// cycle at all, so they draw their own skybox.
 public static const uint DIMENSION_OVERWORLD = 0u;
 public static const uint DIMENSION_NETHER = 1u;
 public static const uint DIMENSION_END = 2u;
@@ -179,8 +176,7 @@ public static const uint FEATURE_CLOUDS_VOLUMETRIC = 16u; // clouds are ray-marc
 public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial emitter-reservoir reuse
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_VIEWZ = 128u;           // a renderer-side denoiser needs gViewZ (reprojection validation + sky cutoff)
-public static const uint FEATURE_FOG = 256u;             // masked distance fog (authored full-depth Nether/End haze)
-public static const uint FEATURE_SHARC = 512u;           // experimental spatial-hash radiance cache
+public static const uint FEATURE_SHARC = 256u;           // experimental spatial-hash radiance cache
 
 // WorldPush.flags: physical state of the camera/frame, not user options (those are featureFlags).
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume

@@ -36,7 +36,7 @@ static const float  SUN_INTENSITY = 24.0; // slightly brighter for clear day
 static const int    ATMOS_PRIMARY_STEPS = 16;
 static const int    ATMOS_LIGHT_STEPS   = 8;
 
-// AGGRESSIVE: drastically cut Mie to eliminate gray fog, boost Rayleigh blue for vivid
+// AGGRESSIVE: drastically cut Mie to eliminate gray haze, boost Rayleigh blue for vivid
 static const float3 RAY_BETA   = float3(3.2e-6, 8.5e-6, 24.5e-6); // strong blue, minimal red
 static const float  MIE_BETA   = 6.0e-6; // RADICALLY lowered from 38/24/18 -> 6 to kill gray/brown haze
 static const float  RAY_SCALE_H = 9000.0;
@@ -187,8 +187,6 @@ static const float3 NETHER_SKY_HAZE = float3(0.052, 0.0125, 0.0065);
 float3 netherSky(float3 dir) {
     float down = smoothstep(-0.75, 0.35, -dir.y);
     float3 col = lerp(NETHER_SKY_HIGH, NETHER_SKY_LOW, down);
-    // Keep the authored far-field background independent of the player-facing fog toggle. The matching
-    // warm distance medium is composited separately over geometry and can still be switched off.
     return lerp(col, col * 0.5 + NETHER_SKY_HAZE * 0.6, 0.5);
 }
 
