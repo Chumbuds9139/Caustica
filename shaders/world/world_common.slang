@@ -249,7 +249,7 @@ public struct LightGridSpan {
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 // TerrainPrim.flags bits 1..2: portal surfaces tagged by RtTerrainMesher. The mesher routes their
 // quads into the SOLID bucket (never the translucent/glass path), and world.rchit shades them with
-// the dedicated portal branches (Nether swirl / End abyss) instead of the block texture.
+// the dedicated portal branches (Nether swirl / End night sky) instead of the block texture.
 public static const uint TERRAIN_PRIM_PORTAL_NETHER = 2u;
 public static const uint TERRAIN_PRIM_PORTAL_END = 4u;
 // Prim.flags (entity prims): a vanilla rain/snow sheet captured by RtWeatherCapture. Shares the flags
@@ -298,7 +298,7 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
-    public uint  flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source, bit 9 weather.
+    public uint  flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source, bit 7 emitter-in-list, bit 8 dynamic entity, bit 9 weather, bit 10 end-portal unlit.
     public uint   roughMetal;  // packHalf2x16(roughness, metalness)
     public uint   emissionSss; // packHalf2x16(emission, sss)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
@@ -310,6 +310,11 @@ public static const uint PAYLOAD_SHOW_CELESTIAL = 4u;
 // path there — no NEE, no shadow ray, no RIS, no diffuse continuation — because the path tracer's
 // light response was visibly breaking the weather streaks. See PRIM_WEATHER.
 public static const uint PAYLOAD_WEATHER = 512u;
+// End portal night-sky surface (set by world.rchit on both the terrain and the entity/block-entity
+// portal branches): raygen shades it fully UNLIT — only its own emission is added, then the path
+// ends. No NEE, no hand light, no RIS, no SHaRC and no indirect bounce, so no scene light (a
+// nearby torch, the sun, GI) can ever illuminate or reflect off the portal's starfield.
+public static const uint PAYLOAD_END_PORTAL_UNLIT = 1024u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;

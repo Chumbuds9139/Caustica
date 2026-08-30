@@ -245,7 +245,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         boolean stochasticAlpha = !glint && isTranslucent(renderType);
         capture.currentAlphaBucket = glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType);
-        // End-portal block entities draw their cosmic abyss quad through this path; tag it so
+        // End-portal block entities draw their night-sky quad through this path; tag it so
         // world.rchit shades it procedurally instead of sampling the flat end_portal texture.
         if (isEndPortal(renderType)) {
             tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
@@ -557,9 +557,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     /**
      * Vanilla's end-portal render type (EndPortalRenderer, and the portal quad of the end gateway)
-     * draws the cosmic abyss with a special shader over the flat purple end_portal texture. In the RT
+     * draws the starfield with a special shader over the flat purple end_portal texture. In the RT
      * path that quad is plain captured geometry, so it must be tagged for world.rchit's procedural
-     * abyss branch instead. Detected by pipeline location, mirroring {@link #isGlint}.
+     * night-sky branch instead. Detected by pipeline location, mirroring {@link #isGlint}.
      */
     private static boolean isEndPortal(RenderType renderType) {
         if (renderType == null) {
@@ -1385,8 +1385,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
         capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE
                 : (glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType));
-        // End-portal block entities may submit their abyss quad as custom geometry (EndPortalRenderer
-        // renders a single textured quad); tag it for the procedural abyss branch.
+        // End-portal block entities may submit their night-sky quad as custom geometry
+        // (EndPortalRenderer renders a single textured quad); tag it for the procedural night-sky
+        // branch.
         if (!lines && isEndPortal(renderType)) {
             tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
         }
