@@ -138,6 +138,18 @@ public final class RtSubScreens {
                         RtVideoOptions.cloudCoverageDisabledHint())));
     }
 
+    /**
+     * Volumetric fog: the master switch, density, reach, scattering directionality and the valley
+     * profile. Everything here rides the same four-lane per-frame push as the other composite
+     * options, so any change takes effect on the next frame without a reload or a rebuild.
+     */
+    public static RtSettingsSubScreen fog(Screen parent) {
+        return new RtSettingsSubScreen(parent, options(),
+                Component.translatable("caustica.options.rt.fogHeader"),
+                fogSettings(), RtSubScreens::fog,
+                reopen -> List.of(RtSettingsSubScreen.Section.of(null, RtVideoOptions.fogOptions())));
+    }
+
     /** Manual/auto exposure and the whole auto-exposure internal state. */
     public static RtSettingsSubScreen exposure(Screen parent) {
         return new RtSettingsSubScreen(parent, options(),
@@ -285,6 +297,15 @@ public final class RtSubScreens {
                 CausticaConfig.Rt.Composite.CLOUD_THICKNESS,
                 CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH,
                 CausticaConfig.Rt.Composite.CLOUD_OPACITY);
+    }
+
+    private static List<CausticaConfig.RuntimeSetting<?>> fogSettings() {
+        return List.of(
+                CausticaConfig.Rt.Composite.FOG_ENABLED,
+                CausticaConfig.Rt.Composite.FOG_DENSITY,
+                CausticaConfig.Rt.Composite.FOG_DISTANCE,
+                CausticaConfig.Rt.Composite.FOG_ANISOTROPY,
+                CausticaConfig.Rt.Composite.FOG_HEIGHT_FALLOFF);
     }
 
     private static List<CausticaConfig.RuntimeSetting<?>> exposureSettings() {

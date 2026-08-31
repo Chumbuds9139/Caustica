@@ -85,6 +85,7 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
         list.addBig(RtSubScreens.openButton(this, "caustica.options.rt.waterHeader", RtSubScreens::water));
         list.addBig(RtSubScreens.openButton(this, "caustica.options.rt.pomHeader", RtSubScreens::pom));
         list.addBig(RtSubScreens.openButton(this, "caustica.options.rt.cloudsHeader", RtSubScreens::clouds));
+        list.addBig(RtSubScreens.openButton(this, "caustica.options.rt.fogHeader", RtSubScreens::fog));
 
         // --- Advanced ---
         list.addHeader(ADVANCED_HEADER);

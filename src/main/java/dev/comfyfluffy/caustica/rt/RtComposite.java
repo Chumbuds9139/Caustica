@@ -171,6 +171,26 @@ public final class RtComposite {
                 CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.value());
     }
 
+    /**
+     * Volumetric fog lanes (WorldPush.fogParams): x density fraction, y Henyey-Greenstein
+     * anisotropy, z integration distance in blocks, w height falloff scale in blocks.
+     *
+     * <p>The toggle writes a zero density lane rather than a feature bit: {@code fog.slang} gates
+     * every term on {@code fogParams.x > 0}, so "off" is bit-identical to a frame that never ran
+     * the fog path, and there is no second switch for the shader and Java to disagree about. Read
+     * fresh every frame like the other Composite lanes, so a slider drag lands next frame.
+     */
+    private static Float4 fogParams() {
+        if (!CausticaConfig.Rt.Composite.FOG_ENABLED.value()) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        return new Float4(
+                CausticaConfig.Rt.Composite.FOG_DENSITY.value(),
+                CausticaConfig.Rt.Composite.FOG_ANISOTROPY.value(),
+                CausticaConfig.Rt.Composite.FOG_DISTANCE.value(),
+                CausticaConfig.Rt.Composite.FOG_HEIGHT_FALLOFF.value());
+    }
+
     // ---- Shader feature flags (WorldPush.featureFlags). Mirrors world_common.slang's FEATURE_*
     // constants: these are player-facing effect toggles, kept in their own word so they can never be
     // confused with WorldPush.flags, which describes the camera's physical state for the frame.
@@ -1698,7 +1718,10 @@ public final class RtComposite {
                     // lighting.slang resolves against its compiled RESTIR_* caps.
                     new Int4(CausticaConfig.Rt.Lights.RESTIR_TEMPORAL_HISTORY.value(),
                             CausticaConfig.Rt.Lights.RESTIR_SPATIAL_NEIGHBOURS.value(),
-                            CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0)
+                            CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0),
+                    // Volumetric fog (WorldPush.fogParams): density lane zero when the toggle is
+                    // off, so "off" costs the shader one comparison — see fogParams() above.
+                    fogParams()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

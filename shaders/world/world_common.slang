@@ -156,6 +156,14 @@ public struct WorldPush {
     // y = spatial neighbour count (0 = temporal only), z = max reservoir age in frames, w reserved.
     // Kept in the BDA struct rather than the 128-byte push-constant block, which is already full.
     public uint4    restirTuning;
+    // Volumetric fog (fog.slang). x = density fraction 0..1 scaled by FOG_SIGMA_MAX — 0 disables
+    // every fog term, so the config toggle and a zero slider both write this one lane; y =
+    // Henyey-Greenstein anisotropy (forward bias of the scatter, which is what opens up sun
+    // shafts); z = integration distance in blocks (a segment integrates no further — past it the
+    // medium stops dimming, which is also the sky/miss clamp); w = height falloff scale in blocks
+    // (0 = uniform; > 0 keeps full density at and below the base Y and decays above it, so mist
+    // pools into valleys and flight clears it).
+    public float4   fogParams;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

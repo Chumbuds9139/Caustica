@@ -825,6 +825,52 @@ public final class CausticaConfig {
              */
             public static final FloatSetting CLOUD_COVERAGE =
                     clampedFloat("caustica.rt.cloudCoverage", "composite.cloud-coverage", 0.55f, 0.0f, 1.0f);
+            /**
+             * Ray-traced volumetric fog: participating air whose light cones, sun shafts and valley
+             * mist are integrated per path segment (see {@code shaders/world/fog.slang}).
+             *
+             * <p>Every light the renderer already samples lights the fog — the sun and moon through
+             * the celestial NEE's shadow ray, block emitters (torches, glowstone, lava, ...) through
+             * the ReSTIR reservoir's winning sample — so cost scales with samples per pixel, not with
+             * the number of lights, and occlusion comes from the same BVH test as surface shadows.
+             * That is why there is no leak to fix: a cave has no sun in it because the shadow ray
+             * says so, not because a volume grid was sealed.
+             *
+             * <p>Off restores the current cloudless-air behaviour exactly (the shader gates on the
+             * density lane, which the toggle zeroes).
+             */
+            public static final BooleanSetting FOG_ENABLED =
+                    bool("caustica.rt.fog", "composite.fog", false);
+            /**
+             * Scattering density as a fraction of {@code fog.slang}'s FOG_SIGMA_MAX. 0% is no fog at
+             * all (and skips the whole path), 100% is thick haze — at the default slider range a
+             * 100-block view still transmits roughly a third of the scene at full value.
+             */
+            public static final FloatSetting FOG_DENSITY =
+                    clampedFloat("caustica.rt.fogDensity", "composite.fog-density", 0.3f, 0.0f, 1.0f);
+            /**
+             * How far (in blocks) a ray integrates the medium before the fog simply stops dimming.
+             * Shorter distances keep near-field shafts strong without burying the horizon; longer
+             * ones push the haze out to the render-distance rim. 16..1024, stepped by 16.
+             */
+            public static final FloatSetting FOG_DISTANCE =
+                    clampedFloat("caustica.rt.fogDistance", "composite.fog-distance", 160.0f, 16.0f, 1024.0f);
+            /**
+             * Henyey-Greenstein anisotropy of the scatter. Low values make fog glow evenly from every
+             * direction; high values concentrate it forward, which is what opens up sun shafts and
+             * makes torch cones reach toward the eye. -0.95..0.95; 0.55 is dust/haze territory.
+             */
+            public static final FloatSetting FOG_ANISOTROPY =
+                    clampedFloat("caustica.rt.fogAnisotropy", "composite.fog-anisotropy", 0.55f, -0.95f, 0.95f);
+            /**
+             * Valley mist. 0 keeps the medium uniform (fog everywhere, including at mountain tops);
+             * above 0, density holds full at and below world Y 90 and decays exponentially above it
+             * with this falloff scale in blocks — a low valley floors into mist while flight above
+             * it clears, from one multiply per sample and no spatial structure of any kind.
+             */
+            public static final FloatSetting FOG_HEIGHT_FALLOFF =
+                    clampedFloat("caustica.rt.fogHeightFalloff", "composite.fog-height-falloff",
+                            0.0f, 0.0f, 512.0f);
             public static final FloatSetting SUN_ANGULAR_RADIUS =
                     radians("caustica.rt.sunAngularRadius", "composite.sun-angular-radius-deg", 0.6f);
             public static final FloatSetting MOON_ANGULAR_RADIUS =
