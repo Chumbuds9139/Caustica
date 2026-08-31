@@ -7,7 +7,7 @@ features while keeping Minecraft's familiar UI and gameplay intact.
 Caustica is early software. Expect bugs, missing visual cases, and frequent
 changes while the renderer is being built.
 
-![Caustica ray-traced Minecraft scene](docs/gallery/caustica.png)
+![Caustica ray-traced Minecraft scene](docs/gallery/causticafork.png)
 
 ## Links
 
