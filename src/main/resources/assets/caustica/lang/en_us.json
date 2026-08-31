@@ -250,6 +250,8 @@
 	"caustica.options.rt.fogDistance.tooltip": "How far the fog integrates along a ray: closer than this, the haze dims and glows; beyond it, distance stops accumulating. Shorter keeps near-field shafts strong without burying the horizon.",
 	"caustica.options.rt.fogAnisotropy": "Fog Directionality",
 	"caustica.options.rt.fogAnisotropy.tooltip": "Which way the fog scatters light. Higher concentrates the glow around whatever you look toward — opening up sun shafts and long torch beams — at the cost of dimmer side views; 0.00 glows evenly in every direction; negative values favour looking away from the light. Real dust and mist sit around 0.4 to 0.7.",
+	"caustica.options.rt.fogBiomeTint": "Biome Fog Tint",
+	"caustica.options.rt.fogBiomeTint.tooltip": "How much the fog's glow takes on the colour vanilla assigns to the air at your camera — the biome you stand in, greyed by rain, coloured by the dimension — the exact value vanilla's own fog fades to. 0% keeps every shaft the module's neutral cool white; 100% is vanilla's colour, so swamps green the sun beams and a thunderstorm greys everything out, no extra cost.",
 	"caustica.options.rt.fogHeightFalloff": "Valley Fog",
 	"caustica.options.rt.fogHeightFalloff.tooltip": "Off keeps fog everywhere, mountain tops included. Any height turns it into valley mist: full density at and below world Y 90, decaying exponentially upward with this e-folding scale — 64 means a third of the density left 64 blocks above the fog line, and flying above it clears.",
 	"caustica.options.rt.risCandidates": "RIS Light Candidates",

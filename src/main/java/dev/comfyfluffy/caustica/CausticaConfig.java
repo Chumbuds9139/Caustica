@@ -877,6 +877,15 @@ public final class CausticaConfig {
             public static final FloatSetting FOG_HEIGHT_FALLOFF =
                     clampedFloat("caustica.rt.fogHeightFalloff", "composite.fog-height-falloff",
                             0.0f, 0.0f, 512.0f);
+            /**
+             * How much the fog's scatter takes on the air colour vanilla assigns at the camera
+             * (the {@code FOG_COLOR} camera attribute — biome blend, rain and dimension are all
+             * resolved by the game itself, the same source the cloud deck's colour rides). 0% is
+             * the module's neutral cool-white haze in every biome; 100% is vanilla's own fog
+             * colour, so swamps green the shafts and thunderstorms grey them out for free.
+             */
+            public static final FloatSetting FOG_BIOME_TINT =
+                    clampedFloat("caustica.rt.fogBiomeTint", "composite.fog-biome-tint", 1.0f, 0.0f, 1.0f);
             public static final FloatSetting SUN_ANGULAR_RADIUS =
                     radians("caustica.rt.sunAngularRadius", "composite.sun-angular-radius-deg", 0.6f);
             public static final FloatSetting MOON_ANGULAR_RADIUS =

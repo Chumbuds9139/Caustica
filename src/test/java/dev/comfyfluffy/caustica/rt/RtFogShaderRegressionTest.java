@@ -126,6 +126,52 @@ final class RtFogShaderRegressionTest {
                 "CausticaConfig.Rt.Composite.FOG_DENSITY.value()");
     }
 
+    /**
+     * The tint lane's ABI: {@code fogTint} trails {@code fogParams} in WorldPush and Java appends
+     * its value in the same order. The push codegen is reflection-based, so a one-sided reorder
+     * would not fail to compile — it would silently tint the fog with the anisotropy float. Both
+     * orders are pinned; the colour itself must come from the game's own attribute, not a
+     * hand-ramped palette.
+     */
+    @Test
+    void fogTintLaneTrailsFogParamsOnBothSides() throws IOException {
+        assertInOrder(Files.readString(WORLD_COMMON),
+                "public float4   fogParams;",
+                "public float4   fogTint;");
+        String composite = Files.readString(RT_COMPOSITE);
+        assertInOrder(composite,
+                "fogParams(),",
+                "fogTint()");
+        assertTrue(composite.contains("EnvironmentAttributes.FOG_COLOR"),
+                "the tint must read vanilla's fog colour attribute — biome blend, weather and "
+                        + "dimension are already composed there, and re-resolving them here is how "
+                        + "world-space fog state (and its leak family) starts");
+    }
+
+    /**
+     * Weather and tint are single-source lanes, not new fog state: rain rides worldPush.weather
+     * behind the same feature flag the sky gates it with, thickens the one density coefficient at
+     * BOTH scatter sites (so darkening and glow cannot disagree), and dims only the celestial
+     * sunVis — the shadow ray stays the occlusion authority for everything geometry can see.
+     */
+    @Test
+    void weatherAndBiomeTintRideTheSharedLanes() throws IOException {
+        String source = Files.readString(FOG);
+        String body = slice(source, "public FogVolume fogSegment(", "public float3 fogEmitterScatter(");
+        assertInOrder(body,
+                "sigmaS *= 1.0 + FOG_RAIN_DENSITY_GAIN * rain;",
+                "sunVis *= 1.0 - FOG_RAIN_SUN_DIM * rain;");
+        assertTrue(source.contains("worldFeature(push, FEATURE_WEATHER_LIGHTING) ? saturate(push.weather.x) : 0.0"),
+                "fog rain must ride the sky's weather lane behind the sky's feature flag");
+        assertTrue(body.contains("lightTerm = fogTintNow(push) * phase * sun * sunVis;"),
+                "celestial scatter must tint through the shared lerp");
+        String emitter = source.substring(source.indexOf("public float3 fogEmitterScatter("));
+        assertTrue(emitter.contains("sigmaS *= 1.0 + FOG_RAIN_DENSITY_GAIN * fogRain(push);"),
+                "emitter cones must travel the same rain-thickened medium as the sky shafts");
+        assertTrue(emitter.contains("float3 scatter = fogTintNow(push) * (sigmaS * profile)"),
+                "emitter scatter must tint through the same shared lerp as the celestial term");
+    }
+
     private static String slice(String source, String startNeedle, String endNeedle) {
         int start = source.indexOf(startNeedle);
         assertTrue(start >= 0, "missing snippet start: " + startNeedle);

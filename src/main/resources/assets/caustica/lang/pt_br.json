@@ -250,6 +250,8 @@
 	"caustica.options.rt.fogDistance.tooltip": "Até onde a névoa é integrada ao longo de um raio: antes disso a bruma escurece e brilha; depois, a distância para de acumular. Valores menores mantêm os cones próximos fortes sem enterrar o horizonte.",
 	"caustica.options.rt.fogAnisotropy": "Direcionalidade da Névoa",
 	"caustica.options.rt.fogAnisotropy.tooltip": "Para que lado a névoa espalha a luz. Valores altos concentram o brilho na direção do olhar — abrindo raios de sol e feixes longos de tocha — ao custo de vistas laterais mais fracas; 0,00 brilha igualmente em toda direção; valores negativos favorecem olhar para longe da luz. Poeira e bruma reais ficam entre 0,4 e 0,7.",
+	"caustica.options.rt.fogBiomeTint": "Tint da Névoa por Bioma",
+	"caustica.options.rt.fogBiomeTint.tooltip": "Quanto o brilho da névoa assume a cor que o vanilla atribui ao ar na sua câmera — o bioma em que você está, acinzentado pela chuva, colorido pela dimensão — exatamente o valor para o qual a névoa do vanilla esmaece. 0% mantém todo raio no branco-frio neutro do módulo; 100% é a cor do vanilla, então pântanos esverdeiam os raios de sol e a trovoada cinzenta tudo, sem custo extra.",
 	"caustica.options.rt.fogHeightFalloff": "Névoa de Vale",
 	"caustica.options.rt.fogHeightFalloff.tooltip": "Desligado mantém a névoa em toda parte, inclusive nos topos de montanha. Qualquer altura vira névoa de vale: densidade total no e abaixo do Y mundial 90, caindo exponencialmente para cima com esta escala — 64 significa um terço da densidade restante a 64 blocos acima da linha da névoa, e voar acima dela clareia tudo.",
 	"caustica.options.rt.risCandidates": "Candidatos de Luz RIS",

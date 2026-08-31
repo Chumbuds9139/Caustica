@@ -74,6 +74,29 @@ public static const float FOG_SAMPLE_MIN = 0.12;
 public static const float FOG_SAMPLE_SPAN = 0.76;
 // Hue-preserving firefly ceiling for the emitter term, matching the reservoir shading budget.
 public static const float FOG_MAX_SCATTER_LUMINANCE = 16.0;
+// Weather coupling. Rain is the one weather the fog cannot learn from geometry — the sky's
+// overcast is resolved on the CPU — so it rides worldPush.weather, the same single-source lane
+// the cloud rework established ("a storm is a STATE, not an occlusion lottery"), behind the
+// same feature flag the sky gates on. Rain thickens the medium (wet air holds more of it, and
+// one coefficient keeps darkening and glow in lockstep); and because the weather already erases
+// the sun disc for the downpour, the celestial shafts dim by the same lane rather than draw
+// god rays punching full-bright through rain the sky says is closed.
+public static const float FOG_RAIN_DENSITY_GAIN = 1.0;
+public static const float FOG_RAIN_SUN_DIM = 0.75;
+
+public float fogRain(WorldPush push) {
+    return worldFeature(push, FEATURE_WEATHER_LIGHTING) ? saturate(push.weather.x) : 0.0;
+}
+
+// Biome/weather tint: xyz is vanilla's own FOG_COLOR camera attribute, resolved by the game at
+// the camera — biome blend, weather, dimension, all composed by the attribute system this
+// renderer already trusts for the sun angle and the cloud colour. w is the player's blend
+// strength, so "off" is a constant lerp, not a special case. Both scatter sites (celestial and
+// emitter) read it through this one function: a shaft and a torch cone can never disagree about
+// what colour the air is, because they ask the same question the same way.
+public float3 fogTintNow(WorldPush push) {
+    return lerp(FOG_TINT, push.fogTint.xyz, saturate(push.fogTint.w));
+}
 
 public struct FogVolume {
     public float3 scatter;       // premultiplied in-scattered radiance along the segment
@@ -127,6 +150,8 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
     v.scatter = float3(0.0, 0.0, 0.0);
     v.transmittance = 1.0;
     float sigmaS = push.fogParams.x * FOG_SIGMA_MAX;
+    float rain = fogRain(push);
+    sigmaS *= 1.0 + FOG_RAIN_DENSITY_GAIN * rain;
     float d = min(maxDistance, fogFarBlocks(push));
     float3 sun = push.lightRadiance.xyz;
     // Degenerate segment, fog off, or no celestial light to scatter (the Nether and the End
@@ -160,7 +185,11 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
         VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
         float3 sunVis = shadow.transmittance;
         sunVis *= cloudSunShadow(push, sp - push.camOffset, lightDir);
-        lightTerm = FOG_TINT * phase * sun * sunVis;
+        // Storm is a STATE: the weather lane that erases the sun disc also dims the shafts, so
+        // the fog never argues with the sky about whether the sun is out. Geometry (the shadow
+        // ray above) stays the only occlusion authority for clear-weather clouds and mountains.
+        sunVis *= 1.0 - FOG_RAIN_SUN_DIM * rain;
+        lightTerm = fogTintNow(push) * phase * sun * sunVis;
     }
 
     if (push.fogParams.w <= 0.0) {
@@ -204,6 +233,10 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
 public float3 fogEmitterScatter(WorldPush push, float3 originBlock, float3 dir, float segLen,
                                 float3 lightPos, float3 lightNormal, float3 le, float area) {
     float sigmaS = push.fogParams.x * FOG_SIGMA_MAX;
+    // Same rain gain as the celestial term: the cone travels through the thickened wet medium,
+    // so its self-absorption and its visible reach change together — one coefficient, no
+    // second knob for Java and the shader to disagree about.
+    sigmaS *= 1.0 + FOG_RAIN_DENSITY_GAIN * fogRain(push);
     float d = min(segLen, fogFarBlocks(push));
     if (sigmaS <= 0.0 || d <= 0.0 || max(le.x, max(le.y, le.z)) <= 0.0) {
         return float3(0.0, 0.0, 0.0);
@@ -241,7 +274,7 @@ public float3 fogEmitterScatter(WorldPush push, float3 originBlock, float3 dir, 
     float dTau = sigmaT * d;
     float I = dTau < 1.0e-4 ? d : (1.0 - exp(-dTau)) / sigmaT;
     float phase = hg(saturate(dot(dir, wi)), push.fogParams.y);
-    float3 scatter = FOG_TINT * (sigmaS * profile) * phase * le * geom * vis * I * pathT;
+    float3 scatter = fogTintNow(push) * (sigmaS * profile) * phase * le * geom * vis * I * pathT;
     float lum = luminance(scatter);
     if (lum > FOG_MAX_SCATTER_LUMINANCE) {
         scatter *= FOG_MAX_SCATTER_LUMINANCE / lum;

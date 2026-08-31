@@ -16,7 +16,17 @@ concreto por arquivo, depois riscos conhecidos.
 > recovery do prefixo gatia no `seg.medium` já empurrado pela interface (água/vidro entrando ficavam
 > sem fog camera→superfície); agora gatia no meio da câmera (`!cameraSubmerged()`). E o default de
 > densidade caiu 30%→10%: com sunPeak≈21 o wash forward-scatter soterrava os discos de sol/lua no
-> tonemap + auto-exposure. Flicker residual = OMM do mod (toggle próprio no menu), não do fog. `WorldPush.fogParams`
+> tonemap + auto-exposure (mantido como tuning, mas a causa dos discos sumidos se revelou outra:
+> binding do atlas — 13 vs 3+GUIDE_COUNT=12, herança do crescimento dos guides na #71; conserto
+> no rmiss + guarda textual no `RtCloudShaderRegressionTest`). Flicker residual = OMM do mod
+> (toggle próprio no menu), não do fog. **M3 meia-vida implementada em seguida:** weather×fog
+> (chuva engrossa `sigmaS` nos DOIS scatter sites e só dim-mua o `sunVis` celestial — o raio de
+> sombra continua sendo a única autoridade de oclusão; tudo atrás do `FEATURE_WEATHER_LIGHTING`,
+> lane que já existia) e tint por bioma = `WorldPush.fogTint` trailing carregado do
+> `EnvironmentAttributes.FOG_COLOR` da câmera (o próprio jogo resolve bioma/clima/dimensão; o
+> slider só controla a força do lerp). Densidade POR REGIÃO continua proibida (é a grade voxel dos
+> 500 bugs vestida de slider) e haze ambiente Nether/End continua fora (termo desobstruído =
+> família de leak). `WorldPush.fogParams`
 > (4 lanes) + config `composite.fog*` (toggle, densidade, alcance, anisotropia, falloff de altura)
 > + sub-screen "Volumetric Fog" (en_us/pt_br). O ambient NÃO-ocluído ficou deliberadamente fora:
 > ele é a única parte que re-traria os leaks de caverna. M3 (tint de bioma/clima via

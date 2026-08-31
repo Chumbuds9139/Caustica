@@ -191,6 +191,40 @@ public final class RtComposite {
                 CausticaConfig.Rt.Composite.FOG_HEIGHT_FALLOFF.value());
     }
 
+    /**
+     * The fog scatter's colour (WorldPush.fogTint): vanilla's own {@code FOG_COLOR} through the
+     * same camera probe {@link #cloudColorState} reads for the deck — the game resolves it per
+     * biome blend at the camera, per weather, per dimension, so the swamp greens its god rays and
+     * a downpour greys them on vanilla's curve, with no biome walk or upload of our own. Early
+     * boot or a missing attribute leaves the lane at strength 0, which is the module's neutral
+     * cool-white tint — the same picture as before this lane existed, not a black fog.
+     *
+     * <p>Fog off writes the whole lane zero (matching {@link #fogParams()}'s "off costs one
+     * comparison" contract; the shader multiplies nothing when nobody reads it anyway).
+     */
+    private static Float4 fogTint() {
+        float strength = CausticaConfig.Rt.Composite.FOG_BIOME_TINT.value();
+        if (!CausticaConfig.Rt.Composite.FOG_ENABLED.value() || strength <= 0f) {
+            return new Float4(1f, 1f, 1f, 0f);
+        }
+        float r = 1f, g = 1f, b = 1f;
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.gameRenderer != null) {
+                float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                int argb = mc.gameRenderer.mainCamera().attributeProbe()
+                        .getValue(EnvironmentAttributes.FOG_COLOR, partial);
+                r = srgb8ToLinear(ARGB.red(argb));
+                g = srgb8ToLinear(ARGB.green(argb));
+                b = srgb8ToLinear(ARGB.blue(argb));
+            }
+        } catch (Throwable ignored) {
+            // Probe unavailable (early boot / unsupported context): strength 0 keeps the neutral tint.
+            return new Float4(1f, 1f, 1f, 0f);
+        }
+        return new Float4(r, g, b, Math.clamp(strength, 0f, 1f));
+    }
+
     // ---- Shader feature flags (WorldPush.featureFlags). Mirrors world_common.slang's FEATURE_*
     // constants: these are player-facing effect toggles, kept in their own word so they can never be
     // confused with WorldPush.flags, which describes the camera's physical state for the frame.
@@ -1721,7 +1755,10 @@ public final class RtComposite {
                             CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0),
                     // Volumetric fog (WorldPush.fogParams): density lane zero when the toggle is
                     // off, so "off" costs the shader one comparison — see fogParams() above.
-                    fogParams()
+                    fogParams(),
+                    // Biome/weather tint for the fog's scatter (WorldPush.fogTint): the game's
+                    // own FOG_COLOR attribute, blended by the slider — see fogTint() above.
+                    fogTint()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

@@ -228,6 +228,7 @@ public final class RtVideoOptions {
             fogDistance(),
             fogAnisotropy(),
             fogHeightFalloff(),
+            fogBiomeTint(),
         };
     }
 
@@ -902,6 +903,15 @@ public final class RtVideoOptions {
     /** Scattering density, as a percentage of the shader's maximum per-block cross-section. */
     private static OptionInstance<Integer> fogDensity() {
         return percent("caustica.options.rt.fogDensity", CausticaConfig.Rt.Composite.FOG_DENSITY);
+    }
+
+    /**
+     * Biome/weather tint strength. The colour itself is never ours: it is vanilla's FOG_COLOR
+     * camera attribute (biome blend, rain, dimension — all resolved by the game), and this
+     * slider only says how far the scatter lerps toward it from the module's neutral tint.
+     */
+    private static OptionInstance<Integer> fogBiomeTint() {
+        return percent("caustica.options.rt.fogBiomeTint", CausticaConfig.Rt.Composite.FOG_BIOME_TINT);
     }
 
     /**
