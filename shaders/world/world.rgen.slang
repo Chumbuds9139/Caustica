@@ -30,6 +30,7 @@ import trace_ser;
 #endif
 import lighting;
 import clouds;
+import fog;
 import sharc;
 
 // First-bounce lobe decomposition for NRD (REBLUR_DIFFUSE_SPECULAR): alongside the combined
@@ -72,10 +73,33 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // two branches carry throughputs F and (1 - F), so their prefix contributions sum to exactly one
     // crossing (F*S + (1-F)*S = S), and each branch's own throughput picks up the same transmittance
     // the real prefix would have applied.
+    // Pass A is fixed at one sample per pixel. Decorrelate each Pass B resample here so configured
+    // SPP produces independent lighting/BSDF paths from the shared terminal continuation. The seed
+    // is initialised BEFORE the prefix recovery because the fog occlusion sample consumes one rndf
+    // draw from it — the march jitter and the path jitter must share one stream.
+    uint seed = seg.seed ^ sampleIndex * 2246822519u;
+    seed = pcg(seed);
     if (seg.bounce > 0) {
         float3 toStart = ro - worldPush.camOffset;
         float prefixDist = length(toStart);
         if (prefixDist > 1.0e-4) {
+            // Fog first, then cloud: ground-level fog in front of the deck dims the deck's own
+            // in-scatter, the same aerial perspective the hit-branch blocks apply in the same order.
+            //
+            // The medium gate is the CAMERA's own medium, not the continuation's stack: seg.medium
+            // already contains the dielectric Pass A consumed at the far end of this prefix (a water
+            // or glass entry queues its continuation with the new medium pushed), but the stretch
+            // being recovered here was travelled in the medium BEFORE that interface. Gating on the
+            // pushed stack skipped camera->surface fog for every dielectric the player looks "into"
+            // — the reported water/glass-unfogged bug. fogAppliesHere stays right where the segment
+            // really does lie inside the medium it samples: the pass-B hit/miss blocks.
+            if (fogEnabled(worldPush) && !cameraSubmerged()) {
+                FogVolume preFog = fogSegment(worldPush, worldPush.camOffset, toStart / prefixDist,
+                                              prefixDist, seed, seg.showCelestial);
+                L += throughput * preFog.scatter;
+                Lspec += throughput * preFog.scatter;
+                throughput *= preFog.transmittance;
+            }
             // The cloud crossing belongs to the camera->surface prefix, so it is recovered here in
             // full rather than applied per split branch.
             CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
@@ -85,10 +109,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             throughput *= pre.transmittance;
         }
     }
-    // Pass A is fixed at one sample per pixel. Decorrelate each Pass B resample here so configured SPP
-    // produces independent lighting/BSDF paths from the shared terminal continuation.
-    uint seed = seg.seed ^ sampleIndex * 2246822519u;
-    seed = pcg(seed);
     float rayConeWidth = seg.rayConeWidth;
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     int maxBounces = int(worldPush.maxBounces);
@@ -167,6 +187,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // world.rmiss writes sky radiance (gradient + sun/moon disc + stars) into payload.albedo. The
             // packed show-celestial flag decides whether this path segment may see the bright disc.
             float3 sky = payload.albedo;
+            // Fog between here and the sky: a ray that misses runs through the whole air column,
+            // so the sky it carries — sun and moon discs included, which is half of what makes
+            // god rays read — arrives dimmed by the column's transmittance and lifted by its
+            // in-scatter. The integration-distance clamp lives inside fogSegment; the SHaRC
+            // propagation below sees the SAME dimmed sky the eye does, never the raw one.
+            if (fogEnabled(worldPush) && fogAppliesHere(medium)) {
+                FogVolume skyFog = fogSegment(worldPush, ro, rd, 1.0e9, seed, showCelestial);
+                sky = sky * skyFog.transmittance + skyFog.scatter;
+            }
             L += throughput * sky;
             if (channel == 2) {
                 Lspec += throughput * sky;
@@ -191,6 +220,30 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // the ordinary case costs one comparison.
         if (any(medium.current.extinction > 0.0)) {
             throughput *= exp(-medium.current.extinction * payload.hitT);
+        }
+
+        // ---- Volumetric fog crossed on the way to this hit (see fog.slang).
+        //
+        // Same {scatter, transmittance} shape as the cloud block right below, deliberately applied
+        // BEFORE it so ground fog dims the cloud's in-scatter like any other background. Fog lives
+        // in the path integral, not at a display seam, which is what makes it show up in
+        // reflections, refractions and the cave's dark in exactly the places the surface shadows
+        // do — there is no second fog world to keep in sync.
+        //
+        // fogSegThroughput: the path's throughput at this segment's START. A segment's own
+        // in-scatter must be weighted by everything the path travelled through BEFORE it, not by
+        // the segment's own darkening; the emitter term below accumulates at shading time (the
+        // light sample only exists then) and must not silently pick up this segment's fog T.
+        float3 fogSegThroughput = throughput;
+        if (fogEnabled(worldPush) && fogAppliesHere(medium)) {
+            FogVolume segFog = fogSegment(worldPush, ro, rd, payload.hitT, seed, showCelestial);
+            L += throughput * segFog.scatter;
+            if (channel == 2) {
+                Lspec += throughput * segFog.scatter;
+            } else {
+                Ldiff += throughput * segFog.scatter;
+            }
+            throughput *= segFog.transmittance;
         }
 
         // Cloud crossed on the way to this hit. The deck is a real volume in the world, so a ray that
@@ -679,6 +732,26 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 float3 ris = throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
                         twoSidedEmitter, activeSss) * estimatorScale;
                 L += ris;
+                // Fog in-scatter from the very light the reservoir just shaded the surface with —
+                // same sample, same estimator scale, no second light selection anywhere, which is
+                // the whole trick that keeps cost flat at five hundred torches. The term fires its
+                // own short shadow ray from the fog's quadrature point instead of reusing the
+                // receiver's, so a wall between the flame and the MIDDLE of the segment cannot leak
+                // the cone (fog.slang). Emission-family light rides the diffuse bucket, matching
+                // the direct-hit emission convention above, and the pre-fog segment throughput
+                // keeps it from eating this segment's own darkening twice.
+                if (fogEnabled(worldPush) && fogAppliesHere(medium) && showCelestial
+                        && r.W > 0.0 && r.phat > 0.0) {
+                    float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
+                            r.pos, r.lnrm, r.le, r.area) * estimatorScale;
+                    fogE *= fogSegThroughput;
+                    L += fogE;
+                    if (channel == 2) {
+                        Lspec += fogE;
+                    } else {
+                        Ldiff += fogE;
+                    }
+                }
                 if (nrdEnabled()) {
                     if (channel == 0) {
                         // Unclassified primary hit: split the reservoir estimate by BRDF lobe. Costs a

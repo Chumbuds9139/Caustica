@@ -216,6 +216,22 @@ public final class RtVideoOptions {
         return options.toArray(OptionInstance<?>[]::new);
     }
 
+    /**
+     * The volumetric fog rows: the master toggle first (off costs one comparison in the shaders,
+     * and every other row still tunes a live lane so the fog can be dialled in without reopening
+     * the switch). See fog.slang for the method and CausticaConfig for the ranges.
+     */
+    public static OptionInstance<?>[] fogOptions() {
+        return new OptionInstance<?>[] {
+            fogEnabled(),
+            fogDensity(),
+            fogDistance(),
+            fogAnisotropy(),
+            fogHeightFalloff(),
+            fogBiomeTint(),
+        };
+    }
+
     public static OptionInstance<?>[] hdrOptions() {
         return new OptionInstance<?>[] {
             hdrEnabled(),
@@ -766,6 +782,16 @@ public final class RtVideoOptions {
     private static final int CLOUD_HEIGHT_MAX = 1024;
     private static final int CLOUD_HEIGHT_STEP = 8;
 
+    // Fog slider bounds. Same rule as the cloud-height block: CausticaConfig clamps are the real
+    // guard; these only pick how the slider's steps map onto that range.
+    private static final int FOG_DISTANCE_MIN = 16;   // blocks
+    private static final int FOG_DISTANCE_STEP = 16;
+    private static final int FOG_DISTANCE_STEPS = (1024 - FOG_DISTANCE_MIN) / FOG_DISTANCE_STEP;
+    private static final int FOG_FALLOFF_STEP = 8;    // blocks of exponential height scale
+    private static final int FOG_FALLOFF_STEPS = 512 / FOG_FALLOFF_STEP;
+    // HG anisotropy steps: -0.95 + step * 0.05, i.e. 38 steps spanning the config's clamp.
+    private static final int FOG_G_STEPS = 38;
+
     /**
      * Cloud rendering style: vanilla's flat blocky deck, or a ray-marched volumetric slab.
      *
@@ -863,6 +889,89 @@ public final class RtVideoOptions {
      */
     private static OptionInstance<Integer> cloudOpacity() {
         return percent("caustica.options.rt.cloudOpacity", CausticaConfig.Rt.Composite.CLOUD_OPACITY);
+    }
+
+    /**
+     * Volumetric fog master switch. Off writes a zero density lane into the per-frame push, which
+     * is the single gate every fog term checks — the "no fog" frame is the pre-feature frame, not
+     * a frame that computed fog and hid it.
+     */
+    private static OptionInstance<Boolean> fogEnabled() {
+        return bool("caustica.options.rt.fog", CausticaConfig.Rt.Composite.FOG_ENABLED);
+    }
+
+    /** Scattering density, as a percentage of the shader's maximum per-block cross-section. */
+    private static OptionInstance<Integer> fogDensity() {
+        return percent("caustica.options.rt.fogDensity", CausticaConfig.Rt.Composite.FOG_DENSITY);
+    }
+
+    /**
+     * Biome/weather tint strength. The colour itself is never ours: it is vanilla's FOG_COLOR
+     * camera attribute (biome blend, rain, dimension — all resolved by the game), and this
+     * slider only says how far the scatter lerps toward it from the module's neutral tint.
+     */
+    private static OptionInstance<Integer> fogBiomeTint() {
+        return percent("caustica.options.rt.fogBiomeTint", CausticaConfig.Rt.Composite.FOG_BIOME_TINT);
+    }
+
+    /**
+     * How far the fog integrates along a ray, in blocks. Stepped by 16 (half a chunk): the horizon
+     * this sets is hundreds of blocks away, and 1-block precision there is below what the eye can
+     * resolve, so coarse steps make it far easier to land on a value. Same shape as
+     * {@link #cloudHeight()}'s slider.
+     */
+    private static OptionInstance<Integer> fogDistance() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOG_DISTANCE;
+        int initial = Math.clamp(Math.round((setting.value() - FOG_DISTANCE_MIN) / FOG_DISTANCE_STEP),
+                0, FOG_DISTANCE_STEPS);
+        return new OptionInstance<>(
+            "caustica.options.rt.fogDistance",
+            OptionInstance.cachedConstantTooltip(
+                    Component.translatable("caustica.options.rt.fogDistance.tooltip")),
+            (caption, step) -> Options.genericValueLabel(caption,
+                    Component.literal((FOG_DISTANCE_MIN + step * FOG_DISTANCE_STEP) + " blocks")),
+            new OptionInstance.IntRange(0, FOG_DISTANCE_STEPS),
+            initial,
+            step -> setting.set((float) (FOG_DISTANCE_MIN + step * FOG_DISTANCE_STEP)));
+    }
+
+    /**
+     * Forward-scattering bias of the fog, HG anisotropy g. Higher concentrates the glow around
+     * whatever the eye is looking toward — sun shafts and the far end of torch cones — while 0
+     * makes the fog glow evenly from every direction.
+     */
+    private static OptionInstance<Integer> fogAnisotropy() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOG_ANISOTROPY;
+        int initial = Math.clamp(Math.round((setting.value() + 0.95f) / 0.05f), 0, FOG_G_STEPS);
+        return new OptionInstance<>(
+            "caustica.options.rt.fogAnisotropy",
+            OptionInstance.cachedConstantTooltip(
+                    Component.translatable("caustica.options.rt.fogAnisotropy.tooltip")),
+            (caption, step) -> Options.genericValueLabel(caption, Component.literal(
+                    String.format(java.util.Locale.ROOT, "%.2f", -0.95f + step * 0.05f))),
+            new OptionInstance.IntRange(0, FOG_G_STEPS),
+            initial,
+            step -> setting.set(-0.95f + step * 0.05f));
+    }
+
+    /**
+     * Valley mist: the exponential falloff scale above world Y 90, in blocks. 0 (Off) keeps the
+     * medium uniform — fog at mountain tops included; any height is the e-folding distance, so
+     * 32 blocks means the density has dropped to a third of its floor value 32 blocks above the
+     * fog line.
+     */
+    private static OptionInstance<Integer> fogHeightFalloff() {
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOG_HEIGHT_FALLOFF;
+        int initial = Math.clamp(Math.round(setting.value() / FOG_FALLOFF_STEP), 0, FOG_FALLOFF_STEPS);
+        return new OptionInstance<>(
+            "caustica.options.rt.fogHeightFalloff",
+            OptionInstance.cachedConstantTooltip(
+                    Component.translatable("caustica.options.rt.fogHeightFalloff.tooltip")),
+            (caption, step) -> Options.genericValueLabel(caption, Component.literal(
+                    step == 0 ? "Off" : (step * FOG_FALLOFF_STEP) + " blocks")),
+            new OptionInstance.IntRange(0, FOG_FALLOFF_STEPS),
+            initial,
+            step -> setting.set((float) (step * FOG_FALLOFF_STEP)));
     }
 
     /**

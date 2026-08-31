@@ -156,6 +156,21 @@ public struct WorldPush {
     // y = spatial neighbour count (0 = temporal only), z = max reservoir age in frames, w reserved.
     // Kept in the BDA struct rather than the 128-byte push-constant block, which is already full.
     public uint4    restirTuning;
+    // Volumetric fog (fog.slang). x = density fraction 0..1 scaled by FOG_SIGMA_MAX — 0 disables
+    // every fog term, so the config toggle and a zero slider both write this one lane; y =
+    // Henyey-Greenstein anisotropy (forward bias of the scatter, which is what opens up sun
+    // shafts); z = integration distance in blocks (a segment integrates no further — past it the
+    // medium stops dimming, which is also the sky/miss clamp); w = height falloff scale in blocks
+    // (0 = uniform; > 0 keeps full density at and below the base Y and decays above it, so mist
+    // pools into valleys and flight clears it).
+    public float4   fogParams;
+    // The fog scatter's colour, resolved by the game itself: xyz = linear FOG_COLOR camera
+    // attribute (the value vanilla's fog fades toward — biome blend, rain, dimension, all
+    // composed upstream), w = the player's blend strength 0..1. fog.slang's fogTintNow lerps
+    // it against the module's neutral tint, so a zero w costs no branch and the celestial and
+    // emitter scatter terms can never tint differently. Trailing lane after fogParams — the
+    // generated WorldPushData appends it; RtFogShaderRegressionTest pins the pairing.
+    public float4   fogTint;
 };
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full

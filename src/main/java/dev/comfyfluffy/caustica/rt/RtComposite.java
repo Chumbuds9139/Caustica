@@ -171,6 +171,60 @@ public final class RtComposite {
                 CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.value());
     }
 
+    /**
+     * Volumetric fog lanes (WorldPush.fogParams): x density fraction, y Henyey-Greenstein
+     * anisotropy, z integration distance in blocks, w height falloff scale in blocks.
+     *
+     * <p>The toggle writes a zero density lane rather than a feature bit: {@code fog.slang} gates
+     * every term on {@code fogParams.x > 0}, so "off" is bit-identical to a frame that never ran
+     * the fog path, and there is no second switch for the shader and Java to disagree about. Read
+     * fresh every frame like the other Composite lanes, so a slider drag lands next frame.
+     */
+    private static Float4 fogParams() {
+        if (!CausticaConfig.Rt.Composite.FOG_ENABLED.value()) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        return new Float4(
+                CausticaConfig.Rt.Composite.FOG_DENSITY.value(),
+                CausticaConfig.Rt.Composite.FOG_ANISOTROPY.value(),
+                CausticaConfig.Rt.Composite.FOG_DISTANCE.value(),
+                CausticaConfig.Rt.Composite.FOG_HEIGHT_FALLOFF.value());
+    }
+
+    /**
+     * The fog scatter's colour (WorldPush.fogTint): vanilla's own {@code FOG_COLOR} through the
+     * same camera probe {@link #cloudColorState} reads for the deck — the game resolves it per
+     * biome blend at the camera, per weather, per dimension, so the swamp greens its god rays and
+     * a downpour greys them on vanilla's curve, with no biome walk or upload of our own. Early
+     * boot or a missing attribute leaves the lane at strength 0, which is the module's neutral
+     * cool-white tint — the same picture as before this lane existed, not a black fog.
+     *
+     * <p>Fog off writes the whole lane zero (matching {@link #fogParams()}'s "off costs one
+     * comparison" contract; the shader multiplies nothing when nobody reads it anyway).
+     */
+    private static Float4 fogTint() {
+        float strength = CausticaConfig.Rt.Composite.FOG_BIOME_TINT.value();
+        if (!CausticaConfig.Rt.Composite.FOG_ENABLED.value() || strength <= 0f) {
+            return new Float4(1f, 1f, 1f, 0f);
+        }
+        float r = 1f, g = 1f, b = 1f;
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.gameRenderer != null) {
+                float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                int argb = mc.gameRenderer.mainCamera().attributeProbe()
+                        .getValue(EnvironmentAttributes.FOG_COLOR, partial);
+                r = srgb8ToLinear(ARGB.red(argb));
+                g = srgb8ToLinear(ARGB.green(argb));
+                b = srgb8ToLinear(ARGB.blue(argb));
+            }
+        } catch (Throwable ignored) {
+            // Probe unavailable (early boot / unsupported context): strength 0 keeps the neutral tint.
+            return new Float4(1f, 1f, 1f, 0f);
+        }
+        return new Float4(r, g, b, Math.clamp(strength, 0f, 1f));
+    }
+
     // ---- Shader feature flags (WorldPush.featureFlags). Mirrors world_common.slang's FEATURE_*
     // constants: these are player-facing effect toggles, kept in their own word so they can never be
     // confused with WorldPush.flags, which describes the camera's physical state for the frame.
@@ -1698,7 +1752,13 @@ public final class RtComposite {
                     // lighting.slang resolves against its compiled RESTIR_* caps.
                     new Int4(CausticaConfig.Rt.Lights.RESTIR_TEMPORAL_HISTORY.value(),
                             CausticaConfig.Rt.Lights.RESTIR_SPATIAL_NEIGHBOURS.value(),
-                            CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0)
+                            CausticaConfig.Rt.Lights.RESTIR_MAX_AGE.value(), 0),
+                    // Volumetric fog (WorldPush.fogParams): density lane zero when the toggle is
+                    // off, so "off" costs the shader one comparison — see fogParams() above.
+                    fogParams(),
+                    // Biome/weather tint for the fog's scatter (WorldPush.fogTint): the game's
+                    // own FOG_COLOR attribute, blended by the slider — see fogTint() above.
+                    fogTint()
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {
