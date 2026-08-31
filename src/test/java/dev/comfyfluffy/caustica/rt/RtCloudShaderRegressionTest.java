@@ -37,8 +37,8 @@ final class RtCloudShaderRegressionTest {
         assertTrue(decl.find(), "world.rmiss must declare the celestialsAtlas binding");
         int atlasBinding = Integer.parseInt(decl.group(1));
 
-        String java = Files.readString(RT_COMPOSITE);
-        var guide = java.util.regex.Pattern.compile("GUIDE_COUNT = (\\d+);").matcher(java);
+        String composite = Files.readString(RT_COMPOSITE);
+        var guide = java.util.regex.Pattern.compile("GUIDE_COUNT = (\\d+);").matcher(composite);
         assertTrue(guide.find(), "RtComposite must define GUIDE_COUNT for the world pipeline");
         int guideCount = Integer.parseInt(guide.group(1));
 
