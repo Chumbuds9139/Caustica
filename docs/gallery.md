@@ -11,3 +11,7 @@ Screenshots from Caustica running in Minecraft 26.2.
 ![Caustica screenshot 21:31:23](gallery/2026-07-09_21.31.23.jpg)
 
 ![Caustica screenshot 21:43:39](gallery/2026-07-09_21.43.39.jpg)
+
+![Caustica screenshot 11:30:39](gallery/image.png)
+
+![Caustica screenshot 11:30:39](gallery/image2.png)
