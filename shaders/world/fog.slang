@@ -30,10 +30,13 @@
 // the denoised GI cannot resolve differently anyway.
 //
 // Like clouds.slang this module takes the WorldPush explicitly at every entry point. Unlike
-// clouds.slang it is imported by the raygen only (never by world.rmiss), so it may use trace,
-// medium and clouds freely.
+// clouds.slang it is imported by the raygen passes only (never by world.rmiss — the sky/miss
+// shading composites fog in the RAYGEN's miss branch instead), so it may import world_core
+// (VisibilityResult), trace, medium and clouds freely — Slang imports are not transitive for
+// name lookup, so the visibility result type must be imported where it is spelled.
 
 import world_common;
+import world_core;
 import math;
 import trace;
 import medium;
