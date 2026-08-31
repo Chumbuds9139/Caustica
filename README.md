@@ -26,6 +26,7 @@ changes while the renderer is being built.
 - LabPBR-style material support
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 - ReSTIR
+- NVIDIA SHaRC
 
 ## Requirements
 
@@ -52,7 +53,7 @@ changes while the renderer is being built.
 - On Linux if Minecraft crashes on startup with stack overflow errors, try adding `-Xss2M` to the Java args to increase the stack size.
 - Use Java args to improve performance. Minecraft Launcher default:
   `-XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -XX:+UseZGC`
-- Frame Generation is experimental and needs to be enabled by modifying the configuration file.
+- Frame Generation is experimental.
 - HDR output requires an HDR swapchain and a correctly configured HDR display.
 - When HDR is enabled on Linux, Caustica selects GLFW's native Wayland backend automatically. X11/XWayland surfaces generally do not expose the required HDR10/PQ format.
 - If Minecraft falls back to OpenGL after a crash, re-enable the Vulkan backend
@@ -82,6 +83,6 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## TODO List
 
 - [X] Nether/End sky, weather, volumetric fog/clouds
-- [ ] NRD + FSR for non-NVIDIA GPUs
+- [X] NRD + FSR for non-NVIDIA GPUs(Windows only for now)
 - [X] LOD
 - [x] ReSTIR
