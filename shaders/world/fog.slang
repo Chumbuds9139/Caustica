@@ -136,34 +136,46 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
         return v;
     }
     float sigmaT = sigmaS * FOG_EXTINCTION_SCALE;
-    float3 lightDir = push.lightDir.xyz;
-    // Forward peak toward the sun, same convention as the SSS term: the ray direction and the
-    // light direction align when the eye looks INTO the light, and the shafts open up there.
-    // Unjittered: the shaft edge stays temporally rock-stable while the surface penumbra
-    // softens from its own quad sampling — a jittered fog edge against a soft surface shadow is
-    // how "cone lit but ground dark" flicker starts.
-    float phase = hg(saturate(dot(dir, lightDir)), push.fogParams.y);
 
     // The god-ray march, at its cheapest honest size: one shadow sample at a stratified point
     // along the segment per full-tier ray, accumulating into the TAA history over frames.
-    float3 sunVis = float3(1.0, 1.0, 1.0);
+    //
+    // lightTerm exists ONLY on the full tier, and that is not an optimisation: in-scatter is
+    // useless without its occlusion test. A cheap-tier segment that scattered the unshadowed
+    // sun would paint full daylight into cave air the primary ray correctly found dark — every
+    // diffuse bounce adding the entire celestial column. The cheap tier is therefore pure
+    // Beer-Lambert darkening, exactly as the QUALITY TIERS header promises; v.scatter stays 0
+    // and callers folding `L += throughput * v.scatter` become no-ops there for free.
+    float3 lightTerm = float3(0.0, 0.0, 0.0);
     if (highQuality) {
+        float3 lightDir = push.lightDir.xyz;
+        // Forward peak toward the sun, same convention as the SSS term: the ray direction and the
+        // light direction align when the eye looks INTO the light, and the shafts open up there.
+        // Unjittered: the shaft edge stays temporally rock-stable while the surface penumbra
+        // softens from its own quad sampling — a jittered fog edge against a soft surface shadow
+        // is how "cone lit but ground dark" flicker starts.
+        float phase = hg(saturate(dot(dir, lightDir)), push.fogParams.y);
         float tS = d * (FOG_SAMPLE_MIN + rndf(seed) * FOG_SAMPLE_SPAN);
         float3 sp = originBlock + dir * tS;
         VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
-        sunVis = shadow.transmittance;
+        float3 sunVis = shadow.transmittance;
         sunVis *= cloudSunShadow(push, sp - push.camOffset, lightDir);
+        lightTerm = FOG_TINT * phase * sun * sunVis;
     }
-    float3 lightTerm = FOG_TINT * phase * sun * sunVis;
 
     if (push.fogParams.w <= 0.0) {
         float dTau = sigmaT * d;
         float T = exp(-dTau);
         v.transmittance = T;
-        float I = dTau < 1.0e-4 ? d : (1.0 - T) / sigmaT;
-        v.scatter = lightTerm * (sigmaS * I);
+        if (highQuality) {
+            float I = dTau < 1.0e-4 ? d : (1.0 - T) / sigmaT;
+            v.scatter = lightTerm * (sigmaS * I);
+        }
         return v;
     }
+    // Cheap tier with a height profile: still one transmittance march, but at the cheap step
+    // count and with the zero lightTerm it accumulates nothing — the loop is the darkening,
+    // nothing else.
     int steps = highQuality ? FOG_PROFILE_STEPS : FOG_PROFILE_STEPS_CHEAP;
     float stepLen = d / float(steps);
     float T = 1.0;

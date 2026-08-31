@@ -845,9 +845,15 @@ public final class CausticaConfig {
              * Scattering density as a fraction of {@code fog.slang}'s FOG_SIGMA_MAX. 0% is no fog at
              * all (and skips the whole path), 100% is thick haze — at the default slider range a
              * 100-block view still transmits roughly a third of the scene at full value.
+             *
+             * <p>The default sits at 10% on purpose. Forward scatter scales with the sun radiance the
+             * sky shaders push (≈21 at noon), so a heavier default stacks a bright wash onto the sky
+             * near the sun: past roughly a quarter slider the sun and moon discs sink into their own
+             * haze and the frame's auto-exposure dims everything else in answer. 10% reads as aerial
+             * perspective with the discs still punching through; the slider is there to go thicker.
              */
             public static final FloatSetting FOG_DENSITY =
-                    clampedFloat("caustica.rt.fogDensity", "composite.fog-density", 0.3f, 0.0f, 1.0f);
+                    clampedFloat("caustica.rt.fogDensity", "composite.fog-density", 0.1f, 0.0f, 1.0f);
             /**
              * How far (in blocks) a ray integrates the medium before the fog simply stops dimming.
              * Shorter distances keep near-field shafts strong without burying the horizon; longer

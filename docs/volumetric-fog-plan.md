@@ -10,7 +10,13 @@ concreto por arquivo, depois riscos conhecidos.
 > de miss com o céu atenuado) e `fogEmitterScatter` no shading do reservatório ReSTIR (nada de
 > segundo shadow ray pra seleção de luz — o winner do RIS é a luz amostrada). O tiers são os da
 > nuvem (`showCelestial` = march completo + 1 shadow ray do sol com `cloudSunShadow`; bounce
-> difuso = só Beer-Lambert, sem in-scatter, pra não re-iluminar ar de caverna). `WorldPush.fogParams`
+> difuso = só Beer-Lambert, sem in-scatter, pra não re-iluminar ar de caverna). **Fix pós-playtest:**
+> esse tier barato *vazava* in-scatter (o lightTerm era computado fora do gate `highQuality`, só a
+> oclusão estava dentro — cavernas claras de dia); agora `lightTerm` só existe no tier cheio. O
+> recovery do prefixo gatia no `seg.medium` já empurrado pela interface (água/vidro entrando ficavam
+> sem fog camera→superfície); agora gatia no meio da câmera (`!cameraSubmerged()`). E o default de
+> densidade caiu 30%→10%: com sunPeak≈21 o wash forward-scatter soterrava os discos de sol/lua no
+> tonemap + auto-exposure. Flicker residual = OMM do mod (toggle próprio no menu), não do fog. `WorldPush.fogParams`
 > (4 lanes) + config `composite.fog*` (toggle, densidade, alcance, anisotropia, falloff de altura)
 > + sub-screen "Volumetric Fog" (en_us/pt_br). O ambient NÃO-ocluído ficou deliberadamente fora:
 > ele é a única parte que re-traria os leaks de caverna. M3 (tint de bioma/clima via

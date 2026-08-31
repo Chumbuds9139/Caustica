@@ -85,7 +85,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         if (prefixDist > 1.0e-4) {
             // Fog first, then cloud: ground-level fog in front of the deck dims the deck's own
             // in-scatter, the same aerial perspective the hit-branch blocks apply in the same order.
-            if (fogEnabled(worldPush) && fogAppliesHere(seg.medium)) {
+            //
+            // The medium gate is the CAMERA's own medium, not the continuation's stack: seg.medium
+            // already contains the dielectric Pass A consumed at the far end of this prefix (a water
+            // or glass entry queues its continuation with the new medium pushed), but the stretch
+            // being recovered here was travelled in the medium BEFORE that interface. Gating on the
+            // pushed stack skipped camera->surface fog for every dielectric the player looks "into"
+            // — the reported water/glass-unfogged bug. fogAppliesHere stays right where the segment
+            // really does lie inside the medium it samples: the pass-B hit/miss blocks.
+            if (fogEnabled(worldPush) && !cameraSubmerged()) {
                 FogVolume preFog = fogSegment(worldPush, worldPush.camOffset, toStart / prefixDist,
                                               prefixDist, seed, seg.showCelestial);
                 L += throughput * preFog.scatter;
