@@ -24,20 +24,6 @@ changes while the renderer is being built.
 - HDR output
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support, including toggleable subsurface scattering
-- Deep settings UI: practically every renderer feature has its own sub-screen (upscaling, frame
-  generation engine, ReSTIR anti-flicker tuning, water waves, POM depth/quality, clouds, exposure,
-  terrain streaming...), and every sub-screen starts with a "Reset to Defaults" button — plus a
-  global one on the hub — so experimentation can never strand you on a botched configuration
-- Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
-- Volumetric 3D clouds in classic (vanilla-style boxes) or photoreal cumulus form,
-  with adjustable thickness, opacity and cloud shadows, visible in reflections
-- Dedicated Nether and End skyboxes
-- OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
-- Experimental NVIDIA SHaRC-style world-space radiance cache (Spatially Hashed Radiance Cache) to
-  shorten noisy multi-bounce path tails — every shaded vertex warms the cache and back-propagates its
-  light to earlier bounces, while diffuse vertices past the start bounce reuse the cached outgoing
-  radiance instead of tracing on; toggleable with tuning options from the RT settings sub-menu and
-  inspectable via debug view 13
 
 ## Requirements
 
@@ -93,7 +79,7 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [ ] Multi-layer / cirrus clouds and cloud-shadow softening
-- [x] XeSS + FSR upscaling for non-NVIDIA GPUs
-- [ ] LOD
-- [ ] ReSTIR
+- [X] Nether/End sky, weather, volumetric fog/clouds
+- [x] NRD + FSR for non-NVIDIA GPUs
+- [X] LOD
+- [X] ReSTIR
