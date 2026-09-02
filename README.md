@@ -86,3 +86,5 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - [X] NRD + FSR for non-NVIDIA GPUs(Windows only for now)
 - [X] LOD
 - [x] ReSTIR
+
+# If you want to get something from the code, please go to this repository https://github.com/xysgottaken2/testingcasutica since its here where i do the updates
