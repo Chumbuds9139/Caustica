@@ -34,8 +34,8 @@ public struct SpecSurface {
 };
 public static SpecSurface gv_spec = {};
 
-// Static surfaces reuse one normal for all three roles. Water overrides them (wave-displaced shading
-// normal now and last frame, flat geometric normal for the bias) via the six-argument form.
+// Static surfaces reuse one normal for all three roles. Water overrides them (height-field shading
+// point, waved normal now and last frame, flat geometric normal for the bias) via the six-argument form.
 public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previousNormal,
                             float3 biasNormal, float3 motionPrev, float roughness, float3 albedo) {
     SpecSurface s;
@@ -149,15 +149,41 @@ public void setTransmissionGuide(float3 hitCamRel, float3 motionPrev, float3 nor
     gv_albedo = diffuseAlbedo;
 }
 
+// Per-channel floor for the transmittance folded into the transmitted diffuse-albedo guide. FP16
+// guide textures flush anything below ~6e-8 to zero, and a zero albedo makes every demodulating
+// consumer (DLSS-RR internally, NRD/SVGF after their own floors) divide by ~0. 1e-3 clears both
+// hazards while staying invisible: below it the transmitted lobe carries under 0.1% of the floor's
+// diffuse, so the pixel is effectively the foreground Fresnel reflection and the guide is moot.
+public static const float GUIDE_TRANSMITTANCE_MIN = 1.0e-3;
+
 // Deterministic ordinary guide behind the first transmitted interface. This is guide-only work:
 // radiance reflection/transmission continuations are queued at the first split and traced by Pass B.
-public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
-                              float3 surfaceBiasNormal, MediumStack medium, float rayBias,
+//
+// `guideFilter` arrives as the transmittance of the camera prefix (Pass A applied the same factor to
+// the split throughputs) and leaves as the transmittance of the ENTIRE refracted walk: every segment
+// multiplies in the Beer–Lambert attenuation of the medium it travelled through, exactly the factor
+// Pass B applies to the real transmitted branch over the same deterministic hops. Folding it into the
+// endpoint albedo is what keeps the denoiser's contract honest for translucent pixels:
+//
+//     colour_diffuse ≈ gAlbedo · destinationIrradiance
+//
+// The destination's irradiance is CONTINUOUS with the dry land beside the water — the absorption that
+// makes the pixel darker lives in the colour, so it must live in the albedo too, or the demodulated
+// signal the denoiser filters carries a fake luminance cliff at the waterline. DLSS-RR rebuilds that
+// cliff as a bright ring around the body of water (most visible in caves, where the transmitted floor
+// is the dominant lobe and RR's auto-exposure amplifies the dark frame), which is why the old guide —
+// the destination albedo with NO water attenuation — read as a halo around water. NRD and SVGF
+// demodulate by the same texture (and re-modulate by it downstream), so their round trip stays exact;
+// only the domain they filter in improves.
+public void resolveTransmissionGuide(float3 origin, float3 transmittedDir,
+                              MediumStack medium,
                               float rayConeWidth, float rayConeSpread, float3 guideFilter) {
     if (dot(transmittedDir, transmittedDir) <= 0.0) return;
 
     float3 direction = normalize(transmittedDir);
-    float3 ro = offsetSurfaceOrigin(surfacePos, surfaceBiasNormal, direction, rayBias);
+    // `origin` arrives already offset off the foreground interface (Pass A uses
+    // waterWaveContinueOrigin so a crest/trough cannot immediately re-hit the rest-plane mesh).
+    float3 ro = origin;
 
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
@@ -173,12 +199,23 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
         uint material = payloadMaterial();
         float3 interfacePos = ro + direction * payload.hitT;
+        // Transmittance of the segment just traced: Beer–Lambert over the medium it travelled in
+        // (water extinction for water, one-block-reference volume extinction for glass), bounded
+        // so a long segment cannot denormalize exp().
+        // This replaces the old one-shot `guideFilter *= payload.albedo` per glass entry: the medium
+        // the stack pushed already encodes that tint as extinction, so applying the physical factor
+        // over the real segment length matches Pass B exactly instead of over-darkening thin panes.
+        guideFilter = max(guideFilter * exp(-min(medium.current.extinction * payload.hitT,
+                float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
+
         if (material == MATERIAL_OPAQUE || material == MATERIAL_PARTICLE) {
+            float endpointMetalness = material == MATERIAL_PARTICLE
+                    ? 0.0 : clamp(payloadMetalness(), 0.0, 1.0);
             float endpointRoughness = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
+                    ? 1.0 : metallicShininessRoughness(clamp(payloadRoughness(), 0.0, 1.0), endpointMetalness);
             float3 endpointAlbedo = material == MATERIAL_PARTICLE
                     ? payload.albedo
-                    : payload.albedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+                    : payload.albedo * (1.0 - endpointMetalness);
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
                     payload.normal, endpointRoughness, guideFilter * endpointAlbedo);
             return;
@@ -189,12 +226,14 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = normalize(payload.normal);
         float3 interfaceNormal = geometricNormal;
-        if (isWater && (worldPush.flags & 16u) != 0u) {
+        WaterWaves waterSurf = flatWaterWaves(interfacePos, payload.hitT, geometricNormal);
+        if (isWater && waterWavesEnabled()) {
             float waterFootprint = rayConeWidth
                     / max(abs(dot(-direction, geometricNormal)), 0.2);
-            interfaceNormal = applyWaterWaves(geometricNormal,
-                    interfacePos.xz + worldPush.waterAnchor.xy,
-                    worldPush.waterParams.w, waterFootprint);
+            waterSurf = evaluateWaterWaves(ro, direction, payload.hitT, geometricNormal,
+                    worldPush.waterParams.w, worldPush.waterParams.w, waterFootprint);
+            interfaceNormal = waterSurf.normal;
+            interfacePos = waterSurf.position;
         }
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
@@ -209,17 +248,19 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                     interfaceNormal, 0.0, float3(0.0, 0.0, 0.0));
             return;
         }
-        if (!isWater && entering) {
-            guideFilter *= payload.albedo;
-        }
+        // (No per-interface tint multiply for glass here: the medium push/pop below plus the
+        // per-segment factor above applies the tint's extinction over the true segment length.)
         if (entering) {
             mediumPush(medium, entered);
         } else {
             mediumPop(medium);
         }
         direction = normalize(nextDirection);
-        ro = offsetSurfaceOrigin(interfacePos, geometricNormal, direction,
-                isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
+        ro = isWater && waterWavesEnabled()
+                ? waterWaveContinueOrigin(waterSurf, direction,
+                        isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS)
+                : offsetSurfaceOrigin(interfacePos, geometricNormal, direction,
+                        isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
     }
 }
 
@@ -237,6 +278,25 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     // Clear transmission uses destination depth so the entire ordinary tuple describes one layer.
     float4 curClip = mul(worldPush.curViewProj, float4(gv_hitCamRel, 1.0));
     float depth = curClip.w > 0.0 ? curClip.z / curClip.w : 0.0;
+
+    // NRD IN_VIEWZ / SVGF reprojection guide: linear view depth of the primary hit (positive, grows forward;
+    // the perspective divide's w is exactly that distance). Sky/miss pixels place gv_hitCamRel at
+    // 1e6 blocks, so their viewZ lands above CommonSettings::denoisingRange — how REBLUR recognizes
+    // INF pixels and how SVGF recognizes sky. Written here (Pass A) because the
+    // primary hit is owned here; Pass B only reads it for hit-distance normalization.
+    if (nrdEnabled() || viewZEnabled()) {
+        // BUGFIX: for sky, curClip.w works out to ~1e6 * |rd.z_view|, which is DIRECTION-dependent:
+        // sky rays near the view axis exceed denoisingRange (correctly INF) but sky rays far from the
+        // axis fall BELOW it, so the NRD mistakes edge-of-screen sky for geometry and tries to denoise
+        // it — a visible circular boundary between "sky treated as sky" and "sky treated as geometry".
+        // Detect sky robustly by hit distance instead: sky sits at |gv_hitCamRel| = 1e6 exactly (the
+        // miss path writes rd*1e6, sq = 1e12), while real geometry never approaches that — even far LOD
+        // terrain stays well under 1e5 blocks (sq < 1e10). A 1e11 threshold separates the two with wide
+        // margins on both sides. Force sky viewZ to a guaranteed-INF value regardless of ray direction.
+        float hitDistSq = dot(gv_hitCamRel, gv_hitCamRel);
+        bool isSky = hitDistSq > 1.0e11;
+        gViewZ[pix] = isSky ? 1.0e6 : (curClip.w > 0.0 ? min(curClip.w, 1.0e6) : 1.0e6);
+    }
 
     // Motion vector: reproject this guide point through the previous frame's view-projection.
     // The primary ray was cast through the JITTERED ndc (jndc), so this hit's current screen position is

@@ -4,8 +4,10 @@ import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.client.RtUpscalerSupport;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFsrFrameGen;
 
 import it.unimi.dsi.fastutil.longs.LongList;
 
@@ -51,8 +53,6 @@ import java.nio.LongBuffer;
 public final class RtFramePresenter {
     public static final RtFramePresenter INSTANCE = new RtFramePresenter();
 
-    private static final long ACQUIRE_TIMEOUT_NS = 5_000_000_000L;
-
     private static final long LOG_INTERVAL_NS = 1_000_000_000L;
 
     private long[] acquireSemaphores = new long[0];
@@ -71,14 +71,31 @@ public final class RtFramePresenter {
     private int generatedFramesInWindow;
     private int interpOkInWindow;
     private int interpFallbackInWindow;
+    private int acquireSkippedInWindow;
+    private int loggedImageCount = -1;
 
     private RtFramePresenter() {
     }
 
-    /** Whether FG extra-present should run this frame (enabled, available, in a world). */
+    /**
+     * Whether FG extra-present should run this frame (enabled, available, in a world). Backend
+     * selection mirrors {@code RtComposite.fgInterpolate}: the Caustica native engine first (FSR 3
+     * / XeSS default, and the DLSS-path fallback on GPUs without DLSS-G); then the FSR 3.1 runtime
+     * fallback (needs the bundled runtime); then DLSS-G on capable hardware.
+     */
     public boolean isActive() {
-        return !failed && RtDlssFg.enabled() && RtDlssFg.INSTANCE.isAvailable()
-                && Minecraft.getInstance().level != null;
+        if (failed || Minecraft.getInstance().level == null) {
+            return false;
+        }
+        if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
+            return true; // no external runtime, no hardware gate
+        }
+        String mode = RtUpscalerSupport.currentUpscalerMode();
+        if (RtUpscalerSupport.MODE_FSR3.equals(mode) || RtUpscalerSupport.MODE_XESS.equals(mode)) {
+            return RtFsrFrameGen.enabled()
+                    && dev.comfyfluffy.caustica.fsr.FsrRuntime.platformSupported();
+        }
+        return RtDlssFg.enabled() && RtDlssFg.INSTANCE.isAvailable();
     }
 
     /**
@@ -100,9 +117,19 @@ public final class RtFramePresenter {
         if (failed || swapchain == 0L || srcImage == 0L || generatedCount <= 0) {
             return;
         }
+        if (swapchainImages.size() != loggedImageCount) {
+            loggedImageCount = swapchainImages.size();
+            CausticaMod.LOGGER.info("FG: swapchain has {} images (each generated frame needs one per "
+                    + "real frame on top of the real one)", loggedImageCount);
+        }
         try {
-            ensureCapacity(device, swapchainImages.size() + 1, generatedCount);
-            for (int i = 0; i < generatedCount; i++) {
+            // Never ask for more extra images than the swapchain can lend: Minecraft needs one image
+            // for the real frame itself, so the pool caps the generated count. Requesting beyond it
+            // made vkAcquireNextImageKHR sit until timeout and froze the frame loop (the 0.2 FPS
+            // slideshow at high multipliers).
+            int want = Math.min(generatedCount, Math.max(0, swapchainImages.size() - 1));
+            ensureCapacity(device, swapchainImages.size() + 1, want);
+            for (int i = 0; i < want; i++) {
                 // null = no captured RT frame this tick (menu/loading/transition — routine, not a bug): fall
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
@@ -123,9 +150,16 @@ public final class RtFramePresenter {
                 int imageIndex;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     IntBuffer pIndex = stack.callocInt(1);
-                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, ACQUIRE_TIMEOUT_NS, acquireSem, 0L, pIndex);
+                    // BOUNDED 1ms acquire: images released by the presentation engine can lag a
+                    // hair behind the frame tail, and a timeout-0 acquire missed them systemically
+                    // (the 2x ceiling — acquireSkipped == real in the present-rate log). 1ms per
+                    // acquire keeps the worst-case stall at ~4ms, nowhere near the frame budget;
+                    // the old unbounded wait (pre-diagnostic) is what froze the loop, not a short
+                    // bounded one. Still non-fatal: on miss, present what we already recorded.
+                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, 1_000_000L, acquireSem, 0L, pIndex);
                     if (r != VK10.VK_SUCCESS && r != 1000001003 /* SUBOPTIMAL */) {
-                        return; // out-of-date/timeout: present what we have, let MC recover
+                        acquireSkippedInWindow++;
+                        break; // present what we already recorded this frame
                     }
                     imageIndex = pIndex.get(0);
                 }
@@ -169,7 +203,10 @@ public final class RtFramePresenter {
                 pendingCount = 0;
             }
         }
-        if (RtDlssFg.enabled()) {
+        // Diagnostic only fires while FG is ACTUALLY presenting this session: with the FG toggle
+        // on but the active backend unavailable (e.g. DLSS-G on a non-40/50 card), the old gate
+        // (config toggle) kept logging "gen=0" lines that looked like a stuck engine.
+        if (isActive()) {
             logPresentRate(presentedThisFrame);
         }
     }
@@ -197,15 +234,17 @@ public final class RtFramePresenter {
         double totalFps = (realFramesInWindow + generatedFramesInWindow) / seconds;
         CausticaMod.LOGGER.info(
                 "[FG present-rate] real={} gen={} realFps={} totalPresentFps={} configuredMultiFrameCount={} "
-                        + "interpOk={} interpFallbackDuplicate={}",
+                        + "interpOk={} interpFallbackDuplicate={} acquireSkipped={}",
                 realFramesInWindow, generatedFramesInWindow,
                 String.format("%.1f", realFps), String.format("%.1f", totalFps),
-                RtDlssFg.INSTANCE.effectiveMultiFrameCount(), interpOkInWindow, interpFallbackInWindow);
+                RtComposite.fgGeneratedCount(), interpOkInWindow, interpFallbackInWindow,
+                acquireSkippedInWindow);
         logWindowStartNs = now;
         realFramesInWindow = 0;
         generatedFramesInWindow = 0;
         interpOkInWindow = 0;
         interpFallbackInWindow = 0;
+        acquireSkippedInWindow = 0;
     }
 
     private void recordBlit(VulkanCommandEncoder enc, long srcImage, long dstImage, int copyW, int copyH,

@@ -70,6 +70,7 @@ dependencies {
 
 processResources {
 	inputs.property "version", project.version
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
 	filesMatching("fabric.mod.json") {
 		expand "version": inputs.properties.version
@@ -173,6 +174,18 @@ abstract class CompileShaders extends DefaultTask {
 				}
 			} else {
 				compileOne(src, spv, [])
+				if (base == "fg_sky_mask.comp") {
+					// The FG outputs are rgba8 (SDR) or rgba16f (HDR); compile the format variant
+					// of the sky-mask shader from the same source (ifdef switch on the layouts).
+					compileOne(src, new File(scratchDir, "fg_sky_mask_rgba8.comp.spv"),
+							["-DCAUSTICA_FG_MASK_RGBA8"])
+				}
+				if (base == "native_fg_interp.comp") {
+					// Same format split for the native frame-generation interpolator (SDR frames
+					// are rgba8, HDR frames rgba16f).
+					compileOne(src, new File(scratchDir, "native_fg_interp_rgba8.comp.spv"),
+							["-DCAUSTICA_NFG_RGBA8"])
+				}
 			}
 		}
 		outDirFile.mkdirs()
@@ -363,6 +376,140 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 
 sourceSets.main.resources.srcDir(files(ngxNativeGenRoot).builtBy(bundleNgxNatives))
 
+// ===== AMD FSR natives (optional) =====
+// FSR 3 rides the AMD FidelityFX runtime: native/fsr_shim builds fsrshim.dll against the SDK's
+// signed prebuilt amd_fidelityfx_vk.dll and copies the runtime next to it. Bundling is OPT-IN —
+// a checkout without the built shim (every non-Windows host today) still builds the mod, with the
+// upscaler selector simply not offering FSR 3.
+def fsrNativeGenRoot = layout.buildDirectory.dir("generated/fsr-natives")
+def fsrShimOutDir = new File(layout.buildDirectory.dir("native/fsr_shim").get().asFile, "release")
+
+def bundleFsrNatives = tasks.register("bundleFsrNatives") {
+	group = "build"
+	description = "Bundles the FSR shim and AMD FidelityFX runtime into the mod resources (when built)."
+
+	inputs.files(fileTree(fsrShimOutDir) {
+		include "fsrshim.dll"
+		include "amd_fidelityfx_vk.dll"
+	}).withPropertyName("fsrNatives.windows-x64")
+	outputs.dir(fsrNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(fsrNativeGenRoot)
+		def shimFiles = fileTree(fsrShimOutDir) {
+			include "fsrshim.dll", "amd_fidelityfx_vk.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("FSR natives not found in ${fsrShimOutDir}; bundling without FSR support.")
+			return
+		}
+		def missing = ["fsrshim.dll", "amd_fidelityfx_vk.dll"].findAll { name ->
+			shimFiles.every { it.name != name }
+		}
+		if (!missing.empty) {
+			logger.warn("Incomplete FSR natives in ${fsrShimOutDir} (missing ${missing.join(', ')}); " +
+					"bundling without FSR support.")
+			return
+		}
+		copy {
+			from(fsrShimOutDir) {
+				include "fsrshim.dll", "amd_fidelityfx_vk.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into fsrNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(fsrNativeGenRoot).builtBy(bundleFsrNatives))
+
+// ===== NRD natives (optional) =====
+// Same opt-in pattern: CI builds native/nrd_shim (NRD + NRI statically linked, SPIR-V embedded) and
+// drops nrdshim.dll into build/native/nrd_shim/release; local checkouts without it still build, and
+// the NRD toggle simply stays hidden (NrdRuntime.platformSupported probes the bundled resource).
+def nrdNativeGenRoot = layout.buildDirectory.dir("generated/nrd-natives")
+def nrdShimOutDir = new File(layout.buildDirectory.dir("native/nrd_shim").get().asFile, "release")
+
+def bundleNrdNatives = tasks.register("bundleNrdNatives") {
+	group = "build"
+	description = "Bundles the NRD shim into the mod resources (when built)."
+
+	inputs.files(fileTree(nrdShimOutDir) {
+		include "nrdshim.dll"
+	}).withPropertyName("nrdNatives.windows-x64")
+	outputs.dir(nrdNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(nrdNativeGenRoot)
+		def shimFiles = fileTree(nrdShimOutDir) {
+			include "nrdshim.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("NRD natives not found in ${nrdShimOutDir}; bundling without NRD support.")
+			return
+		}
+		copy {
+			from(nrdShimOutDir) {
+				include "nrdshim.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into nrdNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(nrdNativeGenRoot).builtBy(bundleNrdNatives))
+
+// ===== XeSS natives (optional) =====
+// Same opt-in pattern: CI builds native/xess_shim (loads Intel's prebuilt libxess.dll at run time)
+// and drops xessshim.dll + libxess.dll into build/native/xess_shim/release; local checkouts without
+// them still build, and the XeSS upscaler option simply stays hidden (XessRuntime.platformSupported
+// probes the bundled resource).
+def xessNativeGenRoot = layout.buildDirectory.dir("generated/xess-natives")
+def xessShimOutDir = new File(layout.buildDirectory.dir("native/xess_shim").get().asFile, "release")
+
+def bundleXessNatives = tasks.register("bundleXessNatives") {
+	group = "build"
+	description = "Bundles the XeSS shim and Intel XeSS runtime into the mod resources (when built)."
+
+	inputs.files(fileTree(xessShimOutDir) {
+		include "xessshim.dll"
+		include "libxess.dll"
+	}).withPropertyName("xessNatives.windows-x64")
+	outputs.dir(xessNativeGenRoot)
+	outputs.upToDateWhen { false }
+
+	doLast {
+		delete(xessNativeGenRoot)
+		def shimFiles = fileTree(xessShimOutDir) {
+			include "xessshim.dll", "libxess.dll"
+		}.files
+		if (shimFiles.empty) {
+			logger.lifecycle("XeSS natives not found in ${xessShimOutDir}; bundling without XeSS support.")
+			return
+		}
+		def missing = ["xessshim.dll", "libxess.dll"].findAll { name ->
+			shimFiles.every { it.name != name }
+		}
+		if (!missing.empty) {
+			logger.warn("Incomplete XeSS natives in ${xessShimOutDir} (missing ${missing.join(', ')}); " +
+					"bundling without XeSS support.")
+			return
+		}
+		copy {
+			from(xessShimOutDir) {
+				include "xessshim.dll", "libxess.dll"
+				into "caustica/natives/windows-x64"
+			}
+			into xessNativeGenRoot
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(xessNativeGenRoot).builtBy(bundleXessNatives))
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
@@ -371,6 +518,14 @@ java {
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
 	withSourcesJar()
+}
+
+tasks.withType(ProcessResources).configureEach {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 tasks.named("jar", Jar).configure {

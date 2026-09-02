@@ -1,3 +1,5 @@
+## THIS IS A TESTING REPOSITORY, MOST JARS IS GLITCHY
+
 # Caustica
 
 Caustica is an experimental ray-traced renderer for Minecraft 26.2's Vulkan backend.
@@ -7,7 +9,7 @@ features while keeping Minecraft's familiar UI and gameplay intact.
 Caustica is early software. Expect bugs, missing visual cases, and frequent
 changes while the renderer is being built.
 
-![Caustica ray-traced Minecraft scene](docs/gallery/causticafork.png)
+![Caustica ray-traced Minecraft scene](docs/gallery/2026-07-09_21.25.14.jpg)
 
 ## Links
 
@@ -23,10 +25,21 @@ changes while the renderer is being built.
 - DLSS Frame Generation support (experimental)
 - HDR output
 - Dynamic entity rendering in the ray-traced scene
-- LabPBR-style material support
+- LabPBR-style material support, including toggleable subsurface scattering
+- Deep settings UI: practically every renderer feature has its own sub-screen (upscaling, frame
+  generation engine, ReSTIR anti-flicker tuning, water waves, POM depth/quality, clouds, exposure,
+  terrain streaming...), and every sub-screen starts with a "Reset to Defaults" button — plus a
+  global one on the hub — so experimentation can never strand you on a botched configuration
+- Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
+- Volumetric 3D clouds in classic (vanilla-style boxes) or photoreal cumulus form,
+  with adjustable thickness, opacity and cloud shadows, visible in reflections
+- Dedicated Nether and End skyboxes
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
-- ReSTIR
-- NVIDIA SHaRC
+- Experimental NVIDIA SHaRC-style world-space radiance cache (Spatially Hashed Radiance Cache) to
+  shorten noisy multi-bounce path tails — every shaded vertex warms the cache and back-propagates its
+  light to earlier bounces, while diffuse vertices past the start bounce reuse the cached outgoing
+  radiance instead of tracing on; toggleable with tuning options from the RT settings sub-menu and
+  inspectable via debug view 13
 
 ## Requirements
 
@@ -53,7 +66,7 @@ changes while the renderer is being built.
 - On Linux if Minecraft crashes on startup with stack overflow errors, try adding `-Xss2M` to the Java args to increase the stack size.
 - Use Java args to improve performance. Minecraft Launcher default:
   `-XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -XX:+UseZGC`
-- Frame Generation is experimental.
+- Frame Generation is experimental and needs to be enabled by modifying the configuration file.
 - HDR output requires an HDR swapchain and a correctly configured HDR display.
 - When HDR is enabled on Linux, Caustica selects GLFW's native Wayland backend automatically. X11/XWayland surfaces generally do not expose the required HDR10/PQ format.
 - If Minecraft falls back to OpenGL after a crash, re-enable the Vulkan backend
@@ -82,9 +95,7 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [X] Nether/End sky, weather, volumetric fog/clouds
-- [X] NRD + FSR for non-NVIDIA GPUs(Windows only for now)
-- [X] LOD
-- [x] ReSTIR
-
-# If you want to get something from the code, please go to this repository https://github.com/xysgottaken2/testingcasutica since its here where i do the updates
+- [ ] Multi-layer / cirrus clouds and cloud-shadow softening
+- [x] XeSS + FSR upscaling for non-NVIDIA GPUs
+- [ ] LOD
+- [ ] ReSTIR

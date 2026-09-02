@@ -20,7 +20,10 @@ import math;
 [[vk::binding(0, 1)]] Sampler2D entityAlbedoTex[];
 
 static const float ALPHA_CUTOFF = 0.5;        // terrain (matches the cutout block models)
-static const float ENTITY_ALPHA_CUTOFF = 0.1; // entities: only discard near-fully-transparent texels
+// Entities: only discard near-fully-transparent texels. For enchantment glint this is exactly
+// vanilla's own discard (rendertype glint shaders drop texels below 0.1) — glint texels above it are
+// real, self-lit streak surfaces shaded by world.rchit's PRIM_GLINT branch.
+static const float ENTITY_ALPHA_CUTOFF = 0.1;
 // Faint baseline extinction added to every translucent hit regardless of its color, so perfectly clear
 // glass/ice still dims a shadow ray a little instead of being fully invisible to it (real glass isn't a
 // perfect transmitter either). Additive with the color-derived extinction below, not a floor/clamp — a
@@ -48,6 +51,31 @@ float alphaDitherThreshold(uint salt) {
     return frac(base + float((pc.frameIndex + salt) & 255u) * 0.61803398875);
 }
 
+// Exact per-section vanilla-terrain readiness test for the DH/Voxy hand-off. The mask is serialized
+// per frame by RtTerrain.writeDistantReadyMask into the WorldPush BDA ring; a zero address (or a
+// stale magic) suppresses nothing, so the LOD proxy stays visible until real terrain is published.
+bool vanillaRtSectionReady(float3 hitPos) {
+    uint64_t maskAddr = pc.dhReadyMaskAddr;
+    if (maskAddr == 0) {
+        return false;
+    }
+    ConstPtr<uint> mask = ConstPtr<uint>(maskAddr);
+    if (mask[7] != 0x43535452u) { // "CSTR"
+        return false;
+    }
+    int3 minBlock = int3(asint(mask[0]), asint(mask[1]), asint(mask[2]));
+    uint3 size = uint3(mask[3], mask[4], mask[5]);
+    // Probe just inside the surface along the ray. At a section boundary this selects the section
+    // containing the solid represented by the LOD face rather than the empty section in front of it.
+    int3 cell = int3(floor((hitPos + WorldRayDirection() * 0.01 - float3(minBlock)) / 16.0));
+    if (any(cell < int3(0, 0, 0)) || any(cell >= int3(size))) {
+        return false;
+    }
+    uint bit = (uint(cell.y) * size.z + uint(cell.z)) * size.x + uint(cell.x);
+    uint word = bit >> 5;
+    return word < mask[6] && (mask[8 + word] & (1u << (bit & 31u))) != 0u;
+}
+
 [shader("anyhit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     uint pid = PrimitiveIndex();
@@ -55,6 +83,35 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
 
     uint instanceKind = InstanceID() & (ENTITY_BIT | PARTICLE_BIT);
+    if (instanceKind == DH_INSTANCE_KIND) {
+        float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+        if (vanillaRtSectionReady(hitPos)) {
+            // Suppress this exact LOD section only after its real RT replacement is published, so the
+            // transition ring never shows a hole or double geometry.
+            IgnoreHit();
+            return;
+        }
+
+        Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
+        uint tri = pid + sec.triBase[GeometryIndex()];
+        TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
+        bool shadowRay = (RayFlags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) != 0u;
+        uint dhSurface = uint(pr.tint.w + 0.5);
+        if (dhSurface == DH_SURFACE_WATER && shadowRay) {
+            payload.albedo *= half3(lerp(float3(1.0, 1.0, 1.0), pr.tint.rgb, WATER_SHADOW_TINT));
+            payload.hitT = payload.hitT < 0.0 ? RayTCurrent() : min(payload.hitT, RayTCurrent());
+            IgnoreHit();
+            return;
+        }
+        if ((dhSurface == DH_SURFACE_GLASS || dhSurface == DH_SURFACE_EMISSIVE_GLASS) && shadowRay) {
+            float opticalAlpha = clamp(asfloat(dhSurface == DH_SURFACE_EMISSIVE_GLASS
+                    ? pr.aux1 : pr.aux0), 0.04, 0.80);
+            payload.albedo *= half3(glassTransmissionFilter(pr.tint.rgb, opticalAlpha) * 0.94);
+            IgnoreHit();
+            return;
+        }
+        return;
+    }
     if (instanceKind != 0u) {
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
         pid += g.triBase[GeometryIndex()];
@@ -66,22 +123,95 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float2 uv = bary.x * uvs[i0] + bary.y * uvs[i1] + bary.z * uvs[i2];
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
-        float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(uv, 0.0);
-        // aux0 stores a float coverage multiplier written by RtEntityCapture. Older/default records have
-        // zero in this lane, so treat 0 as opaque coverage for compatibility. For enchantment glint this
-        // multiplier is deliberately < 1 because vanilla's opaque purple glint texture is fixed-function
-        // blended over the armour; texture alpha alone would make it an opaque ray-traced shell.
-        float primCoverage = epr.aux0 == 0u ? 1.0 : clamp(asfloat(epr.aux0), 0.0, 1.0);
-        bool stochasticAlpha = false;
         MaterialHeader materialHeader;
+        bool stochasticAlpha = false;
         if (instanceKind == ENTITY_BIT) {
             materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
             stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
         }
-        if (stochasticAlpha) {
-            uint salt = pid * 1664525u
-                    ^ (InstanceID() & IDX_MASK) * 1013904223u
-                    ^ asuint(RayTCurrent());
+        // Enchantment glint (PRIM_GLINT): the whole streak pattern scrolls with time — vanilla's
+        // per-frame TextureMat. Sample the SAME scrolled UV world.rchit shades with (glintScrolledUv),
+        // so the coverage gate and the shading agree on the moving pattern; a static mask over a
+        // scrolling colour would freeze the streak shapes and kill the animation.
+        float2 sampleUv = uv;
+        if (instanceKind == ENTITY_BIT && (epr.flags & PRIM_GLINT) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)
+            sampleUv = glintScrolledUv(materialHeader, uv, glintTime);
+        }
+        float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(sampleUv, 0.0);
+        // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint
+        // this is 1.0 — the glint is special-captured (PRIM_GLINT) and its coverage is derived below
+        // from the texel's BRIGHTNESS (26.x glint textures have no alpha channel; see the glint branch
+        // in the gate), so the armour/body shows through where the texture is dark.
+        //
+        // How a zero in this lane is read depends on the instance kind, because the two kinds disagree
+        // about what a zero MEANS:
+        //
+        //  * Model geometry (ENTITY_BIT) inherits its alpha byte from whatever vertex colour the model
+        //    supplied, and some submit paths use 0 as a "no tint" sentinel rather than as transparency
+        //    (the FRAPI block-model path averages the quad's vertex colours through unchanged). Reading
+        //    that literally would make solid geometry — a falling block, a moving piston — vanish, so
+        //    the historical "0 means opaque" reading is kept here.
+        //
+        //  * Particles and weather sheets (PARTICLE_BIT) get their alpha from vanilla's own per-particle
+        //    /per-column blend weight, which is a real, authoritative coverage. Zero means invisible.
+        //
+        // Conflating the two is what blanked the screen when a storm began. Rain coverage is
+        // columnAlpha * visualIntensity * rainDensity, and vanilla's rain level ramps over ~5 seconds,
+        // so the product starts every storm in the range where the 8-bit alpha byte still rounds to
+        // zero. Every column in that window took the "0 means opaque" branch and drew at FULL strength:
+        // roughly the first second of the ramp was a downpour at maximum density, which then vanished
+        // into the correct light rain the moment the byte reached 1. Symmetrically, the storm ending
+        // walked back down into the same window and flashed the full sheet again before clearing.
+        //
+        // Note the flash was independent of the density option — at rainDensity 0.2 the product just
+        // takes slightly longer to leave the dead zone, so the burst lasted marginally longer while
+        // looking exactly as heavy. That is the giveaway that the option was never being ignored: the
+        // flash is this branch overriding it with 1.0, not the multiplier failing to apply.
+        bool particleKind = instanceKind == PARTICLE_BIT;
+        float primCoverage = clamp(asfloat(epr.aux0), 0.0, 1.0);
+        if (!particleKind && epr.aux0 == 0u) {
+            primCoverage = 1.0;
+        }
+        bool glint = instanceKind == ENTITY_BIT && (epr.flags & PRIM_GLINT) != 0u;
+        uint salt = pid * 1664525u
+                ^ (InstanceID() & IDX_MASK) * 1013904223u
+                ^ asuint(RayTCurrent());
+        if (glint) {
+            // 26.x glint textures carry NO alpha channel (the armour glint is a plain grayscale map,
+            // so texel.a is 1.0 everywhere and vanilla's "discard alpha < 0.1" never fires). The
+            // overlay look comes from the pipeline's additive blend (BlendFunction.GLINT = SRC_COLOR,
+            // ONE → dst + src^2): the pattern lives in the texture's BRIGHTNESS, not its alpha.
+            // Reproduce that as per-texel stochastic coverage — the texel's own brightness decides how
+            // often a ray shades the shimmer instead of falling through to the armour: dark texels
+            // stay mostly transparent, bright texels show the streak. (Packs that DO supply an alpha
+            // mask are handled too: alpha multiplies the brightness, so transparent texels stay
+            // transparent.)
+            //
+            // Vanilla additionally gates the glint to the ARMOUR SURFACE with an EQUAL depth test:
+            // the armour pass wrote depth only where the armour texture is opaque, so the glint never
+            // draws over the bare body/legs. Reproduce that here — the collector records the armour
+            // texture slot in aux1 (the armour layer's submission immediately precedes its glint):
+            // wherever that armour texture is transparent (alpha < 0.1, the same cutoff the armour
+            // cutout uses), discard the glint and let the ray fall through to the body beneath.
+            // `uv` is the unscrolled model UV, which is exactly the armour texture's UV (both passes
+            // render the same model geometry).
+            bool armourOpaque = true;
+            if (epr.aux1 != 0u) {
+                int armourSlot = asint(epr.aux1);
+                float4 armourTexel = entityAlbedoTex[NonUniformResourceIndex(armourSlot)].SampleLevel(uv, 0.0);
+                armourOpaque = armourTexel.a >= 0.1;
+            }
+            if (armourOpaque) {
+                float glintCoverage = clamp(texel.a * max(max(texel.r, texel.g), texel.b), 0.0, 1.0);
+                if (alphaDitherThreshold(salt) >= glintCoverage) {
+                    IgnoreHit();
+                }
+            } else {
+                IgnoreHit();
+            }
+        } else if (stochasticAlpha) {
             if (alphaDitherThreshold(salt) >= clamp(texel.a * primCoverage, 0.0, 1.0)) {
                 IgnoreHit();
             }
@@ -115,6 +245,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Water radiance rays use a closest-hit-only SBT record. Shadow rays run this record: tint sunlight by
     // the biome water color, then keep walking so submerged terrain is lit by colored transmission.
     if (bucket == BUCKET_WATER) {
+        // Loaded-chunk water radiance rays now reach any-hit too (the SBT enables it so the DH/Voxy
+        // branch above can run its hand-off mask); accept them unchanged for closest-hit shading.
+        if ((RayFlags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0u) {
+            return;
+        }
         TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
         payload.albedo *= half3(lerp(float3(1.0, 1.0, 1.0), pr.tint.rgb, WATER_SHADOW_TINT));
         // Record the NEAREST water crossing (any-hit order is arbitrary) in the shadow payload's hitT

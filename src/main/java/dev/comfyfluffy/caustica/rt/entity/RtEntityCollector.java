@@ -6,6 +6,7 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -32,6 +33,8 @@ import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
@@ -82,13 +85,43 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private static final float LEASH_WIDTH = 0.05f;
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
-    // Vanilla enchantment glint uses an additive/color blend over the already-rendered armour/item layer.
-    // In the RT path there is no fixed-function blend stage for entity layers, so represent that overlay as
-    // stochastic coverage: most rays pass through to the base armour, a minority shade the purple glint.
-    private static final float ENCHANTMENT_GLINT_OPACITY = 0.28f;
+    // Full-sprite UVs for the flame cube faces (remapped into the fire sprite's atlas region by the
+    // capture's uvRemap, which submitFlame sets). v=0 is the top of the texture (flame tips), so the
+    // quad's top samples v=0 and its bottom samples v=1 — the flames point up in world space.
+    private static final float[] FLAME_UV_U = {0f, 1f, 1f, 0f};
+    private static final float[] FLAME_UV_V = {1f, 1f, 0f, 0f};
+    // Vanilla renders the entity flame with LightTexture.FULL_BRIGHT; the RT equivalent is a strong
+    // per-prim self-emission (radiance = albedo * emission * the dynamic light scale).
+    private static final float FLAME_EMISSION = 1.5f;
+    // The entity fire overlay uses the block atlas's animated fire_0 sprite.
+    private static final Identifier FIRE_SPRITE = Identifier.withDefaultNamespace("block/fire_0");
+    // Portal sprites that may reach the entity path (block entities, held/displayed blocks).
+    private static final Identifier NETHER_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/nether_portal");
+    private static final Identifier END_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/end_portal");
+    // TerrainPrim.flags values (mirror world_common.slang / RtTerrainMesher).
+    private static final int TERRAIN_PRIM_PORTAL_NETHER = 2;
+    private static final int TERRAIN_PRIM_PORTAL_END = 4;
+    // Identity pose fallback for submitFlame when the caller hands over an empty PoseStack
+    // (read-only; transformPosition never mutates it).
+    private static final Matrix4f IDENTITY_POSE = new Matrix4f();
+    // Enchantment/foil glint overlays are special-captured exactly like the portal surfaces: the
+    // collector tags the submission (PRIM_FLAG_GLINT) and world.rchit shades it with a dedicated
+    // branch — an animated, self-lit shimmer — instead of a scene-lit texture. Coverage is the glint
+    // texture's own alpha (vanilla's glint shader discards texels below 0.1), so the armour/body shows
+    // through where there is no streak and the shimmer is solid where there is one. The old
+    // uniform-0.28-opacity stochastic shell is gone.
     // Push glint decals just above the armour surface so the any-hit shader sees the overlay first; when
-    // it stochastically ignores the glint, traversal continues to the base geometry behind it.
+    // its texture alpha passes the ray through, traversal continues to the base geometry behind it.
     private static final int ENCHANTMENT_GLINT_ORDER = 1;
+
+    // Bindless texture slot of the most recent non-glint model submission (the armour layer, in the
+    // vanilla armour path: EquipmentLayerRenderer submits the armour model and, when the item has
+    // foil, the SAME model with armorEntityGlint() immediately after). The glint submission copies
+    // this into capture.currentGlintArmorSlot so world.rahit can gate the shimmer to the armour
+    // surface (vanilla's EQUAL-depth semantics) instead of painting the bare body.
+    private int lastArmorTexSlot;
 
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
@@ -114,6 +147,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private final float[] meshX = new float[4], meshY = new float[4], meshZ = new float[4];
     private final float[] meshU = new float[4], meshV = new float[4];
     private final Vector3f meshPos = new Vector3f();
+    // The fire sprite for burning entities, cached per resource epoch (cleared by clearCaches).
+    private TextureAtlasSprite fireSprite;
+    private boolean loggedFlameSpriteFailure;
+    // Whether vanilla's dispatcher submitted the flame overlay for the entity currently being
+    // captured (set by submitFlame, reset per entity in begin). RtEntities uses this to emit the
+    // flame itself when the dispatcher's gate didn't fire for the RT capture.
+    private boolean flameSubmittedThisEntity;
     // Vanilla already computes the Glowing-effect outline colour (opaque team colour, or 0 when not
     // glowing) per submitModel call — see EntityRenderer.extractCommon's outlineColor. Every submitModel
     // call for one entity carries the same value, so the last non-zero one seen this entity is enough.
@@ -130,6 +170,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture != null) {
             this.outlineColor = 0;
             this.pendingOrder = 0;
+            this.flameSubmittedThisEntity = false;
+            this.lastArmorTexSlot = 0;
         }
     }
 
@@ -142,6 +184,31 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     public void clearCaches() {
         cuboidEmitter.clear();
         blockQuadEmitter = null;
+        fireSprite = null;
+        loggedFlameSpriteFailure = false;
+    }
+
+    /**
+     * The block atlas's animated fire sprite (never null once the atlas is loaded; null on failure).
+     * Uses {@link AtlasIds#BLOCKS} — the same key RtTerrain's working sprite-finder uses — because
+     * {@code getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS)} (the legacy identifier) can throw on
+     * 26.x, which silently killed the whole flame overlay: submitFlame bailed out with no geometry
+     * and the fallback saw the "already submitted" flag.
+     */
+    private TextureAtlasSprite fireSprite() {
+        if (fireSprite == null) {
+            try {
+                fireSprite = Minecraft.getInstance().getAtlasManager()
+                        .getAtlasOrThrow(AtlasIds.BLOCKS).getSprite(FIRE_SPRITE);
+            } catch (Throwable t) {
+                fireSprite = null; // atlas not ready yet — retry next submission
+                if (!loggedFlameSpriteFailure) {
+                    loggedFlameSpriteFailure = true;
+                    CausticaMod.LOGGER.warn("RT flame sprite resolution failed (fire overlay disabled)", t);
+                }
+            }
+        }
+        return fireSprite;
     }
 
     @Override
@@ -162,13 +229,27 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0)
                 + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
-        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
+        // Glint is never faked translucent: its texture alpha gates coverage (vanilla's own discard), so
+        // the prim keeps full opacity and the ray either shades the shimmer or passes to the armour.
+        capture.currentOpacity = 1.0f;
+        // Reset the per-submission tags (portal + weather/glint): they are set only by the paths that own
+        // them, so an ordinary model after a tagged layer in the same capture cannot inherit them.
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        // The armour layer's texture (submitted immediately before this) gates the glint to the armour
+        // surface — see lastArmorTexSlot. Non-glint submissions carry no armour context.
+        capture.currentGlintArmorSlot = glint ? lastArmorTexSlot : 0;
         if (profileDynamicEntity) {
             RtFrameStats.FRAME.count("entityModelSubmissions", 1);
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
-        boolean stochasticAlpha = glint || isTranslucent(renderType);
+        boolean stochasticAlpha = !glint && isTranslucent(renderType);
         capture.currentAlphaBucket = glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType);
+        // End-portal block entities draw their night-sky quad through this path; tag it so
+        // world.rchit shades it procedurally instead of sampling the flat end_portal texture.
+        if (isEndPortal(renderType)) {
+            tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
+        }
         // Resolve this submission's texture to a bindless slot; the capture stamps it on every prim.
         // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
         // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
@@ -199,6 +280,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
         }
+        // Remember this submission's texture for the next glint submission (the armour layer is always
+        // followed by its glint in vanilla's EquipmentLayerRenderer). Glint submissions themselves are
+        // skipped so lastArmorTexSlot keeps pointing at the armour texture beneath them.
+        if (!glint) {
+            lastArmorTexSlot = capture.currentTexSlot;
+        }
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
         // PoseStack to every vertex/normal, so the capture receives world-/camera-relative geometry.
@@ -221,7 +308,36 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         int idxStart = capture.idx.size();
         int uvStart = capture.uvList.size();
         int primStart = capture.prim.size();
+
+        // Water mask detection: boat's water cutout (water_patch) uses RenderType waterMask - skip it entirely
+        // to avoid black rectangle covering the real wood floor (depth/stencil mask for vanilla).
+        if (isWaterMask(renderType)) {
+            return;
+        }
+
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
+        // Boat fix: boat models (BoatModel, ChestBoatModel, RaftModel) have interior faces that the cuboid
+        // emitter does not capture with correct UVs / normals (interior bottom becomes black). Force fallback
+        // path (renderToBuffer) which uses the actual ModelPart vertex data with proper UVs and normals.
+        // Also hide water_patch sub-mesh that is the water mask cutout (black rectangle).
+        String modelName = model.getClass().getName().toLowerCase();
+        boolean isBoatModel = modelName.contains("boat") || modelName.contains("raft");
+        java.util.ArrayList<ModelPart> hiddenWaterParts = null;
+        java.util.ArrayList<Boolean> hiddenWaterPrevSkip = null;
+        if (isBoatModel) {
+            directTemplate = null;
+            // Collect water_patch parts (name contains "water") and hide them for this capture
+            java.util.ArrayList<ModelPart> waterParts = new java.util.ArrayList<>();
+            collectWaterPatchParts(model.root(), waterParts);
+            if (!waterParts.isEmpty()) {
+                hiddenWaterParts = waterParts;
+                hiddenWaterPrevSkip = new java.util.ArrayList<>(waterParts.size());
+                for (ModelPart wp : waterParts) {
+                    hiddenWaterPrevSkip.add(wp.skipDraw);
+                    wp.skipDraw = true;
+                }
+            }
+        }
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         try {
@@ -235,6 +351,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                     ? "entity.capture.submit.modelDraw.direct"
                     : "entity.capture.submit.modelDraw.fallback", drawStart);
             RtFrameStats.FRAME.endStage("entity.capture.submit.modelDraw", drawStart);
+            // Restore water mask parts that were hidden to avoid black rectangle
+            if (hiddenWaterParts != null) {
+                for (int i = 0; i < hiddenWaterParts.size(); i++) {
+                    hiddenWaterParts.get(i).skipDraw = hiddenWaterPrevSkip.get(i);
+                }
+            }
         }
         int addedVertices = (capture.verts.size() - vertStart) / 3;
         int addedQuads = (capture.idx.size() - idxStart) / 6;
@@ -328,6 +450,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 transmissive, false, emission > 0.0f);
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        capture.currentPrimFlags = 0; // glint never arrives through baked quads — drop any stale tag
+        capture.currentGlintArmorSlot = 0; // no armour context on baked-quad paths
+        // Held/displayed portal blocks (endermen, block displays in 26.1+) render as baked quads with
+        // the portal sprite; tag them for the procedural portal branches.
+        tagPortalSubmission(capture, portalFlagsForSprite(sprite));
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers), emission);
     }
 
@@ -427,6 +555,81 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return location.contains("glint");
     }
 
+    /**
+     * Vanilla's end-portal render type (EndPortalRenderer, and the portal quad of the end gateway)
+     * draws the starfield with a special shader over the flat purple end_portal texture. In the RT
+     * path that quad is plain captured geometry, so it must be tagged for world.rchit's procedural
+     * night-sky branch instead. Detected by pipeline location, mirroring {@link #isGlint}.
+     */
+    private static boolean isEndPortal(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        try {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            return pipeline.getLocation().toString().contains("end_portal");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Portal flags for an atlas sprite (held/displayed portal blocks), or 0 for ordinary sprites. */
+    private static int portalFlagsForSprite(TextureAtlasSprite sprite) {
+        if (sprite == null) {
+            return 0;
+        }
+        Identifier name = sprite.contents().name();
+        if (NETHER_PORTAL_SPRITE.equals(name)) {
+            return TERRAIN_PRIM_PORTAL_NETHER;
+        }
+        if (END_PORTAL_SPRITE.equals(name)) {
+            return TERRAIN_PRIM_PORTAL_END;
+        }
+        return 0;
+    }
+
+    /** Tag a portal submission (render-type or sprite detected) for world.rchit's portal branches. */
+    private static void tagPortalSubmission(RtEntityCapture capture, int portalFlags) {
+        if (portalFlags == 0) {
+            return;
+        }
+        capture.currentPortalFlags = portalFlags;
+        // Portal surfaces are opaque self-lit shader surfaces; never alpha-test or glass them.
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentOpacity = 1.0f;
+    }
+
+    private static boolean isWaterMask(RenderType renderType) {
+        if (renderType == null) {
+            return false;
+        }
+        try {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            String loc = pipeline.getLocation().toString().toLowerCase();
+            return loc.contains("water_mask") || loc.contains("watermask") || loc.contains("watermask") || loc.contains("boat_water") || RenderTypes.waterMask().equals(renderType);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static void collectWaterPatchParts(ModelPart root, List<ModelPart> out) {
+        if (root == null) return;
+        ModelPartAccessor access = (ModelPartAccessor) (Object) root;
+        var children = access.caustica$children();
+        if (children == null) return;
+        for (var entry : children.entrySet()) {
+            String name = entry.getKey().toLowerCase();
+            ModelPart child = entry.getValue();
+            if (name.contains("water") || name.contains("mask") || name.contains("patch")) {
+                out.add(child);
+            }
+            // Recurse
+            collectWaterPatchParts(child, out);
+        }
+    }
+
     /** Resolve a quad's tint colour from its tint index + the submission's tint layers (white if untinted). */
     private static int tintColor(int tintIndex, int[] tintLayers) {
         if (tintIndex < 0 || tintLayers == null || tintIndex >= tintLayers.length) {
@@ -435,26 +638,166 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return tintLayers[tintIndex] | 0xFF000000; // force opaque; capture uses only the rgb
     }
 
-    /** Re-mesh a contained block-model display through FRAPI so model wrappers remain effective. */
+    /** Re-mesh a contained block-model display through FRAPI so model wrappers remain effective.
+     *  For block-entity blocks (chest, trapped chest, ender chest, shulker, etc.) that have no baked
+     *  model, capture the actual BlockEntity model via BlockEntityRenderDispatcher so the minecart
+     *  with chest geometry is correctly sent to Vulkan.
+     */
     public void captureBlockState(BlockState blockState, Matrix4fc transform, PoseStack poseStack) {
         if (capture == null || blockState.isAir()) {
             return;
         }
+
+        // First try to capture as a real BlockEntity (chest in minecart) via dispatcher
+        if (blockState.hasBlockEntity()) {
+            try {
+                var mc = Minecraft.getInstance();
+                var level = mc.level;
+                var dispatcher = mc.getBlockEntityRenderDispatcher();
+                var camState = RtEntities.INSTANCE.getCameraStateForCollector();
+                // Only attempt if we have a camera state (i.e. we are inside beginFrame)
+                if (camState != null && dispatcher != null) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = null;
+                    // A contained chest is synthetic: it is not a world BE and used to be created at the
+                    // origin. BlockEntityRenderDispatcher#tryExtractRenderState applies its normal
+                    // 64-block cull to that position, so a ChestMinecartEntity outside that small area
+                    // never reached ChestRenderer and fell through to the beige proxy box. Keep the
+                    // synthetic BE near the camera solely for extraction/culling; its actual placement
+                    // still comes exclusively from the minecart's active pose below.
+                    boolean chestRendererOwnsTransform = blockState.getBlock()
+                            instanceof net.minecraft.world.level.block.ChestBlock;
+                    BlockPos syntheticPos = chestRendererOwnsTransform
+                            ? BlockPos.containing(camState.pos) : BlockPos.ZERO;
+                    // Chest cases: normal, trapped, ender
+                    if (blockState.is(net.minecraft.world.level.block.Blocks.CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(syntheticPos, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.TRAPPED_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.TrappedChestBlockEntity(syntheticPos, blockState);
+                        be.setLevel(level);
+                    } else if (blockState.is(net.minecraft.world.level.block.Blocks.ENDER_CHEST)) {
+                        be = new net.minecraft.world.level.block.entity.EnderChestBlockEntity(BlockPos.ZERO, blockState);
+                        be.setLevel(level);
+                    } else if (chestRendererOwnsTransform) {
+                        be = new net.minecraft.world.level.block.entity.ChestBlockEntity(syntheticPos, blockState);
+                        be.setLevel(level);
+                    } else {
+                        // Generic: try to create via Block's EntityBlock path if possible
+                        // For blocks like barrel, hopper, etc., create minimal BE via type
+                        // Use BlockEntityType to create - best effort, skip if fails
+                        // This fallback prevents invisible chest and also handles other BE minecart displays
+                        try {
+                            String bName = blockState.getBlock().toString().toLowerCase();
+                            if (bName.contains("chest")) {
+                                be = new net.minecraft.world.level.block.entity.ChestBlockEntity(BlockPos.ZERO, blockState);
+                                be.setLevel(level);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+
+                    if (be != null) {
+                        dispatcher.prepare(camState.pos);
+                        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+                        var berState = dispatcher.tryExtractRenderState(be, partial, null, false);
+                        if (berState != null) {
+                            int idxBeforeBE = capture.idx.size();
+                            poseStack.pushPose();
+                            // The intercepted display state already carries ChestRenderer's facing
+                            // transform. ChestRenderer.submit applies that exact transform from the
+                            // synthetic chest state, so applying it here as well would rotate the model
+                            // twice. Other block-entity paths retain their display transform unchanged.
+                            if (transform != null && !chestRendererOwnsTransform) {
+                                poseStack.mulPose(transform);
+                            }
+                            try {
+                                dispatcher.submit(berState, poseStack, this, camState);
+                            } finally {
+                                poseStack.popPose();
+                            }
+                            // If we got new geometry from the BE, we're done (chest now visible)
+                            if (capture.idx.size() > idxBeforeBE) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                // Fall through to block model path
+                // System.out.println(\"RT chest BE capture failed: \" + t);
+            }
+        }
+
         BlockStateModel model = Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(blockState);
-        if (model == null) {
-            return;
+        int idxBeforeModel = capture.idx.size();
+        if (model != null) {
+            poseStack.pushPose();
+            if (transform != null) {
+                poseStack.mulPose(transform);
+            }
+            try {
+                // Display models are isolated from the world and do not apply random block offsets, matching
+                // Fabric's BlockStateModelWrapper path.
+                emitBlockModel(poseStack.last().pose(), model, BlockAndTintGetter.EMPTY, BlockPos.ZERO,
+                        blockState, 42L, false);
+            } finally {
+                poseStack.popPose();
+            }
+            if (capture.idx.size() > idxBeforeModel) {
+                return; // block model gave geometry (stone, etc.)
+            }
         }
-        poseStack.pushPose();
-        if (transform != null) {
-            poseStack.mulPose(transform);
+
+        // Final safe fallback: for any remaining BE block without model and without successful BE capture
+        // (should not happen for chest if BE path worked), emit a solid-color box using white slot to
+        // guarantee visibility without corrupted atlas UVs.
+        if (blockState.hasBlockEntity()) {
+            // Recompute final pose (stack may have been popped, so use identity + transform)
+            Matrix4f fallbackPose = new Matrix4f();
+            if (transform != null) {
+                fallbackPose.set(transform);
+            }
+            emitChestFallbackSafe(fallbackPose, blockState);
         }
-        try {
-            // Display models are isolated from the world and do not apply random block offsets, matching
-            // Fabric's BlockStateModelWrapper path.
-            emitBlockModel(poseStack.last().pose(), model, BlockAndTintGetter.EMPTY, BlockPos.ZERO,
-                    blockState, 42L, false);
-        } finally {
-            poseStack.popPose();
+    }
+
+    private void emitChestFallbackSafe(Matrix4f pose, BlockState state) {
+        // Use white slot (untextured) and solid tint to avoid Vulkan atlas corruption
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentOpacity = 1.0f;
+        capture.currentOrder = 0;
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0; // the proxy box is never glint/weather tagged
+        capture.currentGlintArmorSlot = 0; // no armour context on the fallback box
+        capture.clearUvRemap();
+        capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+
+        boolean isChest = state.getBlock().toString().toLowerCase().contains("chest");
+        int chestTint = 0xFF8B5A2B;
+        int tint = isChest ? chestTint : -1;
+
+        float min = 0.0625f, max = 0.9375f, minY = 0.0f, maxY = 0.875f;
+        if (state.toString().toLowerCase().contains("hopper")) {
+            min = 0.0f; max = 1.0f; minY = 0.0f; maxY = 0.625f;
+        }
+
+        float[][] corners = {
+                {min, minY, min}, {max, minY, min}, {max, minY, max}, {min, minY, max},
+                {min, maxY, min}, {max, maxY, min}, {max, maxY, max}, {min, maxY, max},
+        };
+        int[][] faces = {{0,1,2,3},{4,7,6,5},{0,4,5,1},{2,6,7,3},{0,3,7,4},{1,5,6,2}};
+        float[] nx = {0,0,0,0,-1,1}, ny = {-1,1,0,0,0,0}, nz = {0,0,-1,1,0,0};
+
+        for (int f = 0; f < faces.length; f++) {
+            int[] face = faces[f];
+            for (int i = 0; i < 4; i++) {
+                float[] c = corners[face[i]];
+                meshPos.set(c[0], c[1], c[2]);
+                pose.transformPosition(meshPos);
+                meshX[i] = meshPos.x; meshY[i] = meshPos.y; meshZ[i] = meshPos.z;
+                meshU[i] = 0f; meshV[i] = 0f; // zero UV to sample white slot uniformly
+            }
+            capture.addDirectQuad(meshX, meshY, meshZ, ZERO_UV, ZERO_UV, nx[f], ny[f], nz[f], tint);
         }
     }
 
@@ -509,10 +852,18 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
             capture.currentAlphaBucket = alphaBucket(renderType);
-            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
+            // Resolve the glyph's atlas page from the renderable's LIVE texture view, not from the
+            // RenderType. Font pages are destroyed and re-created when the font is re-selected (toggling
+            // Force Unicode Font) while the RenderType identity is memoized per texture name and survives,
+            // so the RenderType-keyed cache would pin a handle to the destroyed image and every glyph
+            // would sample garbage. See RtEntityTextures.slotForTextureView.
+            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForTextureView(renderable.textureView());
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
             capture.currentOpacity = 1.0f;
             capture.currentOrder = 0;
+            capture.currentPortalFlags = 0;
+            capture.currentPrimFlags = 0; // text is never glint/weather tagged
+            capture.currentGlintArmorSlot = 0; // no armour context on glyphs
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
         }
@@ -584,8 +935,91 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
     }
 
+    // The classic flame overlay on burning entities. Vanilla's FlameFeatureRenderer renders the
+    // submitted flame nodes with the animated fire sprite and full-bright lighting; the RT path has no
+    // fixed-function flame pass, so capture the same look as real cutout geometry on the entity's BLAS:
+    // a flame cube around the feet textured with the block atlas's fire_0 sprite. The sprite lives in
+    // the live (animated) block atlas, so the flame flickers like vanilla's, and the per-prim emission
+    // makes it self-lit instead of shaded by the scene.
     @Override
     public void submitFlame(PoseStack poseStack, EntityRenderState renderState, Quaternionf rotation) {
+        if (capture == null) {
+            return;
+        }
+        flameSubmittedThisEntity = true; // vanilla's dispatcher asked for the flame this entity
+        // Never inherit a portal or glint/weather tag from an earlier submission in the same capture
+        // (e.g. an enderman holding a portal block that is also on fire): the flame is plain textured
+        // cutout geometry.
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0;
+        capture.currentGlintArmorSlot = 0; // no armour context on the flame
+        TextureAtlasSprite fire = fireSprite();
+        if (fire == null) {
+            return;
+        }
+        // The block atlas is pre-seeded as bindless slot 0 (RtEntityTextures.atlasSlotCache), and the
+        // fire sprite lives in it — no atlas-key lookup needed for the flame's sampler.
+        capture.currentTexSlot = 0;
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+        // The fire sprite's transparent gaps must not block the ray: alpha-test like any cutout layer.
+        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        capture.currentOpacity = 1.0f;
+        capture.currentOrder = 0;
+        capture.setUvRemap(fire.getU0(), fire.getV0(), fire.getU1(), fire.getV1());
+        // The dispatcher normally passes the entity's pushed pose; some callers pass an empty stack
+        // (our own fallback guarantees identity). An empty stack has no "last" pose — fall back to
+        // identity so the flame lands in the same entity-local space as the body capture.
+        Matrix4f pose = poseStack.isEmpty() ? IDENTITY_POSE : poseStack.last().pose();
+        // Flame cube proportions: the box must be WIDER than the mob's body (a zombie is 0.6 wide,
+        // half 0.3) so its front/side faces sit in front of the body and the fire shows over it —
+        // a flush cube hides entirely inside the body silhouette. The fire texture's transparent
+        // gaps let the body show through, which is exactly the vanilla look.
+        float half = 0.5f;
+        float top = 1.3f;
+        float x0 = -half, x1 = half, z0 = -half, z1 = half, y0 = 0.0f, y1 = top;
+        // Corner table (front face z-: 0..3 CCW from bottom-left; back face z+: 4..7). Face quads are
+        // wound around the perimeter so every face is planar and the fire texture maps straight.
+        float[] cx = {x0, x1, x1, x0, x1, x0, x1, x0};
+        float[] cy = {y0, y0, y1, y1, y0, y0, y1, y1};
+        float[] cz = {z0, z0, z0, z0, z1, z1, z1, z1};
+        // Four open sides only — deliberately NO top cap. A horizontal top quad at head/neck height
+        // samples the whole fire sprite onto a flat plane, reading as a floating cut sheet ("flame
+        // hat"); the vanilla entity fire is an open box, so the flames rise naturally around the
+        // body and looking down shows the mob through the ring.
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 1, 2, 3}, 0f, 0f, -1f);  // north (z-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{5, 4, 6, 7}, 0f, 0f, 1f);   // south (z+)
+        // Corner order walks the BOTTOM edge first (0 -> 5) so UV index i advances along it: the
+        // texture's v axis stays vertical (flames up). The old {0,3,7,5} climbed the z0 edge first,
+        // mapping the sprite's v axis onto world Z — flames lying on their side on this face
+        // (visible on the player's right when facing south).
+        emitFlameFace(pose, cx, cy, cz, new int[]{0, 5, 7, 3}, -1f, 0f, 0f);  // west (x-)
+        emitFlameFace(pose, cx, cy, cz, new int[]{4, 1, 2, 6}, 1f, 0f, 0f);   // east (x+)
+        // The flame's sprite-rect remap is only for its own quads; leave the capture clean so a
+        // later submission (held item / armour layer) cannot sample through the fire sprite region.
+        capture.clearUvRemap();
+    }
+
+    /** One flame-cube face, pose-transformed into the capture with the fire sprite's full region. */
+    private void emitFlameFace(Matrix4f pose, float[] cx, float[] cy, float[] cz, int[] corners,
+                               float nx, float ny, float nz) {
+        for (int i = 0; i < 4; i++) {
+            int p = corners[i];
+            pose.transformPosition(cx[p], cy[p], cz[p], meshPos);
+            meshX[i] = meshPos.x;
+            meshY[i] = meshPos.y;
+            meshZ[i] = meshPos.z;
+            meshU[i] = FLAME_UV_U[i];
+            meshV[i] = FLAME_UV_V[i];
+        }
+        // White tint, full-bright emission (vanilla renders the flame with LightTexture.FULL_BRIGHT).
+        capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, nx, ny, nz, -1, FLAME_EMISSION);
+    }
+
+    /** Whether vanilla's dispatcher submitted the flame overlay during this entity's capture (set in
+     *  {@link #submitFlame}, cleared per entity by {@link #begin}). Lets {@code RtEntities} emit the
+     *  flame itself when the dispatcher's gate didn't fire for the RT capture. */
+    public boolean flameSubmittedThisEntity() {
+        return flameSubmittedThisEntity;
     }
 
     // Leashes/leads: replicate LeashFeatureRenderer's geometry — a 24-segment curve with two crossed
@@ -604,6 +1038,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
         capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
         capture.currentOpacity = 1.0f;
+        capture.currentPortalFlags = 0;
+        capture.currentPrimFlags = 0; // a leash ribbon is never glint/weather tagged
+        capture.currentGlintArmorSlot = 0; // no armour context on leashes
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -823,6 +1260,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         capture.currentOpacity = 1.0f;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
+        capture.currentPortalFlags = 0; // per-submission; the tag below applies only to this quad
+        capture.currentPrimFlags = 0; // glint never arrives through FRAPI meshes — drop any stale tag
+        capture.currentGlintArmorSlot = 0; // no armour context on FRAPI meshes
+        // Held/displayed portal blocks through FRAPI meshes (endermen, block displays): tag them for
+        // the procedural portal branches, mirroring addQuad.
+        tagPortalSubmission(capture, portalFlagsForSprite(sprite));
         for (int i = 0; i < 4; i++) {
             pose.transformPosition(quad.x(i) + offsetX, quad.y(i) + offsetY, quad.z(i) + offsetZ, meshPos);
             meshX[i] = meshPos.x;
@@ -926,8 +1369,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
-        boolean stochasticAlpha = glint || isTranslucent(renderType);
-        capture.currentOpacity = glint ? ENCHANTMENT_GLINT_OPACITY : 1.0f;
+        capture.currentPortalFlags = 0; // per-submission; tagPortalSubmission below may set it
+        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        // Custom-geometry glint (e.g. a trident's foil) has no preceding armour submission, so no
+        // armour-texture gate applies; coverage falls back to the texel-brightness dither alone.
+        capture.currentGlintArmorSlot = 0;
+        boolean stochasticAlpha = !glint && isTranslucent(renderType);
+        capture.currentOpacity = 1.0f; // glint coverage comes from its texture alpha, not a fake opacity
         // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         capture.currentTexSlot = lines ? RtEntityTextures.INSTANCE.whiteSlot()
@@ -937,6 +1385,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
         capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE
                 : (glint ? RtAccel.ENTITY_BUCKET_ANY_HIT : alphaBucket(renderType));
+        // End-portal block entities may submit their night-sky quad as custom geometry
+        // (EndPortalRenderer renders a single textured quad); tag it for the procedural night-sky
+        // branch.
+        if (!lines && isEndPortal(renderType)) {
+            tagPortalSubmission(capture, TERRAIN_PRIM_PORTAL_END);
+        }
 
         if (lines) {
             lineVertexConsumer.begin();

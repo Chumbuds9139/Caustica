@@ -23,6 +23,16 @@ public final class CausticaClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		CausticaMod.LOGGER.info("Caustica client initialized");
 
+		// The classic deck's shape is authored data (textures/environment/clouds.png — see
+		// RtCloudCells), so a resource reload can change it: drop the cached cell map and let the next
+		// frame re-read the texture. Covers F3+T and pack enable/disable alike.
+		net.fabricmc.fabric.api.resource.v1.ResourceLoader
+				.get(net.minecraft.server.packs.PackType.CLIENT_RESOURCES)
+				.registerReloadListener(
+						net.minecraft.resources.Identifier.fromNamespaceAndPath("caustica", "cloud_cells"),
+						(net.minecraft.server.packs.resources.ResourceManagerReloadListener) manager ->
+								dev.comfyfluffy.caustica.rt.RtCloudCells.INSTANCE.invalidate());
+
 		// The GpuDevice exists well before the first tick, so a one-shot at tick start
 		// runs on the render thread with the device idle between frames.
 		ClientTickEvents.START_CLIENT_TICK.register(client -> {
@@ -103,6 +113,14 @@ public final class CausticaClient implements ClientModInitializer {
 		}
 		// Shut NGX down once, after every feature (RR + FG) has been released above.
 		dev.comfyfluffy.caustica.ngx.NgxRuntime.INSTANCE.shutdown();
+		// Same ordering for the FidelityFX runtime: the FSR context is already released by
+		// RtComposite.destroy() above; this only clears the shared runtime state for the next device.
+		dev.comfyfluffy.caustica.fsr.FsrRuntime.INSTANCE.shutdown();
+		// Same ordering for the XeSS runtime: the upscaler is already released by
+		// RtComposite.destroy() above; this clears the shared runtime state for the next device.
+		dev.comfyfluffy.caustica.xess.XessRuntime.INSTANCE.shutdown();
+		// Same ordering for the NRD runtime (NRI device wrapper).
+		dev.comfyfluffy.caustica.nrd.NrdRuntime.INSTANCE.shutdown();
 		if (ctx != null) {
 			ctx.destroy();
 		}

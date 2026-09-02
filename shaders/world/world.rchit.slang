@@ -8,6 +8,7 @@
 // load we actually want. The cold WorldPush struct is dereferenced only for the breaking overlay.
 import world_common;
 import math;
+import portals;
 
 [[vk::push_constant]] WorldPushConstants pc;
 
@@ -120,14 +121,248 @@ struct Surface {
 };
 
 // Canonical material pages use a compact page index shared by their three dedicated arrays.
+// When height-map smoothing is disabled (WORLD_FLAG_POM_SMOOTHING off), every LabPBR channel snaps to
+// exact mip texel centres, so "off" is genuinely pixel-aligned rather than merely applying nearest
+// filtering to some channels while leaving the mapped normals smooth. The height field itself is not
+// affected by the toggle any more: POM intersects it as per-texel columns, which is texel-exact by
+// construction (parallaxColumnHeight).
+bool pomSmoothingEnabled() {
+    return (ConstPtr<WorldPush>(pc.worldPushAddr)[0].flags & WORLD_FLAG_POM_SMOOTHING) != 0u;
+}
+
+float2 snapUvToTexelCentre(Sampler2D pageTex, float2 uv, inout float lod) {
+    uint w, h;
+    pageTex.GetDimensions(w, h);
+    float mip = floor(lod);
+    float2 size = max(float2(1.0, 1.0), floor(float2(w, h) / exp2(mip)));
+    lod = mip;
+    return (floor(uv * size) + 0.5) / size;
+}
+
 float4 samplePageSurface0(uint page, float2 uv, float lod) {
-    return materialSurface0Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
+    Sampler2D pageTex = materialSurface0Tex[NonUniformResourceIndex(page)];
+    if (!pomSmoothingEnabled()) uv = snapUvToTexelCentre(pageTex, uv, lod);
+    return pageTex.SampleLevel(uv, lod);
 }
 float4 samplePageSurface1(uint page, float2 uv, float lod) {
-    return materialSurface1Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
+    Sampler2D pageTex = materialSurface1Tex[NonUniformResourceIndex(page)];
+    if (!pomSmoothingEnabled()) uv = snapUvToTexelCentre(pageTex, uv, lod);
+    return pageTex.SampleLevel(uv, lod);
 }
 float4 samplePageNormalAo(uint page, float2 uv, float lod) {
-    return materialNormalAoTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
+    Sampler2D pageTex = materialNormalAoTex[NonUniformResourceIndex(page)];
+    if (!pomSmoothingEnabled()) uv = snapUvToTexelCentre(pageTex, uv, lod);
+    return pageTex.SampleLevel(uv, lod);
+}
+
+// ---- Parallax Occlusion Mapping -------------------------------------------------------------------
+//
+// The LabPBR height field (alpha of the _n page) is intersected as REAL geometry, exactly the way the
+// classic cloud deck is (see cloudClassicBoxes in clouds.slang): every height texel is a box column
+// standing on the base plane, and the view ray walks that 2D texel grid — Amanatides & Woo, the same
+// walk the cloud cells use — stopping at the first column it cannot pass. That is what a layer march
+// fundamentally cannot do: sampling the field at N fixed depths only ever produces a stack of flat
+// slices, so a grazing or very close view sees the slices themselves, and sees THROUGH them, because a
+// layer has no sides. Walking the grid gives every texel its four side walls for free. The hit is
+// either a column TOP (flat, keeps the LabPBR normal map) or a column SIDE WALL, reported with the
+// wall's own normal so it shades — and visually occludes — like the solid face it stands for.
+//
+// The base plane at relief depth 1 closes the volume, so the walk always terminates on a surface; a
+// ray never escapes out of the bottom of the field.
+//
+// Cost per step is the same single height sample the layer march paid, but a step is now a texel
+// crossing: a head-on view resolves in one sample instead of always paying the full layer count, and
+// only grazing views walk far. parallaxParams.y bounds that walk (see PARALLAX_MIN/MAX_CROSSINGS).
+
+struct ParallaxHit {
+    float2 uv;      // atlas UV to shade with (displaced when the height field moved the hit)
+    float3 normal;  // world-space normal of the surface that was actually hit
+    bool wall;      // true when a column side wall was hit: `normal` is a tangent axis, not the face normal
+};
+
+ParallaxHit parallaxFlat(float2 atlasUv, float3 geometricNormal) {
+    ParallaxHit hit;
+    hit.uv = atlasUv;
+    hit.normal = geometricNormal;
+    hit.wall = false;
+    return hit;
+}
+
+// Height of one column. The columns ARE texels, so this always samples the texel centre of a whole mip
+// level: a bilinear tap between two texels would round the box corners back off and reintroduce exactly
+// the smeared, sideless relief the grid walk exists to remove. Out-of-range cells wrap into the sprite
+// so the caller can walk past the sprite border without ever addressing a neighbouring atlas sprite.
+float parallaxColumnHeight(MaterialHeader header, int2 cell, float2 grid, float mip) {
+    float2 wrapped = float2(cell) - floor(float2(cell) / grid) * grid;
+    float2 pageUv = header.materialUv.xy + ((wrapped + 0.5) / grid) * header.materialUv.zw;
+    return materialNormalAoTex[NonUniformResourceIndex(header.texturePage)].SampleLevel(pageUv, mip).a;
+}
+
+// Column grid of one sprite at a whole mip level: one cell per height texel.
+float2 parallaxGrid(MaterialHeader header, float mip) {
+    uint pageWidth, pageHeight;
+    materialNormalAoTex[NonUniformResourceIndex(header.texturePage)].GetDimensions(pageWidth, pageHeight);
+    float2 pageTexels = max(float2(1.0, 1.0), floor(float2(pageWidth, pageHeight) / exp2(mip)));
+    return max(float2(1.0, 1.0), floor(pageTexels * header.materialUv.zw + 0.5));
+}
+
+// Trace the height field for one hit. The configured camera distance keeps full relief through 80% of
+// its range, then fades continuously so the cutoff cannot visibly pop.
+//
+// `repeat` says whether the sprite may tile. Block sprites do — a stone face is the same sprite the
+// next block over shows — so the walk simply continues into the wrapped texel and the relief runs
+// uninterrupted into the block border. That is what removes the old inward "suction" at block edges:
+// the previous code faded the displacement to zero over the last texels of the sprite, which squeezed
+// the whole border band toward the middle of the face. Entity textures are model atlases whose islands
+// must not bleed into each other, so they keep the narrow border fade and stop at the sprite instead.
+ParallaxHit parallaxTrace(MaterialHeader header, float2 atlasUv, float lod, float3 geometricNormal,
+        float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv1, float2 uv2, float3 vdir, bool repeat) {
+    ParallaxHit flatHit = parallaxFlat(atlasUv, geometricNormal);
+    if ((header.features & MATERIAL_FEATURE_NORMAL) == 0u) {
+        return flatHit;
+    }
+
+    float2 g1 = uv1 - uv0;
+    float2 g2 = uv2 - uv0;
+    float det = g1.x * g2.y - g1.y * g2.x;
+    if (abs(det) <= 1.0e-12) {
+        return flatHit;
+    }
+
+    float3 n = geometricNormal;
+    float r = 1.0 / det;
+    float3 traw = ((p1 - p0) * g2.y - (p2 - p0) * g1.y) * r;
+    float3 T = normalize(traw - n * dot(n, traw));
+    float3 B = cross(n, T) * (det < 0.0 ? -1.0 : 1.0);
+    float rawNoV = max(dot(vdir, n), 0.0);
+    float3 viewTs = float3(dot(vdir, T), dot(vdir, B), max(rawNoV, 0.08));
+
+    float2 localUv = clamp((atlasUv - header.albedoUv.xy) * header.albedoUv.zw,
+            float2(0.0, 0.0), float2(1.0, 1.0));
+    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+    float4 parallaxParams = worldPush.parallaxParams;
+    float maxDistance = max(parallaxParams.w, 1.0);
+    float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    float cameraDistance = length(hitPosition - worldPush.camOffset);
+    float distanceFade = 1.0 - smoothstep(maxDistance * 0.8, maxDistance, cameraDistance);
+    // Only suppress the singular near-horizontal case; a wider fade would override the distance slider.
+    float grazingFade = smoothstep(0.002, 0.006, rawNoV);
+    // Tiling sprites need no border fade at all — the walk wraps. Non-tiling (entity) sprites still get
+    // one, because for them the walk has to stop at the border and a hard stop would pop.
+    float edgeFade = 1.0;
+    if (!repeat) {
+        float edgeDistance = min(min(localUv.x, 1.0 - localUv.x), min(localUv.y, 1.0 - localUv.y));
+        edgeFade = smoothstep(0.015, 0.09, edgeDistance);
+    }
+    float reliefDepth = parallaxParams.x * distanceFade * grazingFade * edgeFade;
+    if (reliefDepth <= 1.0e-5) {
+        return flatHit;
+    }
+
+    // Column grid: one cell per texel of the sprite at this mip. The walk needs a whole mip level (a
+    // fractional LOD would blend two differently sized grids), so the ray-cone LOD is floored here.
+    float maxMaterialLod = float((header.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
+    float mip = clamp(floor(lod), 0.0, maxMaterialLod);
+    int maxCrossings = clamp(int(round(parallaxParams.y)), PARALLAX_MIN_CROSSINGS, PARALLAX_MAX_CROSSINGS);
+    float2 grid = parallaxGrid(header, mip);
+
+    // Walk parameter is the relief depth itself: z = 0 at the geometric face, z = 1 at the base plane.
+    // fullDelta is the local UV the ray travels over that whole range, so the crossings the walk would
+    // need are its extent in texels. A very grazing view of a high-resolution pack can need thousands;
+    // rather than truncate the ray (which smears a band exactly where the relief is most visible), drop
+    // to a coarser mip — fewer, bigger columns — until the full depth range fits inside the budget.
+    float2 fullDelta = -(viewTs.xy / viewTs.z) * reliefDepth;
+    float needed = abs(fullDelta.x) * grid.x + abs(fullDelta.y) * grid.y + 1.0;
+    if (needed > float(maxCrossings)) {
+        mip = min(mip + ceil(log2(needed / float(maxCrossings))), maxMaterialLod);
+        grid = parallaxGrid(header, mip);
+    }
+
+    float2 texelPos = localUv * grid;
+    float2 dirTexels = fullDelta * grid;   // texels travelled per unit of relief depth
+    int2 cell = clamp(int2(floor(texelPos)), int2(0, 0), int2(grid) - int2(1, 1));
+    int2 stepDir = int2(dirTexels.x >= 0.0 ? 1 : -1, dirTexels.y >= 0.0 ? 1 : -1);
+    float2 tDelta = float2(abs(dirTexels.x) > 1.0e-8 ? 1.0 / abs(dirTexels.x) : 1.0e30,
+                           abs(dirTexels.y) > 1.0e-8 ? 1.0 / abs(dirTexels.y) : 1.0e30);
+    float2 edge = float2(stepDir.x > 0 ? float(cell.x) + 1.0 : float(cell.x),
+                         stepDir.y > 0 ? float(cell.y) + 1.0 : float(cell.y));
+    float2 tMax = float2(abs(dirTexels.x) > 1.0e-8 ? (edge.x - texelPos.x) / dirTexels.x : 1.0e30,
+                         abs(dirTexels.y) > 1.0e-8 ? (edge.y - texelPos.y) / dirTexels.y : 1.0e30);
+
+    float enterDepth = 0.0;   // depth at which the ray entered `cell`
+    int enterAxis = -1;       // 0 = crossed a u wall, 1 = a v wall, -1 = started here (no wall behind it)
+    float hitDepth = 0.0;
+    int wallAxis = -1;
+    bool resolved = false;
+
+    [loop]
+    for (int crossing = 0; crossing < maxCrossings; ++crossing) {
+        // A column occupies [top, 1] in depth; top == 0 is a texel flush with the face, top == 1 an
+        // empty cell that only the base plane closes.
+        float top = 1.0 - parallaxColumnHeight(header, cell, grid, mip);
+        float exitDepth = min(min(tMax.x, tMax.y), 1.0);
+        if (exitDepth >= top) {
+            // The ray reaches this column's height before leaving the cell, so this is the hit. If it
+            // was already below the top when it entered, it never saw the top face: it ran into the
+            // side WALL at the cell boundary — the surface a layer march has no representation for.
+            resolved = true;
+            if (enterAxis >= 0 && enterDepth > top) {
+                hitDepth = enterDepth;
+                wallAxis = enterAxis;
+            } else {
+                hitDepth = max(top, enterDepth);
+            }
+            break;
+        }
+        if (tMax.x < tMax.y) {
+            enterDepth = tMax.x;
+            cell.x += stepDir.x;
+            tMax.x += tDelta.x;
+            enterAxis = 0;
+        } else {
+            enterDepth = tMax.y;
+            cell.y += stepDir.y;
+            tMax.y += tDelta.y;
+            enterAxis = 1;
+        }
+        if (!repeat && (any(cell < int2(0, 0)) || any(cell >= int2(grid)))) {
+            return flatHit; // model atlas: leaving the sprite must not sample a neighbouring island
+        }
+    }
+    if (!resolved) {
+        // Crossing budget spent (very grazing view, very deep relief, or a high-resolution pack): stop
+        // the ray where it stands instead of snapping back to the flat face, which would pop.
+        hitDepth = enterDepth;
+    }
+
+    float2 hitTexelPos = texelPos + dirTexels * hitDepth;
+    if (wallAxis >= 0) {
+        // A wall belongs to the column it closes, so shade it with that column's own texel: sampling
+        // exactly on the boundary would blend in the neighbour the ray just left.
+        if (wallAxis == 0) {
+            hitTexelPos.x = float(cell.x) + 0.5;
+        } else {
+            hitTexelPos.y = float(cell.y) + 0.5;
+        }
+    }
+    float2 hitLocalUv = hitTexelPos / grid;
+    hitLocalUv = repeat ? hitLocalUv - floor(hitLocalUv)
+                        : clamp(hitLocalUv, float2(0.0, 0.0), float2(1.0, 1.0));
+
+    ParallaxHit hit;
+    hit.uv = header.albedoUv.xy + hitLocalUv / header.albedoUv.zw;
+    hit.wall = wallAxis >= 0;
+    hit.normal = geometricNormal;
+    if (wallAxis >= 0) {
+        // A wall faces back along the axis the ray crossed, so it always faces the viewer by
+        // construction. It is tilted PARALLAX_WALL_TILT toward the face because the renderer reuses the
+        // shading normal as the ray-spawn basis: a normal exactly parallel to the face would offset the
+        // next bounce along the face plane and send half of its cosine hemisphere into the solid block.
+        // The tangent-space normal map stays out of it — it is authored for the face, not for a side.
+        float3 wall = wallAxis == 0 ? T * float(-stepDir.x) : B * float(-stepDir.y);
+        hit.normal = normalize(wall + geometricNormal * PARALLAX_WALL_TILT);
+    }
+    return hit;
 }
 
 // The sole terrain/entity material evaluation path. LabPBR categorical bytes have already been
@@ -215,10 +450,129 @@ float3 applyBreaking(float3 albedo, uint rayCone, float3 rayOrigin, float3 rayDi
     return albedo;
 }
 
+// Distant Horizons / Voxy mini-material shading defaults. The coarse VBO retains only a one-byte
+// material class, so these map that class onto plausible PBR parameters.
+float dhMaterialRoughness(uint material, float fallbackRoughness) {
+    if (material == DH_MATERIAL_METAL) return 0.28;
+    if (material == DH_MATERIAL_SNOW) return 0.38;
+    if (material == DH_MATERIAL_WOOD) return 0.72;
+    if (material == DH_MATERIAL_STONE) return 0.78;
+    if (material == DH_MATERIAL_DEEPSLATE) return 0.84;
+    if (material == DH_MATERIAL_TERRACOTTA) return 0.76;
+    if (material == DH_MATERIAL_LEAVES) return 0.84;
+    if (material == DH_MATERIAL_GRASS) return 0.92;
+    if (material == DH_MATERIAL_DIRT) return 0.96;
+    if (material == DH_MATERIAL_SAND) return 0.98;
+    if (material == DH_MATERIAL_NETHER_STONE) return 0.88;
+    if (material == DH_MATERIAL_LAVA) return 0.68;
+    if (material == DH_MATERIAL_ILLUMINATED) return clamp(fallbackRoughness, 0.18, 0.90);
+    return clamp(fallbackRoughness, 0.25, 1.0);
+}
+
+float dhMaterialMetalness(uint material, float fallbackMetalness) {
+    if (material == DH_MATERIAL_METAL) return 1.0;
+    if (material == DH_MATERIAL_ILLUMINATED) return clamp(fallbackMetalness, 0.0, 1.0);
+    return 0.0;
+}
+
+float dhMaterialSss(uint material) {
+    if (material == DH_MATERIAL_LEAVES) return 0.18;
+    if (material == DH_MATERIAL_GRASS) return 0.055;
+    if (material == DH_MATERIAL_SNOW) return 0.08;
+    return 0.0;
+}
+
+// ---- Enchantment glint --------------------------------------------------------------------------
+// Vanilla's glint is an animated, unlit shimmer: its fragment shader discards texels below 0.1 alpha
+// and outputs the raw texture colour with no lightmap, while the sample UV scrolls diagonally via a
+// per-frame TextureMat (GLINT_SCROLL_* / glintScrolledUv in world_common, shared with world.rahit so
+// the coverage gate and the shading sample move together). In 26.x the glint textures carry NO alpha
+// (the armour glint is a plain grayscale map), so the shimmer look actually comes from the additive
+// pipeline blend (BlendFunction.GLINT: dst + src^2) and the pattern lives in the texel BRIGHTNESS.
+// world.rahit reproduces that blend as per-brightness stochastic coverage; the rays that reach this
+// branch therefore shade a real, bright streak. The purple comes from the texture being purple by
+// default (a resource pack can override it to any colour); grayscale textures get a vanilla-like
+// purple multiplier so the streak reads as the familiar enchantment colour. Self-lit (emission =
+// luminance * GLINT_EMISSION) keeps the shimmer bright over the armour instead of being darkened by
+// scene light — vanilla's glint ignores lighting entirely.
+static const float GLINT_EMISSION = 3.0;
+// Tint for grayscale glint textures (the vanilla 26.x armour map). The classic enchantment purple in
+// linear space, modulated by the texel value; packs that ship an actual colour are used as-is.
+static const float3 GLINT_GRAYSCALE_TINT = float3(1.30, 0.42, 1.55);
+
 [shader("closesthit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
+
+    // Native DH/Voxy LOD triangles participate in camera, GI, reflection and shadow rays through the
+    // same TLAS. They carry no sprite: shading comes from vertex colour + the mini-material class.
+    if ((InstanceID() & DH_INSTANCE_KIND) == DH_INSTANCE_KIND) {
+        Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
+        uint dpid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
+        TerrainPrim dpr = ConstPtr<TerrainPrim>(sec.primAddr)[dpid];
+        float3 sourceNormal = normalize(dpr.normal.xyz);
+        float3 dn = sourceNormal;
+        if (dot(dn, -WorldRayDirection()) < 0.0) dn = -dn;
+        uint dhSurface = uint(dpr.tint.w + 0.5);
+        uint dhMaterial = dpr.flags;
+        bool dhWater = dhSurface == DH_SURFACE_WATER;
+        bool dhGlass = dhSurface == DH_SURFACE_GLASS;
+        bool dhEmissive = dhSurface == DH_SURFACE_EMISSIVE;
+        bool dhEmissiveGlass = dhSurface == DH_SURFACE_EMISSIVE_GLASS;
+        float dhEmission = (dhEmissive || dhEmissiveGlass) ? clamp(asfloat(dpr.aux0), 0.0, 4.0) : 0.0;
+        MaterialHeader dhHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[dpr.materialId];
+
+        if (dhGlass || dhEmissiveGlass) {
+            float opticalAlpha = clamp(asfloat(dhEmissiveGlass ? dpr.aux1 : dpr.aux0), 0.04, 0.80);
+            float3 glassTint = glassTransmissionFilter(dpr.tint.rgb, opticalAlpha);
+            float ior = max(dhHeader.params.z, 1.45);
+            float f0Base = (ior - 1.0) / (ior + 1.0);
+            float f0Scalar = f0Base * f0Base;
+            payload.albedo = half3(glassTint);
+            payload.normal = half3(dn);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(float3(f0Scalar, f0Scalar, f0Scalar));
+            payloadSetPacked(payload, MATERIAL_DIELECTRIC,
+                    clamp(dhHeader.params.x, 0.025, 0.16), 0.0, dhEmission, 0.0,
+                    ior, max(dhHeader.params.w, 0.97),
+                    dhEmissiveGlass ? EMISSION_SOURCE_UNIFORM : EMISSION_SOURCE_NONE);
+            payloadSetDielectric(payload, MATERIAL_DIELECTRIC,
+                    dot(WorldRayDirection(), sourceNormal) < 0.0);
+            return;
+        }
+
+        if (dhWater) {
+            // A coarse LOD voxel is a sparse surface approximation, not a watertight column: pushing a
+            // real water medium here would accumulate Beer-Lambert absorption through generated
+            // bottom/side faces and turn distant lakes into black sheets (the fork's voxy-compat bug).
+            // Our unified dielectric raygen derives the medium from the payload, so the safe adaptation
+            // is a glossy opaque water-tinted surface: correct colour and a plausible sun highlight at
+            // horizon distances, with zero medium-stack interaction.
+            payload.albedo = half3(dpr.tint.rgb);
+            payload.normal = half3(dn);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.02h, 0.02h, 0.02h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.075, 0.0, 0.0, 0.0,
+                    1.333, 0.0, EMISSION_SOURCE_NONE);
+            return;
+        }
+
+        payload.albedo = half3(dpr.tint.rgb);
+        payload.normal = half3(dn);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        float dhRoughness = dhMaterialRoughness(dhMaterial, dhHeader.params.x);
+        float dhMetalness = dhMaterialMetalness(dhMaterial, dhHeader.params.y);
+        float dhSss = dhMaterialSss(dhMaterial);
+        payload.f0 = half3(lerp(float3(0.04, 0.04, 0.04), dpr.tint.rgb, dhMetalness));
+        payloadSetPacked(payload, MATERIAL_OPAQUE, dhRoughness, dhMetalness, dhEmission, dhSss,
+                max(dhHeader.params.z, 1.0), 0.0,
+                dhEmissive ? EMISSION_SOURCE_UNIFORM : EMISSION_SOURCE_NONE);
+        return;
+    }
 
     // Particle billboard: same geom-table/UV/bindless-atlas path as entities. Albedo is atlas texel *
     // per-particle colour; raygen treats material 2 as a primary-visible diffuse receiver with no
@@ -261,6 +615,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         payload.f0 = half3(0.0h, 0.0h, 0.0h);
         payloadSetPacked(payload, MATERIAL_PARTICLE, 1.0, 0.0, 0.0, 0.0,
                 1.0, 0.0, EMISSION_SOURCE_NONE);
+        // Rain/snow sheets are tagged at capture (RtWeatherCapture) and shaded unlit in raygen — the
+        // path tracer's light response was visibly breaking them (see PRIM_WEATHER).
+        if ((pr.flags & PRIM_WEATHER) != 0u) {
+            payload.flags |= PAYLOAD_WEATHER;
+        }
         return;
     }
     // Dynamic entities: instances with this custom-index flag bit carry real captured ModelPart
@@ -298,16 +657,106 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
         float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
-        float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
         MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
         uint material = header.model;
+        // Portal surfaces captured through the entity/block-entity path (EndPortalRenderer's quad, or a
+        // held/displayed nether portal block): the same dedicated procedural shading as terrain portals,
+        // so the flat end_portal texture never shows. The collector stamps TERRAIN_PRIM_PORTAL_* into
+        // the entity prim's flags lane and forces the opaque bucket.
+        if ((pr.flags & (TERRAIN_PRIM_PORTAL_NETHER | TERRAIN_PRIM_PORTAL_END)) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float portalTime = worldPush.waterParams.w; // per-frame animation clock (seconds, wrapped)
+            float3 portalColor;
+            float portalEmission;
+            if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+                float3 nightSky = endPortalNightSky(WorldRayDirection(), portalTime,
+                        worldPush.celestial);
+                portalColor = nightSky * END_PORTAL_BRIGHTNESS;
+                portalEmission = luminance(nightSky) * END_PORTAL_EMISSION;
+            } else {
+                // Nether swirl on entity-held portal blocks: same in-sprite scroll as terrain.
+                float2 localUv = (euvCoord - header.albedoUv.xy) * header.albedoUv.zw;
+                float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
+                        portalTime * NETHER_PORTAL_SCROLL_V));
+                float2 swirlUv = header.albedoUv.xy + scrolled / header.albedoUv.zw;
+                float4 swirlTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(swirlUv, 0.0);
+                float3 swirl = srgbToLinear(swirlTexel.rgb) * pr.tint.rgb * (0.35 + 0.65 * swirlTexel.a);
+                portalColor = swirl;
+                portalEmission = luminance(swirl) * NETHER_PORTAL_EMISSION;
+            }
+            payload.albedo = half3(portalColor);
+            payload.normal = half3(n);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.04h, 0.04h, 0.04h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0, portalEmission, 0.0,
+                    1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+            payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            // The End portal is fully unlit (like the terrain portal): raygen adds only its own
+            // emission and ends the path, and the zero F0 guarantees no specular response — a
+            // nearby torch can neither glint on nor illuminate the starfield. The Nether portal
+            // keeps the ordinary lit surface above.
+            if ((pr.flags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+                payload.f0 = half3(0.0h, 0.0h, 0.0h);
+                payload.flags |= PAYLOAD_END_PORTAL_UNLIT;
+            }
+            return;
+        }
+        // Enchantment/foil glint overlay (armour, held enchanted items, tridents): special-captured
+        // like the portal surfaces — the collector's PRIM_GLINT tag drives this dedicated branch, so
+        // the glint is an animated, self-lit shimmer rather than a flat texture drawn at reduced
+        // opacity. world.rahit has already gated the ray (texel-brightness dither AND the armour-texture
+        // alpha gate, so the shimmer never paints the bare body), and the rays reaching here shade a
+        // real streak.
+        if ((pr.flags & PRIM_GLINT) != 0u) {
+            WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+            float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)
+            // Same scrolled UV world.rahit used for the coverage gate, so both sample the moving
+            // pattern in lock-step (see glintScrolledUv in world_common).
+            float2 glintUv = glintScrolledUv(header, euvCoord, glintTime);
+            float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(glintUv, entityLod);
+            float3 glintRgb = srgbToLinear(glintTexel.rgb);
+            // Grayscale 26.x glint maps (no colour channel) are tinted purple like vanilla's default
+            // texture; actual coloured glint textures are used as-is.
+            float grayscale = (abs(glintRgb.r - glintRgb.g) + abs(glintRgb.g - glintRgb.b)) * 0.5;
+            if (grayscale < 0.02) {
+                glintRgb = glintRgb * GLINT_GRAYSCALE_TINT;
+            }
+            // Unlit like vanilla's glint shader: the streak colour radiates (self-lit) instead of being
+            // darkened by the scene, so the shimmer stays bright over the armour.
+            float3 glintColor = glintRgb * pr.tint.rgb;
+            payload.albedo = half3(glintColor);
+            payload.normal = half3(n);
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+            payload.f0 = half3(0.04h, 0.04h, 0.04h);
+            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0,
+                    luminance(glintColor) * GLINT_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+            payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+            // Entity emissive geometry (armour overlays, the flame, held lights): raygen applies the
+            // dynamic/entity emission scale and two-sided lighting to it, like every other entity hit.
+            payload.flags |= PAYLOAD_DYNAMIC_ENTITY;
+            return;
+        }
+        // POM on the opaque entity BLAS geometry only; cutout/translucent entities keep the exact UV
+        // whose alpha the any-hit shader already validated (block-entity models like chests are opaque).
+        // Entity textures are model atlases, so the height walk may not tile out of the sprite.
+        ParallaxHit entityParallax = parallaxFlat(euvCoord, n);
+        if (GeometryIndex() == 0u && material == MATERIAL_OPAQUE) {
+            entityParallax = parallaxTrace(header, euvCoord, entityLod, n, ep0, ep1, ep2,
+                    euv[e0], euv[e1], euv[e2], vdir, false);
+            euvCoord = entityParallax.uv;
+        }
+        float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
         float3 baseAlbedo = srgbToLinear(entityTexel.rgb) * pr.tint.rgb;
         float3 albedo = material == MATERIAL_DIELECTRIC
                 ? lerp(float3(1.0, 1.0, 1.0), baseAlbedo, entityTexel.a) : baseAlbedo;
         Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, n,
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
                 header.params.x, header.params.y, pr.normal.w, material == MATERIAL_OPAQUE);
-        n = surface.normal;
+        // A column side wall is real geometry the normal map knows nothing about: it wins over the
+        // mapped normal, which is authored for the face the column stands on.
+        n = entityParallax.wall ? entityParallax.normal : surface.normal;
 
         payload.albedo = half3(albedo * surface.ao);
         payload.normal = half3(n);
@@ -351,6 +800,21 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // desyncs the rest of the path).
     bool entering = dot(WorldRayDirection(), n) < 0.0;
 
+    // Water is a clear dielectric: biome tint + geometric normal, never the still/flow atlas sprite.
+    // That 16×16 repeating square is the azulejo Animated Water replaces with a height field in raygen.
+    if (materialHeader.model == MATERIAL_WATER) {
+        if (dot(n, -WorldRayDirection()) < 0.0) n = -n;
+        payload.albedo = half3(tint);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(0.02h, 0.02h, 0.02h);
+        payloadSetPacked(payload, MATERIAL_WATER, materialHeader.params.x, 0.0, 0.0, 0.0,
+                materialHeader.params.z, materialHeader.params.w, EMISSION_SOURCE_NONE);
+        payloadSetDielectric(payload, MATERIAL_WATER, entering);
+        return;
+    }
+
     // Lever B: per-triangle corner UVs in primitive order. uvs[3*pid + k] is a contiguous,
     // directly-addressed load (no index buffer, no scattered vertex-UV gather), so it issues as soon as
     // pid is known and its latency overlaps the prim fetch instead of serialising behind an index load.
@@ -373,6 +837,16 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float3 vdir = -WorldRayDirection(); // toward the viewer
     if (dot(n, vdir) < 0.0) {
         n = -n;
+    }
+
+    // Parallax Occlusion Mapping: restrict relief to the opaque geometry bucket so leaves, plants,
+    // grass overlays and translucent blocks cannot shade a different texel than the one that
+    // established their any-hit coverage. Block sprites tile, so the height walk may wrap.
+    ParallaxHit terrainParallax = parallaxFlat(uv, n);
+    if (GeometryIndex() == BUCKET_SOLID && materialHeader.model == MATERIAL_OPAQUE) {
+        terrainParallax = parallaxTrace(materialHeader, uv, blockLod, n, tp0, tp1, tp2,
+                uv0, uv1, uv2, vdir, true);
+        uv = terrainParallax.uv;
     }
 
     // Stained glass / ice: a thin colored filter resolved in raygen
@@ -401,14 +875,68 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         return;
     }
 
-    // Water (tint.w == 1) carries the pure biome water tint (no grey water-texture multiply): raygen
-    // shades the surface as a clear dielectric and only needs the tint to derive the per-channel
-    // Beer–Lambert absorption. Opaque terrain uses textured albedo.
-    payload.albedo = half3(materialHeader.model == MATERIAL_WATER
-            ? tint : srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
+    // ---- Portals. RtTerrainMesher routes the nether/end portal sprites into the SOLID bucket and
+    // tags their prims (TERRAIN_PRIM_PORTAL_*), so they never take the glass-dielectric path above:
+    // the Nether portal is a self-lit animated swirl, the End portal shows the overworld's real
+    // starfield over a pure-black void, view-parallax like vanilla's end-portal shader.
+    uint terrainFlags = pr.flags;
+    if ((terrainFlags & TERRAIN_PRIM_PORTAL_NETHER) != 0u) {
+        WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+        float portalTime = worldPush.waterParams.w; // per-frame animation clock (seconds, wrapped)
+        // Scroll inside the sprite's own rect (local 0..1, wrapped) so the drift can never bleed a
+        // neighbouring atlas sprite in; the vanilla 32-frame atlas animation plays on top of it, so
+        // the swirl is alive either way. LOD 0 keeps the swirl texels crisp at any distance.
+        float2 localUv = (uv - materialHeader.albedoUv.xy) * materialHeader.albedoUv.zw;
+        float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
+                portalTime * NETHER_PORTAL_SCROLL_V));
+        float2 swirlUv = materialHeader.albedoUv.xy + scrolled / materialHeader.albedoUv.zw;
+        float4 swirlTexel = blockAlbedoAtlas.SampleLevel(swirlUv, 0.0);
+        // Tint is the quad's authored colour (white for vanilla), never the glass lerp toward white.
+        // The texture's own alpha darkens the gaps between the swirl arms instead of transmitting —
+        // the portal is a surface, not a dielectric.
+        float3 swirl = srgbToLinear(swirlTexel.rgb) * tint * (0.35 + 0.65 * swirlTexel.a);
+        float swirlLum = luminance(swirl);
+        payload.albedo = half3(swirl);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.f0 = half3(0.04h, 0.04h, 0.04h);
+        payloadSetPacked(payload, MATERIAL_OPAQUE, 0.6, 0.0,
+                swirlLum * NETHER_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+        payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+        if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+            payload.flags |= PAYLOAD_EMITTER_IN_LIST;
+        }
+        return;
+    }
+    if ((terrainFlags & TERRAIN_PRIM_PORTAL_END) != 0u) {
+        WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+        float portalTime = worldPush.waterParams.w;
+        // The portal's starfield wheels with the world's celestial axis (same rotation world.rmiss
+        // applies to the sky), so it stays locked to the real night sky's stars.
+        float3 nightSky = endPortalNightSky(WorldRayDirection(), portalTime, worldPush.celestial);
+        payload.albedo = half3(nightSky * END_PORTAL_BRIGHTNESS);
+        payload.normal = half3(n);
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        // No specular response: the portal is a pure self-lit surface, so it can never reflect a
+        // light source (a torch's glint used to show up on it).
+        payload.f0 = half3(0.0h, 0.0h, 0.0h);
+        payloadSetPacked(payload, MATERIAL_OPAQUE, 0.9, 0.0,
+                luminance(nightSky) * END_PORTAL_EMISSION, 0.0, 1.0, 0.0, EMISSION_SOURCE_UNIFORM);
+        payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
+        // Fully unlit: raygen adds only the portal's own emission and ends the path, so no scene
+        // light (torch, sun, GI) can illuminate or reflect off the starfield.
+        payload.flags |= PAYLOAD_END_PORTAL_UNLIT;
+        if ((terrainFlags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+            payload.flags |= PAYLOAD_EMITTER_IN_LIST;
+        }
+        return;
+    }
+
+    payload.albedo = half3(srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint);
     payload.hitT = RayTCurrent();
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h); // static terrain: camera-only motion vector
-    uint material = materialHeader.model == MATERIAL_WATER ? MATERIAL_WATER : MATERIAL_OPAQUE;
 
     // normal.w packs the 0..1 block-light level plus a +2 offset flag for non-SOLID (cutout /
     // translucent) render layers, set at extraction so the hit can opt SOLID terrain out of SSS below.
@@ -420,17 +948,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
     n = surface.normal;
     payload.albedo *= half(surface.ao);
-    // Block-breaking overlay: opaque/cutout terrain (water skips — fluids aren't breakable). Evaluate
-    // it after normal mapping so decal projection uses the same shading orientation as the old path.
-    if (material != MATERIAL_WATER) {
-        payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
+    payload.albedo = half3(applyBreaking(float3(payload.albedo), rayCone, WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), n));
+    // Column side walls replace the mapped normal only after the decal, so the crack projection keeps
+    // choosing its axis from the face the block is actually broken on.
+    if (terrainParallax.wall) {
+        n = terrainParallax.normal;
     }
     payload.normal = half3(n);
     payload.f0 = half3(surface.f0);
-    payloadSetPacked(payload, material, surface.roughness, surface.metalness,
+    payloadSetPacked(payload, MATERIAL_OPAQUE, surface.roughness, surface.metalness,
             surface.emission, surface.sss, materialHeader.params.z, materialHeader.params.w,
             materialEmissionSource(materialHeader, surface.emission));
-    payloadSetDielectric(payload, material, entering);
+    payloadSetDielectric(payload, MATERIAL_OPAQUE, entering);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;

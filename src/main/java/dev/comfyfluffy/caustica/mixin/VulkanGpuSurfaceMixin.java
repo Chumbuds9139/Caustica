@@ -16,6 +16,8 @@ import dev.comfyfluffy.caustica.rt.RtReflex;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
+import org.lwjgl.vulkan.KHRSurface;
+import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkAllocationCallbacks;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPresentIdKHR;
@@ -151,12 +153,22 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * doesn't retain the pointer afterward, so freeing it when this method's stack frame pops is safe even
 	 * though {@code pCreateInfo} isn't touched again after this point in {@code configure()}. No-op (calls
 	 * through unchanged) when Reflex isn't enabled + device-supported.
+	 *
+	 * <p>Also makes every RT swapchain Frame-Generation-ready, unconditionally: (1) forces FIFO
+	 * present mode — with IMMEDIATE/MAILBOX the end-of-frame burst of generated-frame presents
+	 * overwrites itself before scanout (flicker, zero FPS gain); (2) bumps {@code minImageCount} —
+	 * every generated frame needs its own image on top of the real frame's and the one on display,
+	 * and vanilla's pool (~3) hard-capped FG at ~2x regardless of multiplier. Target covers the max
+	 * multiplier (5 generated = 6x) + real + display + one spare. Both are creation-time properties,
+	 * and FG is toggled at runtime, so they are applied on EVERY swapchain (not gated on the FG
+	 * toggle) — otherwise flipping FG on after load left the pool at 3 images and FG capped at 2x.
 	 */
 	@Redirect(method = "configure",
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkCreateSwapchainKHR(Lorg/lwjgl/vulkan/VkDevice;Lorg/lwjgl/vulkan/VkSwapchainCreateInfoKHR;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Ljava/nio/LongBuffer;)I"))
 	private int caustica$createSwapchainWithReflex(VkDevice device, VkSwapchainCreateInfoKHR pCreateInfo,
 			VkAllocationCallbacks pAllocator, LongBuffer pSwapchain) {
+		caustica$configureSwapchainForFg(pCreateInfo);
 		if (!RtDeviceBringup.reflexEnabled()) {
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 		}
@@ -166,6 +178,56 @@ public abstract class VulkanGpuSurfaceMixin {
 			latency.latencyModeEnable(true);
 			pCreateInfo.pNext(latency.address());
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+		}
+	}
+
+	/**
+	 * The FG image-pool target: room for the DLSS MFG maximum (4 generated = 5x) + 1 real + 1 on
+	 * display + spares. FSR 3.1 only ever generates 1 frame per real one, but the pool is sized for
+	 * the best case of any backend so the same swapchain works whichever FG rides on it.
+	 */
+	@Unique
+	private static final int caustica$FG_SWAPCHAIN_IMAGES = 8;
+
+	@Unique
+	private void caustica$configureSwapchainForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
+		// Applied UNCONDITIONALLY (not gated on the FG toggle): FG is flipped on/off at runtime from
+		// the Video Settings screen, but present mode and image count are swapchain-CREATION-time
+		// properties. If we only deepened the pool when FG was already enabled at creation, toggling
+		// FG on after load left the swapchain at vanilla's ~3 images / IMMEDIATE mode and FG silently
+		// capped at 2x no matter the multiplier (the reported "6x but FPS isn't smooth"). Making every
+		// RT swapchain FG-ready means the toggle works live. Cost: a few extra swapchain images and
+		// FIFO pacing — negligible for a path-traced renderer running well below the display rate.
+		//
+		// FIFO pacing: with IMMEDIATE/MAILBOX the end-of-frame BURST of generated-frame presents
+		// overwrites each other before the display ever scans them out (flicker, no FPS gain). FIFO
+		// (spec-mandated on every surface) gives every queued present its own vblank, which is what
+		// frame generation needs to actually reach the display.
+		if (pCreateInfo.presentMode() != KHRSurface.VK_PRESENT_MODE_FIFO_KHR) {
+			CausticaMod.LOGGER.info("FG: forcing FIFO present mode (was {}) so generated frames are "
+					+ "paced on vblanks instead of overwriting each other", pCreateInfo.presentMode());
+			pCreateInfo.presentMode(KHRSurface.VK_PRESENT_MODE_FIFO_KHR);
+		}
+		// Deepen the image pool: each generated frame needs its own swapchain image on top of the
+		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-caps FG
+		// at ~2x no matter the multiplier.
+		if (pCreateInfo.minImageCount() < caustica$FG_SWAPCHAIN_IMAGES) {
+			int target = caustica$FG_SWAPCHAIN_IMAGES;
+			try (MemoryStack stack = MemoryStack.stackPush()) {
+				org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR caps =
+						org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR.calloc(stack);
+				if (KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+						this.device.vkDevice().getPhysicalDevice(), this.surface, caps) == VK10.VK_SUCCESS
+						&& caps.maxImageCount() > 0) {
+					// maxImageCount == 0 means "no limit"; otherwise the driver's ceiling wins.
+					target = Math.min(target, caps.maxImageCount());
+				}
+			}
+			if (target > pCreateInfo.minImageCount()) {
+				pCreateInfo.minImageCount(target);
+				CausticaMod.LOGGER.info("FG: swapchain minImageCount raised to {} (generated frames need a "
+						+ "deeper image pool than vanilla's default)", target);
+			}
 		}
 	}
 
@@ -292,7 +354,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (srcImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+		int generatedCount = dev.comfyfluffy.caustica.rt.RtComposite.fgGeneratedCount();
 		RtFramePresenter.INSTANCE.prepareExtraFrames((VulkanCommandEncoder) commandEncoder, this.device,
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
@@ -316,7 +378,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (hdrImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+		int generatedCount = dev.comfyfluffy.caustica.rt.RtComposite.fgGeneratedCount();
 		RtFramePresenter.INSTANCE.prepareExtraFrames(enc, this.device, this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true);

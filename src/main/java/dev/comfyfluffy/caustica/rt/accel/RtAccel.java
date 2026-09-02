@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.accel;
 
+import dev.comfyfluffy.caustica.CausticaMod;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -83,6 +84,9 @@ public final class RtAccel {
     // vkCmdBuildMicromapsEXT requires both data.deviceAddress and triangleArray.deviceAddress to be
     // multiples of 256 (VUID-vkCmdBuildMicromapsEXT-pInfos-07515).
     private static final long MICROMAP_INPUT_ADDRESS_ALIGNMENT = 256L;
+    // Latch so a systematic OMM preparation failure logs once instead of once per streamed section.
+    private static final java.util.concurrent.atomic.AtomicBoolean OMM_PREP_FAILURE_LOGGED =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private static RtBuffer createScratchBuffer(RtContext ctx, long requiredSize, String label) {
         long alignment = ctx.accelerationStructureScratchAlignment();
@@ -412,14 +416,22 @@ public final class RtAccel {
         RtBuffer scratch = null;
         RtAccel accel = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            opacityMicromap = prepareOpacityMicromap(ctx, opacityMicromapInput, debugLabel);
+            opacityMicromap = prepareOpacityMicromapSafe(ctx, opacityMicromapInput, debugLabel);
+            // A micromapped BLAS is deliberately NOT compacted. vkCmdCopyAccelerationStructureKHR
+            // COMPACT on a build with an opacity micromap attached is exactly the combination that has
+            // produced corrupted traversal state in the wild — mis-coloured cutout geometry (grass
+            // turning blue) escalating into a GPU hang that takes the whole game down — and the copy
+            // gives no feedback to distinguish a bad result from a good one. Skipping the compact copy
+            // for these BLASes trades their size saving for a deterministic build path; sections whose
+            // cutout produced no usable micromap keep compacting as before.
+            boolean effectiveCompact = compact && opacityMicromap == null;
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryTerrainBlasSizes(vk, stack, positions, indices,
-                    vertexCount, bucketTris, opacityMicromap, compact);
+                    vertexCount, bucketTris, opacityMicromap, effectiveCompact);
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
             scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), true, debugLabel, opacityMicromap);
-            if (compact) {
+            if (effectiveCompact) {
                 VkQueryPoolCreateInfo queryCi = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
                         .queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR).queryCount(1);
                 java.nio.LongBuffer pQueryPool = stack.mallocLong(1);
@@ -487,6 +499,25 @@ public final class RtAccel {
                 backing.destroy();
             }
             throw t;
+        }
+    }
+
+    /**
+     * {@link #prepareOpacityMicromap} that degrades to "no micromap" instead of failing the whole
+     * section build: a driver that chokes on micromap creation (allocation, build-size query, handle
+     * creation) must cost the cutout bucket its any-hit optimisation, not the frame — and definitely
+     * not a crash. The first failure is logged with its cause; later ones are silent.
+     */
+    private static OpacityMicromap prepareOpacityMicromapSafe(RtContext ctx, OpacityMicromapInput input,
+                                                              String blasLabel) {
+        try {
+            return prepareOpacityMicromap(ctx, input, blasLabel);
+        } catch (Throwable t) {
+            if (OMM_PREP_FAILURE_LOGGED.compareAndSet(false, true)) {
+                CausticaMod.LOGGER.warn("RT OMM preparation failed ({}); this section — and any future "
+                        + "failure — falls back to a plain any-hit BLAS", blasLabel, t);
+            }
+            return null;
         }
     }
 

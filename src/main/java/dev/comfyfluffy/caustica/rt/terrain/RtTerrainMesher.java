@@ -43,9 +43,11 @@ import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
+import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
@@ -56,6 +58,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class RtTerrainMesher {
+    /** {@code TerrainPrim.flags} bit 0: this emissive quad is in the RIS light buffer. Mirrored in
+     *  {@code world_common.slang} (TERRAIN_PRIM_IN_LIGHT_BUFFER); RtLightCollector ORs it in. */
+    static final int TERRAIN_PRIM_IN_LIGHT_BUFFER = 1;
+    /** {@code TerrainPrim.flags} bits 1..2: portal surfaces (nether swirl / end night sky). Mirrored in
+     *  {@code world_common.slang} (TERRAIN_PRIM_PORTAL_*) and consumed by {@code world.rchit}. */
+    static final int TERRAIN_PRIM_PORTAL_NETHER = 2;
+    static final int TERRAIN_PRIM_PORTAL_END = 4;
+
+    /** Sprite classification for the two portal blocks. */
+    private static final int PORTAL_NONE = 0;
+    private static final int PORTAL_NETHER = 1;
+    private static final int PORTAL_END = 2;
+    private static final Identifier NETHER_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/nether_portal");
+    private static final Identifier END_PORTAL_SPRITE =
+            Identifier.withDefaultNamespace("block/end_portal");
+
     /**
      * Reusable per-worker-thread meshing state. The mesh + captures are reset between tasks so their
      * backing arrays amortize across sections instead of re-growing per task. Everything the result carries out —
@@ -211,6 +230,13 @@ final class RtTerrainMesher {
                         RtFluidMesher.tesselate(region, m, fluidCapture, fluidRenderer.fluidModels, state, fluid);
                     }
                     if (state.getRenderShape() != RenderShape.MODEL) {
+                        // The end portal block has no render model in vanilla (the starfield is a
+                        // special shader over an invisible block); emit a night-sky-shaded proxy plane
+                        // at the block's base so the ray tracer does not just see through the portal
+                        // hole.
+                        if (state.is(Blocks.END_PORTAL)) {
+                            capture.emitEndPortalProxy(state, lx, ly, lz);
+                        }
                         continue;
                     }
                     BlockStateModel model = modelSet.get(state);
@@ -472,6 +498,47 @@ final class RtTerrainMesher {
             TextureAtlasSprite sprite = spriteFinder.find(quad);
             q.sprite = sprite;
             q.materialId = materials.resolve(sprite, state, q.translucent);
+            // Portal blocks never take the translucent/glass path: the nether portal is a self-lit
+            // animated swirl and the end portal shows the overworld's starfield over a black void,
+            // both shaded by dedicated branches in world.rchit. Force them into the SOLID bucket
+            // and tag their prims; the nether portal resolves through the emitting variant so it
+            // also becomes a RIS light.
+            q.portal = portalKind(sprite);
+            // Belt-and-braces: tag by the block state too, so a resource pack that retextures the
+            // portal blocks (or a version whose end-portal model uses a different sprite) still gets
+            // the dedicated portal shading instead of a flat texture.
+            if (q.portal == PORTAL_NONE && state != null) {
+                if (state.is(Blocks.END_PORTAL)) {
+                    q.portal = PORTAL_END;
+                } else if (state.is(Blocks.NETHER_PORTAL)) {
+                    q.portal = PORTAL_NETHER;
+                }
+            }
+            if (q.portal != PORTAL_NONE) {
+                q.translucent = false;
+                q.cutout = false;
+                // Vanilla's portal block emits light level 11; that rides the normal.w lane into the
+                // RIS light collection (the portal's own shading ignores it and emits from the swirl).
+                q.emission = q.portal == PORTAL_NETHER ? 11f / 15f : 0.0f;
+                q.materialId = q.portal == PORTAL_NETHER
+                        ? materials.resolve(sprite, RtMaterials.Profile.DEFAULT, false, true)
+                        : materials.resolve(sprite, RtMaterials.Profile.DEFAULT, false, false);
+            }
+        }
+
+        /** Classify a block sprite as a portal surface (nether swirl / end night sky), or PORTAL_NONE. */
+        private static int portalKind(TextureAtlasSprite sprite) {
+            if (sprite == null) {
+                return PORTAL_NONE;
+            }
+            Identifier name = sprite.contents().name();
+            if (NETHER_PORTAL_SPRITE.equals(name)) {
+                return PORTAL_NETHER;
+            }
+            if (END_PORTAL_SPRITE.equals(name)) {
+                return PORTAL_END;
+            }
+            return PORTAL_NONE;
         }
 
         /** Fabric's cull predicate returns true when the nominal face should be discarded. */
@@ -628,10 +695,56 @@ final class RtTerrainMesher {
                 prim.add(q.tb);
                 prim.add(0f);
                 prim.add(Float.intBitsToFloat(q.materialId)); // TerrainPrim.materialId uint bits
-                prim.add(0f); // flags
+                prim.add(Float.intBitsToFloat(q.portal == PORTAL_NETHER ? TERRAIN_PRIM_PORTAL_NETHER
+                        : q.portal == PORTAL_END ? TERRAIN_PRIM_PORTAL_END : 0)); // flags
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
                 g.ommSprites.add(q.sprite);
+            }
+        }
+
+        /**
+         * Emit the invisible end portal block as one double-sided proxy plane at the base of the block
+         * (the placement vanilla's end-portal shader uses), tagged TERRAIN_PRIM_PORTAL_END so
+         * world.rchit shades it with the procedural night sky (endPortalNightSky) instead of
+         * sampling any texture. The block has no model, so this path is model-free: the quad is
+         * written straight into the solid bucket with white tint, an up-facing normal (the
+         * closest-hit orients it toward the viewer) and well-formed corner UVs for the ray-cone
+         * footprint math (unused by the portal shading).
+         */
+        void emitEndPortalProxy(BlockState state, int lx, int ly, int lz) {
+            Geom g = cur.opaque();
+            int base = g.verts.size() / 3;
+            float x0 = lx, x1 = lx + 1.0f, z0 = lz, z1 = lz + 1.0f, y = ly;
+            FloatArrayList verts = g.verts;
+            verts.add(x0); verts.add(y); verts.add(z0);
+            verts.add(x1); verts.add(y); verts.add(z0);
+            verts.add(x1); verts.add(y); verts.add(z1);
+            verts.add(x0); verts.add(y); verts.add(z1);
+            IntArrayList idx = g.idx;
+            idx.add(base); idx.add(base + 1); idx.add(base + 2);
+            idx.add(base); idx.add(base + 2); idx.add(base + 3);
+            addTriUv(g, 0f, 0f, 1f, 0f, 1f, 1f);
+            addTriUv(g, 0f, 0f, 1f, 1f, 0f, 1f);
+            // The night sky carries its own light, so resolve the plain opaque fallback (no
+            // emission source: the portal must not become a RIS emitter outside the light
+            // semantics).
+            int materialId = materials.resolve(null, state, false);
+            FloatArrayList prim = g.prim;
+            for (int t = 0; t < 2; t++) {
+                prim.add(0f);  // nx
+                prim.add(1f);  // ny
+                prim.add(0f);  // nz
+                prim.add(0f);  // normal.w = no block-light emission
+                prim.add(1f);  // tr
+                prim.add(1f);  // tg
+                prim.add(1f);  // tb
+                prim.add(0f);  // tint.w = 0 (not water)
+                prim.add(Float.intBitsToFloat(materialId));
+                prim.add(Float.intBitsToFloat(TERRAIN_PRIM_PORTAL_END));
+                prim.add(0f);  // aux0
+                prim.add(0f);  // aux1
+                g.ommSprites.add(null);
             }
         }
     }
@@ -644,6 +757,7 @@ final class RtTerrainMesher {
         boolean cutout; // non-SOLID render layer (alpha-tested) — also an overlay candidate
         boolean translucent; // TRANSLUCENT layer (stained glass / ice): colored-transmission dielectric
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
+        int portal; // PORTAL_NONE / PORTAL_NETHER / PORTAL_END — tagged by putFabric, stamped into flags
         float tr, tg, tb, emission;
         int materialId;
         TextureAtlasSprite sprite;

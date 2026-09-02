@@ -55,6 +55,30 @@ public final class RtEntityCapture implements VertexConsumer {
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
+    // Portal classification for the current submission (world_common.slang TERRAIN_PRIM_PORTAL_*
+    // values, 0 = none). Stamped into the prim's flags lane so world.rchit can shade held or
+    // block-entity portal geometry (EndPortalRenderer's quad, endermen holding portal blocks) with
+    // the procedural portal surfaces instead of the flat atlas texture.
+    int currentPortalFlags;
+    // Extra per-prim flags for the current submission, OR-ed into the same flags lane. Two consumers
+    // today: the weather capture (PRIM_FLAG_WEATHER: rain/snow sheets must reach raygen tagged so they
+    // can be shaded UNLIT — the path tracer's light response was visibly breaking them) and the glint
+    // paths (PRIM_FLAG_GLINT: enchantment/foil overlays are special-captured like the portal surfaces,
+    // so world.rchit shades them with an animated self-lit branch). Particles share the flags lane but
+    // never carry portal tags, so these bits are unambiguous there.
+    int currentPrimFlags;
+    /** Mirrors world_common.slang's PRIM_WEATHER. */
+    static final int PRIM_FLAG_WEATHER = 16;
+    /** Mirrors world_common.slang's PRIM_GLINT (entity-only bit; terrain never sets it). */
+    static final int PRIM_FLAG_GLINT = 8;
+    // Bindless texture slot of the armour layer this glint submission sits on (0 = none/unknown).
+    // Vanilla gates the glint to the armour surface with an EQUAL depth test: the armour pass wrote
+    // depth only where the armour texture is opaque, so the glint never draws over the bare body.
+    // The RT equivalent needs the armour's own texture to reproduce that gate, and since the armour
+    // submission immediately precedes the glint submission (EquipmentLayerRenderer), the collector
+    // passes the armour's slot through this field. Stored per-prim in aux1 (int bits); world.rahit
+    // reads it and discards the glint wherever the armour texture is transparent.
+    int currentGlintArmorSlot;
     // When a model textures from an atlas sprite (block entities: chests/signs/beds via a Material),
     // its ModelPart UVs are 0..1 in a virtual texture and must be remapped into the sprite's atlas
     // region — the work vanilla's sprite-coordinate-expander VertexConsumer does, which we bypass.
@@ -90,6 +114,9 @@ public final class RtEntityCapture implements VertexConsumer {
         currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
         currentOpacity = 1.0f;
         currentOrder = 0;
+        currentPortalFlags = 0;
+        currentPrimFlags = 0;
+        currentGlintArmorSlot = 0;
         uvRemap = false;
     }
 
@@ -144,6 +171,9 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentAlphaBucket = currentAlphaBucket;
         target.currentOpacity = currentOpacity;
         target.currentOrder = currentOrder;
+        target.currentPortalFlags = currentPortalFlags;
+        target.currentPrimFlags = currentPrimFlags;
+        target.currentGlintArmorSlot = currentGlintArmorSlot;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
         target.uvV0 = uvV0;
@@ -417,9 +447,12 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tb);
             prim.add((float) currentTexSlot); // tint.w = bindless texture slot
             prim.add(Float.intBitsToFloat(currentMaterialId));
-            prim.add(0f); // flags
+            // flags lane: portal tags (terrain shading) OR the weather bit (unlit rain/snow in raygen).
+            prim.add(Float.intBitsToFloat(currentPortalFlags | currentPrimFlags));
             prim.add(opacity); // aux0 = primitive coverage multiplier (read asfloat(aux0) in shaders)
-            prim.add(0f); // aux1
+            // aux1 = armour texture slot for the glint gate (int bits; 0 = none/unknown). Only glint
+            // submissions carry a non-zero value; every other path leaves it 0 and shaders ignore it.
+            prim.add(Float.intBitsToFloat(currentGlintArmorSlot));
             alphaBuckets.add(currentAlphaBucket);
         }
     }

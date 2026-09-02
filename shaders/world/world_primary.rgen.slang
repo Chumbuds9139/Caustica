@@ -34,7 +34,7 @@ public PathSegment tracePrimary(PathSegment seg,
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     uint seed = seg.seed;
     bool showCelestial = seg.showCelestial;
-    bool waterWaves = (worldPush.flags & 16u) != 0u;
+    bool waterWaves = waterWavesEnabled();
     nextRecord = PATH_NO_NEXT;
 
     {
@@ -62,12 +62,12 @@ public PathSegment tracePrimary(PathSegment seg,
         float3 hitPos = ro + rd * payload.hitT;
         uint material = payloadMaterial();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
-            float rough = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
-            bool exactSpecular = material == MATERIAL_OPAQUE && isDeltaAlpha(rough);
-            rough = exactSpecular ? 0.0 : rough;
             float metal = material == MATERIAL_PARTICLE
                     ? 0.0 : clamp(payloadMetalness(), 0.0, 1.0);
+            float rough = material == MATERIAL_PARTICLE
+                    ? 1.0 : metallicShininessRoughness(clamp(payloadRoughness(), 0.0, 1.0), metal);
+            bool exactSpecular = material == MATERIAL_OPAQUE && isDeltaAlpha(rough);
+            rough = exactSpecular ? 0.0 : rough;
             float3 diffAlb = material == MATERIAL_PARTICLE
                     ? float3(payload.albedo) : float3(payload.albedo) * (1.0 - metal);
             if (bounce == 0) {
@@ -94,6 +94,7 @@ public PathSegment tracePrimary(PathSegment seg,
 
         // This hit is consumed in pass A, so carry its travelled-medium absorption and cone growth into
         // the record for the next trace. The terminal hit above is deliberately not consumed here.
+        // Only the physical dielectric extinction below applies, and it stays path-local.
         if (any(medium.current.extinction > 0.0)) {
             throughput *= exp(-medium.current.extinction * payload.hitT);
         }
@@ -104,22 +105,14 @@ public PathSegment tracePrimary(PathSegment seg,
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = n;
         float3 previousNormal = n;
+        WaterWaves waterSurf = flatWaterWaves(hitPos, payload.hitT, geometricNormal);
         if (isWater && waterWaves) {
-            float2 waterDomain = hitPos.xz + worldPush.waterAnchor.xy;
             float waterFootprint = rayConeWidth / max(abs(dot(-rd, geometricNormal)), 0.2);
-            if (bounce == 0 && abs(geometricNormal.y) >= 0.5) {
-                float2 currentGrad;
-                float2 previousGrad;
-                waterWaveGradTemporal(waterDomain, worldPush.waterParams.w,
-                                      worldPush.waterAnchor.z, waterFootprint, currentGrad, previousGrad);
-                float orientation = geometricNormal.y >= 0.0 ? 1.0 : -1.0;
-                n = orientation * normalize(float3(-currentGrad.x, 1.0, -currentGrad.y));
-                previousNormal = orientation
-                        * normalize(float3(-previousGrad.x, 1.0, -previousGrad.y));
-            } else {
-                n = applyWaterWaves(geometricNormal, waterDomain,
-                                    worldPush.waterParams.w, waterFootprint);
-            }
+            waterSurf = evaluateWaterWaves(ro, rd, payload.hitT, geometricNormal,
+                    worldPush.waterParams.w, worldPush.waterAnchor.z, waterFootprint);
+            n = waterSurf.normal;
+            previousNormal = waterSurf.previousNormal;
+            hitPos = waterSurf.position;
         }
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
@@ -137,9 +130,9 @@ public PathSegment tracePrimary(PathSegment seg,
             gv_albedo = float3(0.0, 0.0, 0.0);
             gv_hitCamRel = hitPos - worldPush.camOffset;
             gv_motionUseRefracted = false;
-            gv_motionObjDisp = isWater ? float3(0.0, 0.0, 0.0) : payload.motionPrev;
+            gv_motionObjDisp = isWater ? waterSurf.motionPrev : payload.motionPrev;
             gv_spec = makeSpecSurface(gv_hitCamRel, n, previousNormal, geometricNormal,
-                                      isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
+                                      isWater ? waterSurf.motionPrev : float3(payload.motionPrev),
                                       gv_rough, float3(F, F, F));
             if (dot(transmittedDir, transmittedDir) > 0.0) {
                 MediumStack guideMedium = medium;
@@ -148,10 +141,21 @@ public PathSegment tracePrimary(PathSegment seg,
                 } else {
                     mediumPop(guideMedium);
                 }
-                resolveTransmissionGuide(hitPos, transmittedDir, geometricNormal,
-                        guideMedium, transmitBias, rayConeWidth, rayConeSpread,
-                        !isWater && entering
-                                ? float3(payload.albedo) : float3(1.0, 1.0, 1.0));
+                // Seed the guide filter with the transmittance of the camera prefix: the same
+                // exp(-sigma*t) this function applied to the split throughputs above for the
+                // camera->interface hop (non-zero when the eye is submerged). The walk then
+                // accumulates every refracted segment on top of it, so the transmitted guide's
+                // albedo ends up carrying the exact attenuation the colour it explains carries —
+                // see resolveTransmissionGuide. The glass entry tint is NOT seeded here anymore;
+                // the medium stack carries it as extinction and the walk applies it physically.
+                float3 guideFilter = max(exp(-min(medium.current.extinction * payload.hitT,
+                        float3(32.0, 32.0, 32.0))), float3(GUIDE_TRANSMITTANCE_MIN));
+                float3 guideDir = normalize(transmittedDir);
+                float3 guideOrigin = isWater && waterWaves
+                        ? waterWaveContinueOrigin(waterSurf, guideDir, transmitBias)
+                        : offsetSurfaceOrigin(hitPos, geometricNormal, guideDir, transmitBias);
+                resolveTransmissionGuide(guideOrigin, transmittedDir,
+                        guideMedium, rayConeWidth, rayConeSpread, guideFilter);
             }
         }
 
@@ -168,7 +172,9 @@ public PathSegment tracePrimary(PathSegment seg,
             }
             float3 deferredDir = normalize(transmittedDir);
             PathSegment deferred = makePathSegment(
-                    offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
+                    isWater && waterWaves
+                            ? waterWaveContinueOrigin(waterSurf, deferredDir, transmitBias)
+                            : offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
                     deferredDir, throughput * (1.0 - F), transmittedMedium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
                     true);
@@ -176,7 +182,9 @@ public PathSegment tracePrimary(PathSegment seg,
             nextRecord = splitRecord;
             float3 reflectedDir = reflect(rd, n);
             PathSegment reflected = makePathSegment(
-                    offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
+                    isWater && waterWaves
+                            ? waterWaveContinueOrigin(waterSurf, reflectedDir, SURF_BIAS)
+                            : offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
                     true);
@@ -227,7 +235,7 @@ void main() {
     float rayConeSpread = primaryRayConeSpread(jndc, size, dir);
     uint seed = (dispatchIndex.x * 1973u + dispatchIndex.y * 9277u + 26699u)
             ^ (worldPush.frameIndex * 2654435761u);
-    MediumStack cameraMedium = makeMediumStack((worldPush.flags & 1u) != 0u
+    MediumStack cameraMedium = makeMediumStack(cameraSubmerged()
             ? makeDielectricMedium(true, WATER_IOR, worldPush.waterParams.xyz, 1.0)
             : airMedium());
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
@@ -244,7 +252,9 @@ void main() {
     queue[pixelIndex] = packPathSegment(terminal, nextRecord);
 
     writeGuides(pix, dir, jndc, size, rayConeSpread);
-    if (pc.debugView != 0u) {
+    // 13 is the SHaRC cache view (SHARC_DEBUG_VIEW_ID in sharc.slang): the cache is queried by pass
+    // B's path tracer, so pass B owns that overlay and pass A must not paint its guide output here.
+    if (pc.debugView != 0u && pc.debugView != 13u) {
         writeDebugView(pix);
     }
 }

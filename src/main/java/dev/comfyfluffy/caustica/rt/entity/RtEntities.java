@@ -178,6 +178,9 @@ public final class RtEntities {
     // translate/yaw instance transform because their geometry is captured around the entity anchor.
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     private static final Motion NO_MOTION = new Motion(0L, 0f, 0f, 0f);
+    // Stand-in for "no ParticleEngine groups this frame", so the capture below can still run for weather
+    // (which is not a ParticleEngine effect) without duplicating the loop or nesting it in a branch.
+    private static final List<ParticleGroup<?>> NO_PARTICLE_GROUPS = List.of();
 
     // Reusable capture pipeline (single-threaded on the render thread).
     private final RtEntityCollector collector = new RtEntityCollector();
@@ -260,6 +263,14 @@ public final class RtEntities {
     /** This frame's camera orientation (view-to-world rotation) — the billboard rotation name tags face. */
     public Quaternionf cameraOrientation() {
         return cameraState.orientation;
+    }
+
+    public CameraRenderState getCameraStateForCollector() {
+        return cameraState;
+    }
+
+    public PoseStack getBlockEntityPoseStack() {
+        return blockEntityPoseStack;
     }
 
     /** Last frame's posed mesh for one entity: local vertex positions + its interpolated world anchor. */
@@ -734,6 +745,15 @@ public final class RtEntities {
                 long submitStart = RtFrameStats.FRAME.startStage();
                 try {
                     dispatcher.submit(state, cameraState, 0.0, 0.0, 0.0, entityPoseStack, collector);
+                    // The dispatcher only submits the flame overlay when its render-state gate fires;
+                    // if it didn't for this capture, emit the flame ourselves so burning entities
+                    // always get their fire layer (no double geometry when the gate did fire).
+                    if (entity.isOnFire() && !collector.flameSubmittedThisEntity()) {
+                        // Rebase to identity first: the dispatcher may leave the pose translated;
+                        // the flame must land in the same entity-local space as the body capture.
+                        resetPoseStack(entityPoseStack);
+                        collector.submitFlame(entityPoseStack, state, null);
+                    }
                 } finally {
                     RtFrameStats.FRAME.endStage("entity.capture.submit", submitStart);
                 }
@@ -949,7 +969,13 @@ public final class RtEntities {
         }
         Map<ParticleRenderType, ParticleGroup<?>> groups =
                 ((ParticleEngineAccessor) mc.particleEngine).caustica$getParticleGroups();
-        if (groups == null || groups.isEmpty()) {
+        boolean anyParticles = groups != null && !groups.isEmpty();
+        // Rain/snow are NOT ParticleEngine billboards — they are their own vanilla pass
+        // (WeatherEffectRenderer), which dies with the cancelled LevelRenderer.render. They ride this same
+        // combined particle mesh/BLAS, so an empty ParticleEngine must not short-circuit the capture, or
+        // weather would only appear while some unrelated particle happened to be alive.
+        boolean anyWeather = RtWeatherCapture.enabled();
+        if (!anyParticles && !anyWeather) {
             particlePrev.clear();
             particleCur.clear();
             return;
@@ -970,7 +996,7 @@ public final class RtEntities {
         int particlesCaptured = 0;
         try {
             particleGroups:
-            for (ParticleGroup<?> group : groups.values()) {
+            for (ParticleGroup<?> group : anyParticles ? groups.values() : NO_PARTICLE_GROUPS) {
                 Queue<? extends Particle> queue = ((ParticleGroupAccessor) group).caustica$getParticles();
                 for (Particle p : queue) {
                     if (build.full() || particlesCaptured >= particleLimit) {
@@ -1011,6 +1037,30 @@ public final class RtEntities {
                     particlesCaptured++;
                 }
             }
+
+            // Vanilla rain/snow columns, appended into the same capture so they share one mesh, one BLAS
+            // and one TLAS instance with the billboards above. They are not frustum-culled here: the
+            // columns already form a small camera-centred box (weatherRadius maxes at 10 blocks) and each
+            // is a two-sided vertical sheet, so a per-column test would cost more than it saves.
+            //
+            // Weather quads deliberately carry a ZERO motion vector. Their apparent motion is the sheet
+            // texture's V scroll, not geometry movement — the columns themselves are pinned to world
+            // (x, z), so handing the denoiser a velocity would reproject a surface that never actually
+            // moved and smear the drops into streaks. Zero tells DLSS-RR the truth: static geometry.
+            int weatherBudget = Math.max(0, particleLimit - particlesCaptured);
+            int weatherVertBefore = capture.verts.size() / 3;
+            int weatherColumns = anyWeather && !build.full()
+                    ? RtWeatherCapture.INSTANCE.capture(capture, particleCapture, camPos, weatherBudget)
+                    : 0;
+            int weatherVertAfter = capture.verts.size() / 3;
+            for (int i = weatherVertBefore; i < weatherVertAfter; i++) {
+                particleDisp.add(0f);
+                particleDisp.add(0f);
+                particleDisp.add(0f);
+                particleDisp.add(0f);
+            }
+            build.logicalCount += weatherColumns;
+            RtFrameStats.FRAME.count("weatherColumnsCaptured", weatherColumns);
         } catch (Throwable t) {
             capture.reset();
             particleDisp.clear();
