@@ -26,7 +26,8 @@ public final class WorldRenderScaler {
 	/** Open the level-render window. Called right before level rendering. */
 	public void begin(RenderTarget mainTarget) {
 		VanillaRenderController.INSTANCE.beginFrame(mainTarget);
-		if (VanillaRenderController.INSTANCE.shouldCompositeRt()) {
+		if (VanillaRenderController.INSTANCE.shouldCompositeRt()
+				&& dev.comfyfluffy.caustica.rt.GpuWatchdog.INSTANCE.rtEnabled()) {
 			this.rtWindowOpen = true;
 		}
 	}
@@ -50,12 +51,18 @@ public final class WorldRenderScaler {
 				VanillaRenderController.INSTANCE.markMissedBeforeHandSeam();
 				return;
 			}
-			GpuWatchdog.INSTANCE.beginComposite();
+			var watchdog = GpuWatchdog.INSTANCE;
+			watchdog.beginComposite(net.minecraft.client.Minecraft.getInstance().level);
+			if (!watchdog.allowTraceThisFrame()) {
+				watchdog.endComposite(true);
+				VanillaRenderController.INSTANCE.markRtCompositeResult(false);
+				return;
+			}
 			boolean success = false;
 			try {
 				success = RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
 			} finally {
-				GpuWatchdog.INSTANCE.endComposite(success);
+				watchdog.endComposite(success);
 			}
 			VanillaRenderController.INSTANCE.markRtCompositeResult(success);
 		}
