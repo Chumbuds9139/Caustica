@@ -79,7 +79,6 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [X] Nether/End sky, weather, volumetric fog/clouds
-- [x] NRD + FSR for non-NVIDIA GPUs (Windows only)
-- [X] LOD
-- [X] ReSTIR
+- [] 進一步中文化
+- [] 與Sodium配合
+- [] 增加穩定度
