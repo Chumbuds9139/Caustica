@@ -15,6 +15,9 @@
 		],
 		"client": [
 			"dev.comfyfluffy.caustica.client.CausticaClient"
+		],
+		"sodium:config_api_user": [
+			"dev.comfyfluffy.caustica.compat.SodiumConfigEntry"
 		]
 	},
 	"mixins": [
@@ -25,5 +28,8 @@
 		"minecraft": "26.2",
 		"java": ">=25",
 		"fabric-api": "*"
+	},
+	"suggests": {
+		"sodium": "*"
 	}
 }
