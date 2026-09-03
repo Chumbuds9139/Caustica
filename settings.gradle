@@ -11,11 +11,15 @@ pluginManagement {
 
 rootProject.name = "caustica"
 
-// Optional Sodium Config API (compile-only). Sodium is not required at runtime.
-gradle.projectsLoaded {
-	rootProject.repositories.maven {
-		name = "CaffeineMC"
-		url = "https://maven.caffeinemc.net/releases"
+// ProjectDescriptor has no repositories/dependencies. Hook the real Project instead.
+gradle.rootProject {
+	repositories {
+		maven {
+			name = "CaffeineMC"
+			url = "https://maven.caffeinemc.net/releases"
+		}
 	}
-	rootProject.dependencies.add("compileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
+	afterEvaluate {
+		dependencies.add("compileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
+	}
 }
