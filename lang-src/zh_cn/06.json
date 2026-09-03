@@ -1,0 +1,17 @@
+{
+ "caustica.options.voxy.chunks": "%s 个区块",
+ "caustica.options.voxy.refresh": "重建 Voxy LOD",
+ "caustica.options.rt.reflex": "NVIDIA Reflex 低延迟",
+ "caustica.options.rt.imageMenuHeader": "画面与超分",
+ "caustica.options.rt.displayMenuHeader": "显示",
+ "caustica.options.rt.worldMenuHeader": "世界",
+ "caustica.options.rt.advancedMenuHeader": "高级",
+ "caustica.options.rt.upscalingHeader": "超分辨率（DLSS RR / FSR 3 / XeSS）",
+ "caustica.options.rt.frameGenHeader": "帧生成与延迟",
+ "caustica.options.rt.skyHeader": "天空、手部与相机",
+ "caustica.options.rt.waterHeader": "水",
+ "caustica.options.rt.worldHeader": "世界与实体",
+ "caustica.options.rt.streamingHeader": "地形流式加载",
+ "caustica.options.rt.resetToDefaults": "恢复默认值",
+ "caustica.options.rt.resetAll": "重置所有 RT 设置"
+}
