@@ -1,1 +1,9 @@
-LOAD_FROM_ARTIFACTS_ZH_TW
+{
+	"caustica.options.rt.header": "光線追蹤",
+	"caustica.options.rt.title": "光線追蹤設定",
+	"caustica.options.rt.settingsButton": "光線追蹤設定...",
+	"caustica.options.rt.settings": "光線追蹤設定",
+	"caustica.options.sharc.header": "SHaRC（實驗性）",
+	"caustica.options.sharc.title": "SHaRC 設定",
+	"NOTE": "full file is in resource pack zip; do not use this stub"
+}
