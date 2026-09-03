@@ -16,6 +16,16 @@ changes while the renderer is being built.
 - [CurseForge](https://www.curseforge.com/minecraft/mc-mods/caustica/preview)
 - [Gallery](docs/gallery.md)
 
+## Fork notes (Chumbuds9139)
+
+This tree adds three practical layers on top of upstream Caustica:
+
+1. **Chinese UI** — `zh_cn` / `zh_tw` cover the full settings surface, including fog, tonemapping, POM, Voxy and Distant Horizons.
+2. **Sodium Video Settings** — when [Sodium](https://github.com/CaffeineMC/sodium) is installed, Caustica registers a Config API page that opens the existing Ray Tracing hub (vanilla Video Settings still works without Sodium).
+3. **GPU timeout / device-lost guard** — stretches vanilla's 5s VK-semaphore wait, drains the device on timeout, and temporarily drops SPP / bounces / volumetrics after a slow frame so `VK_ERROR_DEVICE_LOST` is less likely.
+
+See `FORK_CHANGES.md` for the file list.
+
 ## Features
 
 - Vulkan hardware path-traced world rendering

@@ -10,3 +10,19 @@ pluginManagement {
 }
 
 rootProject.name = "caustica"
+
+// Keep the Sodium API off the required runtime classpath. The repo + compile-only
+// dependency are registered here so the existing build.gradle does not have to
+// grow another Maven block; fabric-loom's modCompileOnly configuration is added
+// once that plugin is applied.
+gradle.rootProject {
+	repositories {
+		maven {
+			name = "CaffeineMC"
+			url = uri("https://maven.caffeinemc.net/releases")
+		}
+	}
+	pluginManager.withPlugin("fabric-loom") {
+		dependencies.add("modCompileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
+	}
+}
