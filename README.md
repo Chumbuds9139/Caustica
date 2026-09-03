@@ -79,6 +79,6 @@ license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 
-- [] 進一步中文化
-- [] 與Sodium配合
-- [] 增加穩定度
+- [ ] 進一步中文化
+- [ ] 與Sodium配合
+- [ ] 增加穩定度
