@@ -5,23 +5,18 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Budget for work that currently shares vanilla's graphics submit.
+ * Cheapens work that shares vanilla's graphics submit. It must not turn ray tracing off.
  *
- * <p>Vanilla {@code VulkanCommandEncoder.submit} records Caustica's composite command buffer onto
- * the same queue it later waits on for 5 seconds. That buffer is not "a present". It includes
- * per-entity / per-particle BLAS builds, a TLAS rebuild, {@code TraceRays}, optional volumetric
- * cloud/fog marches, and the denoise/upscale pass. If that packet overruns Windows TDR (~2s) the
- * wait returns {@code VK_ERROR_DEVICE_LOST}; if the GPU merely runs long, vanilla throws
- * {@code 5s timeout reached when waiting for VK semaphore}.
+ * <p>Vanilla {@code VulkanCommandEncoder.submit} records Caustica's composite onto the same queue
+ * it waits on for 5 seconds. Overrun causes a timeout or {@code VK_ERROR_DEVICE_LOST}. Stretching
+ * that wait does not make the packet cheaper. Skipping the composite, or latching RT off after one
+ * timeout, makes the world look like ray tracing vanished.
  *
- * <p>Stretching the 5s wait does not make the packet cheaper, and swallowing a timeout then
- * submitting again is how a hang becomes device-lost. This class instead:
+ * <p>This watchdog only:
  * <ul>
- *   <li>detects the expensive windows (world join, dimension change, resource reload) and skips
- *       RT for a few frames so terrain BLAS can finish on the compute queue;</li>
- *   <li>keeps volumetric clouds/fog off during that settle window;</li>
- *   <li>caps brand-new (non-refit) BLAS ops recorded into the vanilla command buffer;</li>
- *   <li>on a vanilla submit timeout, disables RT instead of retrying a dead queue.</li>
+ *   <li>clamps SPP / bounces and turns off volumetrics for a few frames after world join;</li>
+ *   <li>caps brand-new entity/particle BLAS recorded into the vanilla command buffer;</li>
+ *   <li>on timeout, cheapens the next frames and retries RT instead of disabling it.</li>
  * </ul>
  */
 public final class GpuWatchdog {
@@ -30,13 +25,13 @@ public final class GpuWatchdog {
     private static final int SETTLE_FRAMES = 45;
     private static final int MAX_NEW_BLAS_SETTLING = 24;
     private static final int MAX_NEW_BLAS_STEADY = 96;
-    private static final long SLOW_CPU_NS = 400_000_000L;
+    private static final int TIMEOUTS_BEFORE_LATCH = 3;
 
     private final AtomicInteger settleFrames = new AtomicInteger();
     private volatile boolean rtDisabled;
     private volatile ClientLevel lastLevel;
-    private volatile long compositeStartedNs;
     private volatile int newBlasThisFrame;
+    private volatile int timeoutCount;
     private volatile String lastReason = "idle";
 
     private GpuWatchdog() {
@@ -51,14 +46,12 @@ public final class GpuWatchdog {
     }
 
     public void beginComposite(ClientLevel level) {
-        this.compositeStartedNs = System.nanoTime();
         this.newBlasThisFrame = 0;
-        if (rtDisabled) {
-            return;
-        }
         if (level != this.lastLevel) {
             this.lastLevel = level;
             if (level != null) {
+                this.rtDisabled = false;
+                this.timeoutCount = 0;
                 armSettle("level change");
             }
         }
@@ -69,26 +62,14 @@ public final class GpuWatchdog {
     }
 
     public void endComposite(boolean success) {
-        long started = this.compositeStartedNs;
-        this.compositeStartedNs = 0L;
-        if (started == 0L || rtDisabled) {
-            return;
-        }
-        long elapsed = System.nanoTime() - started;
-        if (!success || elapsed >= SLOW_CPU_NS) {
-            armSettle("slow composite " + (elapsed / 1_000_000L) + "ms success=" + success);
+        if (!success && !rtDisabled) {
+            armSettle("composite failed");
         }
     }
 
-    /**
-     * When false, WorldRenderScaler must not record an RT composite into vanilla's command encoder.
-     * Terrain streaming still ran earlier in the tick.
-     */
+    /** Composite still runs. Settle only cheapens the packet. */
     public boolean allowTraceThisFrame() {
-        if (rtDisabled) {
-            return false;
-        }
-        return this.settleFrames.get() <= SETTLE_FRAMES / 3;
+        return !rtDisabled;
     }
 
     public boolean allowVolumetrics() {
@@ -104,9 +85,6 @@ public final class GpuWatchdog {
     }
 
     public boolean tryConsumeNewBlas() {
-        if (rtDisabled) {
-            return false;
-        }
         int cap = settling() ? MAX_NEW_BLAS_SETTLING : MAX_NEW_BLAS_STEADY;
         int next = this.newBlasThisFrame + 1;
         if (next > cap) {
@@ -117,27 +95,23 @@ public final class GpuWatchdog {
     }
 
     public void onSubmitTimeout(String detail) {
-        this.lastReason = "submit timeout: " + detail;
+        this.timeoutCount++;
+        this.lastReason = "submit timeout #" + this.timeoutCount + ": " + detail;
         CausticaMod.LOGGER.error(
-                "Vanilla Vulkan submit timed out after 5s. That wait is for the command buffer "
-                        + "Caustica recorded into the Minecraft graphics queue (entity/particle BLAS + "
-                        + "TLAS + TraceRays + denoise), not a generic present. RT is being disabled so "
-                        + "the next submit does not hit a lost or still-busy device. lastReason={}",
-                this.lastReason);
-        this.rtDisabled = true;
-        RtContext ctx = RtContext.currentOrNull();
-        if (ctx != null) {
-            try {
-                ctx.waitIdle();
-            } catch (Throwable t) {
-                CausticaMod.LOGGER.warn("waitIdle after submit timeout failed: {}", t.toString());
-            }
+                "Vanilla Vulkan submit timed out after 5s ({}). Cheapening RT for {} frames instead of disabling it.",
+                this.lastReason, SETTLE_FRAMES);
+        armSettle("submit timeout");
+        if (this.timeoutCount >= TIMEOUTS_BEFORE_LATCH) {
+            CausticaMod.LOGGER.error(
+                    "Vulkan submit timed out {} times this session; latching RT off until the next world join.",
+                    this.timeoutCount);
+            this.rtDisabled = true;
         }
     }
 
     public void onDeviceLost(String detail) {
         this.lastReason = "device lost: " + detail;
-        CausticaMod.LOGGER.error("VK_ERROR_DEVICE_LOST reported; disabling RT. lastReason={}", this.lastReason);
+        CausticaMod.LOGGER.error("VK_ERROR_DEVICE_LOST reported; latching RT off until the next world join. lastReason={}", this.lastReason);
         this.rtDisabled = true;
     }
 
@@ -150,14 +124,11 @@ public final class GpuWatchdog {
     }
 
     private void armSettle(String reason) {
-        if (rtDisabled) {
-            return;
-        }
         this.lastReason = reason;
         int previous = this.settleFrames.getAndUpdate(v -> Math.max(v, SETTLE_FRAMES));
         if (previous == 0) {
             CausticaMod.LOGGER.warn(
-                    "GPU budget: skipping/cheapening RT for {} frames ({})", SETTLE_FRAMES, reason);
+                    "GPU budget: cheapening RT for {} frames ({})", SETTLE_FRAMES, reason);
         }
     }
 }

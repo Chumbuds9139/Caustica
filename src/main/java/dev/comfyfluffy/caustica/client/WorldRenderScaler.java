@@ -27,7 +27,7 @@ public final class WorldRenderScaler {
 	public void begin(RenderTarget mainTarget) {
 		VanillaRenderController.INSTANCE.beginFrame(mainTarget);
 		if (VanillaRenderController.INSTANCE.shouldCompositeRt()
-				&& dev.comfyfluffy.caustica.rt.GpuWatchdog.INSTANCE.rtEnabled()) {
+				&& GpuWatchdog.INSTANCE.rtEnabled()) {
 			this.rtWindowOpen = true;
 		}
 	}
@@ -53,11 +53,7 @@ public final class WorldRenderScaler {
 			}
 			var watchdog = GpuWatchdog.INSTANCE;
 			watchdog.beginComposite(net.minecraft.client.Minecraft.getInstance().level);
-			if (!watchdog.allowTraceThisFrame()) {
-				watchdog.endComposite(true);
-				VanillaRenderController.INSTANCE.markRtCompositeResult(false);
-				return;
-			}
+			// Always composite while RT is enabled. Settle only reduces SPP / bounces / volumetrics.
 			boolean success = false;
 			try {
 				success = RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
