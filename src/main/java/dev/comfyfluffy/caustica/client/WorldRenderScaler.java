@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import dev.comfyfluffy.caustica.rt.GpuWatchdog;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 
 /**
@@ -49,7 +50,13 @@ public final class WorldRenderScaler {
 				VanillaRenderController.INSTANCE.markMissedBeforeHandSeam();
 				return;
 			}
-			boolean success = RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
+			GpuWatchdog.INSTANCE.beginComposite();
+			boolean success = false;
+			try {
+				success = RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
+			} finally {
+				GpuWatchdog.INSTANCE.endComposite(success);
+			}
 			VanillaRenderController.INSTANCE.markRtCompositeResult(success);
 		}
 	}

@@ -18,6 +18,7 @@ public abstract class VulkanUtilsMixin {
                                                     CallbackInfo ci) {
         if (result == VK10.VK_ERROR_DEVICE_LOST) {
             VulkanDiagnostics.reportDeviceLost(device, message);
+            dev.comfyfluffy.caustica.rt.GpuWatchdog.INSTANCE.onDeviceLost(message);
         }
     }
 }
