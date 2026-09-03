@@ -10,8 +10,10 @@ def mergeLang = tasks.register("mergeCausticaLang") {
 		def slurp = new groovy.json.JsonSlurper()
 		def merge = { File dir, File out ->
 			def acc = [:]
-			dir.listFiles().findAll { it.name.endsWith(".json") }.sort { it.name }.each {
-				acc.putAll(slurp.parse(it) as Map)
+			if (dir.exists()) {
+				dir.listFiles().findAll { it.name.endsWith(".json") }.sort { it.name }.each {
+					acc.putAll(slurp.parse(it) as Map)
+				}
 			}
 			out.parentFile.mkdirs()
 			out.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(acc)) + "\n", "UTF-8")
@@ -22,7 +24,9 @@ def mergeLang = tasks.register("mergeCausticaLang") {
 }
 
 afterEvaluate {
-	tasks.matching { it.name == "processResources" }.configureEach {
-		dependsOn mergeLang
+	["processResources", "sourcesJar", "jar"].each { name ->
+		tasks.matching { it.name == name }.configureEach {
+			dependsOn mergeLang
+		}
 	}
 }
