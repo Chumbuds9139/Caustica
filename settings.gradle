@@ -11,6 +11,9 @@ pluginManagement {
 
 rootProject.name = "caustica"
 
+// Sodium's config API is compile-only. Use Gradle's standard compileOnly
+// configuration — Loom's modCompileOnly is not guaranteed to exist when
+// settings.gradle afterEvaluate runs.
 gradle.rootProject {
 	repositories {
 		maven {
@@ -19,8 +22,6 @@ gradle.rootProject {
 		}
 	}
 	afterEvaluate {
-		if (pluginManager.hasPlugin("fabric-loom")) {
-			dependencies.add("modCompileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
-		}
+		dependencies.add("compileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
 	}
 }
