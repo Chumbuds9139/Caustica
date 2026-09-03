@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -14,14 +13,13 @@ import java.util.concurrent.atomic.AtomicLong;
  *       runs longer than the OS watchdog (default ~2s).</li>
  * </ul>
  *
- * <p>Prevention is cheaper than recovery: after a long CPU-side composite, or after a
- * submit timeout, the next few frames force SPP=1, drop bounce count, and disable
- * volumetric clouds/fog so the GPU job stays under the OS reset window.
+ * <p>Settings are read from {@code -Dcaustica.rt.gpuSafety} and
+ * {@code -Dcaustica.rt.submitTimeoutSeconds} so this class does not depend on a
+ * CausticaConfig schema bump. Defaults: guard on, 15 second submit wait.
  */
 public final class GpuWatchdog {
     public static final GpuWatchdog INSTANCE = new GpuWatchdog();
 
-    /** Composite CPU time that arms the degrade window. */
     private static final long SLOW_FRAME_NS = 750_000_000L;
     private static final int DEGRADE_FRAMES = 90;
 
@@ -33,7 +31,12 @@ public final class GpuWatchdog {
     }
 
     public boolean enabled() {
-        return CausticaConfig.Rt.GpuSafety.ENABLED.value();
+        return booleanProperty("caustica.rt.gpuSafety", true);
+    }
+
+    public int submitTimeoutSeconds() {
+        int seconds = integerProperty("caustica.rt.submitTimeoutSeconds", 15);
+        return Math.min(60, Math.max(5, seconds));
     }
 
     public void beginComposite() {
@@ -101,7 +104,23 @@ public final class GpuWatchdog {
     }
 
     public long submitTimeoutNanos() {
-        int seconds = CausticaConfig.Rt.GpuSafety.SUBMIT_TIMEOUT_SECONDS.value();
-        return Math.max(1, seconds) * 1_000_000_000L;
+        return (long) submitTimeoutSeconds() * 1_000_000_000L;
+    }
+
+    private static boolean booleanProperty(String key, boolean fallback) {
+        String value = System.getProperty(key);
+        return value == null ? fallback : Boolean.parseBoolean(value);
+    }
+
+    private static int integerProperty(String key, int fallback) {
+        String value = System.getProperty(key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 }

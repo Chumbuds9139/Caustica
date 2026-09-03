@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.mixin;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuWatchdog;
 import org.spongepowered.asm.mixin.Mixin;
@@ -29,7 +28,7 @@ public abstract class VulkanCommandEncoderMixin {
 
     @ModifyConstant(method = "submit", constant = @Constant(longValue = 5000L), require = 0)
     private long caustica$stretchSubmitTimeoutMs(long original) {
-        return Math.max(5L, (long) CausticaConfig.Rt.GpuSafety.SUBMIT_TIMEOUT_SECONDS.value() * 1000L);
+        return Math.max(5L, (long) GpuWatchdog.INSTANCE.submitTimeoutSeconds() * 1000L);
     }
 
     @WrapMethod(method = "submit")
