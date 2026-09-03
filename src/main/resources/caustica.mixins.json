@@ -21,6 +21,8 @@
 		"OptionsSubScreenAccessor",
 		"ParticleEngineAccessor",
 		"RenderSetupAccessor",
+		"RtCompositeBudgetMixin",
+		"RtEntitiesBudgetMixin",
 		"RenderTypeAccessor",
 		"TextureAtlasAccessor",
 		"ParticleGroupAccessor",
