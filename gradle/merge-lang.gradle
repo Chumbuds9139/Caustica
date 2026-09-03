@@ -1,0 +1,28 @@
+def mergeLang = tasks.register("mergeCausticaLang") {
+	def srcTw = file("lang-src/zh_tw")
+	def srcCn = file("lang-src/zh_cn")
+	def outTw = file("src/main/resources/assets/caustica/lang/zh_tw.json")
+	def outCn = file("src/main/resources/assets/caustica/lang/zh_cn.json")
+	inputs.dir(srcTw)
+	inputs.dir(srcCn)
+	outputs.files(outTw, outCn)
+	doLast {
+		def slurp = new groovy.json.JsonSlurper()
+		def merge = { File dir, File out ->
+			def acc = [:]
+			dir.listFiles().findAll { it.name.endsWith(".json") }.sort { it.name }.each {
+				acc.putAll(slurp.parse(it) as Map)
+			}
+			out.parentFile.mkdirs()
+			out.setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(acc)) + "\n", "UTF-8")
+		}
+		merge(srcTw, outTw)
+		merge(srcCn, outCn)
+	}
+}
+
+afterEvaluate {
+	tasks.matching { it.name == "processResources" }.configureEach {
+		dependsOn mergeLang
+	}
+}
