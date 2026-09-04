@@ -1,0 +1,17 @@
+{
+ "caustica.options.rt.header": "光线追踪",
+ "caustica.options.rt.title": "光线追踪设置",
+ "caustica.options.rt.settingsButton": "光线追踪设置...",
+ "caustica.options.rt.imageMenuHeader": "画面与升频",
+ "caustica.options.rt.displayMenuHeader": "显示",
+ "caustica.options.rt.worldMenuHeader": "世界",
+ "caustica.options.rt.advancedMenuHeader": "高级",
+ "caustica.options.rt.effectsHeader": "效果",
+ "caustica.options.rt.pomHeader": "视差遮蔽贴图",
+ "caustica.options.rt.cloudsHeader": "云",
+ "caustica.options.rt.fogHeader": "体积雾",
+ "caustica.options.rt.lightsHeader": "光线追踪光照",
+ "caustica.options.rt.tonemapHeader": "光线追踪色调映射",
+ "caustica.options.rt.exposureHeader": "曝光",
+ "caustica.options.rt.resetToDefaults": "还原默认值"
+}

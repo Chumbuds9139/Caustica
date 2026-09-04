@@ -1,0 +1,11 @@
+{
+ "caustica.options.rt.dynamicIntensity.tooltip": "缩放手持发光物品（火把、灯笼、熔岩桶等）及其他动态光源的亮度。调高会让你周围更亮。",
+ "caustica.options.rt.heldItemLight": "手持物品光照",
+ "caustica.options.rt.heldItemLight.tooltip": "让手持发光物品（火把、灯笼、熔岩桶等）对世界投射动态光，并使用物品自己的颜色。关闭后手持物品不再照亮四周。",
+ "caustica.options.rt.restirSampling": "ReSTIR 采样",
+ "caustica.options.rt.imageMenuHeader": "画面与超分",
+ "caustica.options.rt.displayMenuHeader": "显示",
+ "caustica.options.rt.worldMenuHeader": "世界",
+ "caustica.options.rt.advancedMenuHeader": "高级",
+ "caustica.options.rt.resetToDefaults": "恢复默认值"
+}

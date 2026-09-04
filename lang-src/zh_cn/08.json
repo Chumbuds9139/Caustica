@@ -1,0 +1,10 @@
+{
+ "caustica.options.rt.adaptUp": "曝光向上适应",
+ "caustica.options.rt.adaptDown": "曝光向下适应",
+ "caustica.options.rt.reflexBoost": "Reflex 低延迟加速",
+ "caustica.options.rt.reflexMinInterval": "Reflex 最小帧间隔",
+ "caustica.options.rt.reflexMinInterval.off": "无上限",
+ "caustica.options.rt.fgEngine": "帧生成引擎",
+ "caustica.options.rt.fgEngine.native": "Caustica 原生插值",
+ "caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1（固定 2 倍）"
+}

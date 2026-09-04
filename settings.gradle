@@ -10,3 +10,16 @@ pluginManagement {
 }
 
 rootProject.name = "caustica"
+
+gradle.rootProject {
+	repositories {
+		maven {
+			name = "CaffeineMC"
+			url = "https://maven.caffeinemc.net/releases"
+		}
+	}
+	afterEvaluate {
+		dependencies.add("compileOnly", "net.caffeinemc:sodium-fabric-api:0.9.1+mc26.2")
+		apply from: "gradle/merge-lang.gradle"
+	}
+}
