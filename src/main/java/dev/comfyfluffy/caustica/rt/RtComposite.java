@@ -593,6 +593,11 @@ public final class RtComposite {
     // boundBlockAlbedoAtlasHandle to a fresh non-zero value (MC's deferred free keeps the old handle live for a few
     // frames, so "handle != 0" alone isn't enough to tell old from new).
     private volatile boolean reloadRebindRequested;
+    // The reload Minecraft started, when known. The block atlas is only one of the things a reload
+    // replaces: entity, particle and item textures are re-created too, and not necessarily before the
+    // atlas. Resuming as soon as the atlas handle changes could bind textures that the same reload is
+    // about to destroy, so ray tracing stays suspended until the whole reload has finished.
+    private volatile java.util.concurrent.CompletableFuture<?> resourceReload;
     // The block-atlas view handle currently bound into the world pipeline (set by bindWorldTextures).
     private long boundBlockAlbedoAtlasHandle;
     private int bindlessTextureCapacity;
@@ -872,10 +877,31 @@ public final class RtComposite {
         if (RtEntityTextures.maxTextures() > bindlessTextureCapacity) {
             return true;
         }
+        if (resourceReloadInFlight()) {
+            return true;
+        }
         if (reloadRebindRequested) {
             long atlas = blockAlbedoAtlasView();
             return atlas == 0L || atlas == boundBlockAlbedoAtlasHandle;
         }
+        return false;
+    }
+
+    /** Called with the future of the reload announced by {@link #onResourceReloadStart()}. */
+    public void onResourceReloadFuture(java.util.concurrent.CompletableFuture<?> reload) {
+        resourceReload = reload;
+    }
+
+    /** Whether Minecraft is still replacing resources; completion, successful or not, ends the wait. */
+    private boolean resourceReloadInFlight() {
+        java.util.concurrent.CompletableFuture<?> reload = resourceReload;
+        if (reload == null) {
+            return false;
+        }
+        if (!reload.isDone()) {
+            return true;
+        }
+        resourceReload = null;
         return false;
     }
 
@@ -1013,6 +1039,9 @@ public final class RtComposite {
             // old view handle live for a few frames, then swaps in the new atlas (whose GPU upload may lag,
             // leaving the handle 0 transiently). Skip RT — vanilla renders — until the handle becomes a
             // fresh, non-zero value different from what we last bound; only then rebuild against it.
+            if (resourceReloadInFlight()) {
+                return false;
+            }
             if (reloadRebindRequested) {
                 long atlas = blockAlbedoAtlasView();
                 if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
@@ -1916,7 +1945,7 @@ public final class RtComposite {
             }
             pushBuf.flush(0L, flushBytes);
             // Upload any entity textures registered this frame into the bindless set before the trace.
-            RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx));
+            RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx), boundBlockAlbedoAtlasHandle);
             // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
             if (!fe.blas().isEmpty()) {

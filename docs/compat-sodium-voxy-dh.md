@@ -57,6 +57,25 @@ What it does not cover: the guard limits the tracer's own cost. A reset caused b
 overheating, an unstable overclock, or video memory exhausted by something it does not control can
 still happen; the log line and the VMA heap budgets printed by the watchdog tell these cases apart.
 
+## Destroyed textures (device loss with a READ_INVALID fault)
+
+A crash log from a multiplayer session showed a different failure from an overloaded GPU: the
+`VK_EXT_device_fault` report listed shader instruction faults and a `READ_INVALID` address that
+belonged to no live Caustica buffer, one frame after a resource reload finished. Video memory was far
+below its budget. That is a shader sampling an image that no longer exists.
+
+Entity, item and particle textures are bound into a bindless array, and the slot for each was cached
+by render type or by texture location. Minecraft destroys and re-creates textures while the game runs
+(a player skin finishing its download, a server resource pack, a mod re-registering a dynamic texture,
+the later stages of a reload), and the render type keeps its identity across that, so the array went
+on describing the destroyed image. Two changes close this:
+
+* every cached view is checked for liveness when used, and once per frame every slot whose texture has
+  been closed is re-pointed at the block atlas before the trace, so neither freshly captured nor cached
+  geometry can sample freed memory (`RtEntityTextures`, `RtBindlessSlotTable.retireDeadOwners`);
+* after a resource reload, ray tracing now stays suspended until the reload has completed, not merely
+  until the block atlas has changed.
+
 ## Sodium
 
 Sodium replaces the vanilla Video Settings screen, which is where the "Ray Tracing Settings..." button

@@ -26,4 +26,13 @@ public class MinecraftReloadMixin {
     private void caustica$rtReloadStart(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
         RtComposite.INSTANCE.onResourceReloadStart();
     }
+
+    /**
+     * Hand the reload's future to the renderer so it stays suspended until every texture the reload
+     * replaces exists, not merely until the block atlas does.
+     */
+    @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("RETURN"))
+    private void caustica$rtReloadFuture(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
+        RtComposite.INSTANCE.onResourceReloadFuture(cir.getReturnValue());
+    }
 }

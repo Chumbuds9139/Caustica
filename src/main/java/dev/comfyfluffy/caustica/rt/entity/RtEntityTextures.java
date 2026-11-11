@@ -54,7 +54,16 @@ public final class RtEntityTextures {
     // texture transform makes RenderTypes.energySwirl() allocate a new RenderType each frame). A weak map
     // lets those dead identities be collected instead of accumulating; stable singletons (zombie.png, …)
     // stay cached and skip the costly RenderType.prepare().
-    private final Map<RenderType, Long> viewCache = new WeakHashMap<>();
+    //
+    // The value is the view OBJECT, not its handle: a texture can be destroyed and re-created while the
+    // game runs (a player skin finishing its download, a server resource pack, a mod re-registering a
+    // dynamic texture, the tail of a resource reload). The render type keeps its identity across that, so
+    // a cached handle would keep pointing the bindless array at the destroyed image, and the first ray to
+    // sample it reads freed GPU memory: VK_ERROR_DEVICE_LOST. Every hit is therefore checked for liveness.
+    private final Map<RenderType, GpuTextureView> viewCache = new WeakHashMap<>();
+    // Render types whose texture could not be resolved at all; remembered so they are not re-prepared
+    // every frame. Cleared with the rest on reset.
+    private final Map<RenderType, Boolean> unresolved = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
     // Image-view handle → bindless slot, plus the descriptor writes those allocations still owe. The slot
     // identifies a *texture*, not a RenderType, so many render types that differ only by a texture
@@ -64,11 +73,15 @@ public final class RtEntityTextures {
     // Atlas-location → bindless slot, for items/blocks (which texture from an atlas, not a per-type
     // file). Seeded with the block atlas = slot 0 (also the fallback). Items use a separate item atlas.
     private final Map<Identifier, Integer> atlasSlotCache = new HashMap<>();
+    // The view each cached atlas/texture slot was resolved from, for the same liveness check as viewCache.
+    // The block atlas (slot 0) has no entry: it is bound by the pipeline and replaced only by a reload.
+    private final Map<Identifier, GpuTextureView> atlasViewCache = new HashMap<>();
     // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
+    private boolean loggedRetirement;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons); see whiteSlot().
     private static final Identifier WHITE_LOCATION = Identifier.fromNamespaceAndPath("caustica", "rt_white");
     private boolean whiteRegistered;
@@ -88,7 +101,8 @@ public final class RtEntityTextures {
         if (renderType == null) {
             return 0;
         }
-        return slotForView(resolveView(renderType));
+        GpuTextureView view = resolveLiveView(renderType);
+        return view == null ? 0 : slots.perOwner(view, vkImageView(view));
     }
 
     /** Canonical material ID for a full entity texture, or the neutral runtime-texture fallback. */
@@ -108,19 +122,29 @@ public final class RtEntityTextures {
         }
         Integer cached = atlasSlotCache.get(atlasLocation);
         if (cached != null) {
-            return cached;
+            GpuTextureView cachedView = atlasViewCache.get(atlasLocation);
+            // No recorded view: the pre-seeded block atlas, or a failed resolution cached as fallback.
+            if (cachedView == null || !isDead(cachedView)) {
+                return cached;
+            }
+            // The texture behind this location was replaced; resolve the live one below.
         }
-        long view = 0L;
+        GpuTextureView view = null;
         try {
-            GpuTextureView v = Minecraft.getInstance().getTextureManager().getTexture(atlasLocation).getTextureView();
-            view = vkImageView(v);
+            view = Minecraft.getInstance().getTextureManager().getTexture(atlasLocation).getTextureView();
         } catch (Throwable t) {
             if (!loggedFailure) {
                 loggedFailure = true;
                 CausticaMod.LOGGER.warn("RT atlas texture resolution failed for {}", atlasLocation, t);
             }
         }
-        int slot = slotForView(view);
+        int slot = 0;
+        if (view != null && !isDead(view)) {
+            slot = slots.perOwner(view, vkImageView(view));
+            atlasViewCache.put(atlasLocation, view);
+        } else {
+            atlasViewCache.remove(atlasLocation);
+        }
         atlasSlotCache.put(atlasLocation, slot);
         return slot;
     }
@@ -194,19 +218,41 @@ public final class RtEntityTextures {
     }
 
     /**
-     * Map a resolved image-view handle to a stable bindless slot, allocating one on first sight (queued
-     * for upload via {@link #uploadPending}). Returns 0 (fallback) when the view is unresolved or the
-     * array is full. Deduping by handle is what bounds slot use: distinct render types backed by the same
-     * texture share a slot instead of each consuming one.
+     * Bring the pipeline's bindless set up to date before the trace: first re-point every slot whose
+     * texture has been destroyed at {@code fallbackView} (the block atlas), then write the slots allocated
+     * since the last frame.
+     *
+     * <p>The first step is what keeps geometry captured earlier safe. A cached block-entity mesh, or a
+     * frame still in flight, can carry the slot of a texture Minecraft has since closed; Minecraft frees
+     * the image a couple of submissions later, so the descriptor has to stop referencing it now. Sampling
+     * the fallback for a frame is a wrong colour at worst, sampling the freed image is a lost device.
      */
-    private int slotForView(long view) {
-        return slots.shared(view);
-    }
-
-    /** Write any newly-registered entity textures into the pipeline's bindless set (before the trace). */
-    public void uploadPending(RtPipeline pipeline, long sampler) {
+    public void uploadPending(RtPipeline pipeline, long sampler, long fallbackView) {
+        int retired = slots.retireDeadOwners(
+                owner -> owner instanceof GpuTextureView view && isDead(view), fallbackView);
+        if (retired > 0) {
+            atlasViewCache.values().removeIf(RtEntityTextures::isDead);
+            if (!loggedRetirement) {
+                loggedRetirement = true;
+                CausticaMod.LOGGER.info("RT entity textures: {} texture(s) were destroyed while in use by the "
+                        + "bindless array and were re-pointed at the fallback (logged once)", retired);
+            }
+        }
         for (RtBindlessSlotTable.Write w : slots.drainPending()) {
             pipeline.setEntityAlbedoTexture(w.slot(), w.handle(), sampler);
+        }
+    }
+
+    /** Whether the GPU image behind {@code view} has been (or is being) destroyed. */
+    private static boolean isDead(GpuTextureView view) {
+        try {
+            if (view.isClosed()) {
+                return true;
+            }
+            var texture = view.texture();
+            return texture == null || texture.isClosed();
+        } catch (RuntimeException e) {
+            return true; // an object that cannot even answer is not safe to sample
         }
     }
 
@@ -219,9 +265,11 @@ public final class RtEntityTextures {
     public void reset(int descriptorCapacity) {
         capacity = Math.max(1, descriptorCapacity);
         viewCache.clear();
+        unresolved.clear();
         locationCache.clear();
         slots.reset();
         atlasSlotCache.clear();
+        atlasViewCache.clear();
         atlasSlotCache.put(TextureAtlas.LOCATION_BLOCKS, 0); // block atlas = the slot-0 fallback
     }
 
@@ -266,14 +314,29 @@ public final class RtEntityTextures {
 
     /** The Vulkan image-view handle of {@code renderType}'s primary texture, or 0 if it can't be resolved. */
     public long resolveView(RenderType renderType) {
+        GpuTextureView view = resolveLiveView(renderType);
+        return view == null ? 0L : vkImageView(view);
+    }
+
+    /**
+     * The live view of {@code renderType}'s primary texture, or null if it can't be resolved. A cached
+     * view whose image has been destroyed is discarded and the texture is resolved again, so a texture
+     * replaced under an unchanged render type is picked up on its next use.
+     */
+    private GpuTextureView resolveLiveView(RenderType renderType) {
         if (renderType == null) {
-            return 0L;
+            return null;
         }
-        Long cached = viewCache.get(renderType);
+        GpuTextureView cached = viewCache.get(renderType);
         if (cached != null) {
-            return cached;
+            if (!isDead(cached)) {
+                return cached;
+            }
+            viewCache.remove(renderType);
+        } else if (unresolved.containsKey(renderType)) {
+            return null;
         }
-        long handle = 0L;
+        GpuTextureView resolved = null;
         try {
             PreparedRenderType prepared = renderType.prepare();
             GpuTextureView chosen = null;
@@ -291,8 +354,8 @@ public final class RtEntityTextures {
             if (chosen == null) {
                 chosen = firstNonAux;
             }
-            if (chosen != null) {
-                handle = vkImageView(chosen);
+            if (chosen != null && vkImageView(chosen) != 0L && !isDead(chosen)) {
+                resolved = chosen;
             }
         } catch (Throwable t) {
             if (!loggedFailure) {
@@ -300,8 +363,12 @@ public final class RtEntityTextures {
                 CausticaMod.LOGGER.warn("RT entity texture resolution failed for {}", renderType, t);
             }
         }
-        viewCache.put(renderType, handle);
-        return handle;
+        if (resolved != null) {
+            viewCache.put(renderType, resolved);
+        } else {
+            unresolved.put(renderType, Boolean.TRUE);
+        }
+        return resolved;
     }
 
     private static long vkImageView(GpuTextureView view) {

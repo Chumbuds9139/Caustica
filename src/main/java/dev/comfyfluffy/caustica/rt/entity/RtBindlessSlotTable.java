@@ -100,6 +100,43 @@ final class RtBindlessSlotTable {
         return slot;
     }
 
+    /**
+     * Stop describing textures whose owner has been destroyed. Each such slot keeps its number (geometry
+     * captured earlier may still carry it) but its descriptor is re-pointed at {@code fallbackHandle}, so
+     * nothing can sample an image that no longer exists. The slot is not handed out again before
+     * {@link #reset}; a replacement texture simply takes a fresh slot through {@link #perOwner}.
+     *
+     * <p>This is the one deliberate exception to "a slot's handle never changes": the old handle is about
+     * to dangle, and a frame still in flight that reads the slot is better served by the fallback than by
+     * freed memory.
+     *
+     * @return how many slots were re-pointed
+     */
+    int retireDeadOwners(java.util.function.Predicate<Object> dead, long fallbackHandle) {
+        if (byOwner.isEmpty()) {
+            return 0;
+        }
+        int retired = 0;
+        for (java.util.Iterator<Map.Entry<Object, Integer>> it = byOwner.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Object, Integer> entry = it.next();
+            if (!dead.test(entry.getKey())) {
+                continue;
+            }
+            int slot = entry.getValue();
+            it.remove();
+            // The handle value may be reused by the driver for an unrelated image; forget the mapping so
+            // a later shared() lookup cannot mistake that image for this slot.
+            byHandle.values().removeIf(mapped -> mapped == slot);
+            // A write still owed for the dead texture must not be performed after the fallback write.
+            pending.removeIf(write -> write.slot() == slot);
+            if (fallbackHandle != 0L) {
+                pending.add(new Write(slot, fallbackHandle));
+            }
+            retired++;
+        }
+        return retired;
+    }
+
     /** The descriptor writes owed since the last drain; the caller performs them and they are cleared. */
     List<Write> drainPending() {
         if (pending.isEmpty()) {

@@ -139,4 +139,48 @@ final class RtBindlessSlotTableTest {
         assertTrue(slots.drainPending().isEmpty(), "writes for a torn-down pipeline must not be replayed");
         assertEquals(1, slots.shared(0x2000L));
     }
+
+    /**
+     * A texture destroyed while its slot is still referenced (a player skin replaced mid-session, the
+     * tail of a resource reload) must stop being described by the descriptor: sampling a freed image is a
+     * GPU page fault, i.e. VK_ERROR_DEVICE_LOST. The slot keeps its number for geometry captured earlier,
+     * but is re-pointed at the fallback, and the replacement texture gets a slot of its own.
+     */
+    @Test
+    void destroyedOwnersAreRepointedAtTheFallbackAndNeverReused() {
+        RtBindlessSlotTable slots = new RtBindlessSlotTable(() -> 16);
+        Object skinV1 = new Object();
+        Object other = new Object();
+        int skinSlot = slots.perOwner(skinV1, 0x1000L);
+        int otherSlot = slots.perOwner(other, 0x2000L);
+        slots.drainPending();
+
+        int retired = slots.retireDeadOwners(owner -> owner == skinV1, 0xA71A5L);
+        assertEquals(1, retired);
+        assertEquals(List.of(new RtBindlessSlotTable.Write(skinSlot, 0xA71A5L)), slots.drainPending(),
+                "the dead texture's slot must be rewritten to the fallback view");
+
+        // The live texture is untouched, and nothing is retired twice.
+        assertEquals(otherSlot, slots.perOwner(other, 0x2000L));
+        assertEquals(0, slots.retireDeadOwners(owner -> owner == skinV1, 0xA71A5L));
+        assertEquals(List.of(), slots.drainPending());
+
+        // The replacement inherits the dead image's handle value (drivers may do that) but must not
+        // inherit its slot: that slot now describes the fallback.
+        Object skinV2 = new Object();
+        int replacement = slots.perOwner(skinV2, 0x1000L);
+        assertTrue(replacement != skinSlot && replacement != otherSlot && replacement != 0);
+        assertEquals(List.of(new RtBindlessSlotTable.Write(replacement, 0x1000L)), slots.drainPending());
+        assertEquals(replacement, slots.shared(0x1000L), "the handle now identifies the live replacement");
+    }
+
+    @Test
+    void aTextureDestroyedBeforeItsFirstUploadIsNeverWritten() {
+        RtBindlessSlotTable slots = new RtBindlessSlotTable(() -> 16);
+        Object shortLived = new Object();
+        int slot = slots.perOwner(shortLived, 0x3000L); // write still pending
+        slots.retireDeadOwners(owner -> owner == shortLived, 0xA71A5L);
+        assertEquals(List.of(new RtBindlessSlotTable.Write(slot, 0xA71A5L)), slots.drainPending(),
+                "only the fallback may be written; the dead handle's pending write is dropped");
+    }
 }
