@@ -369,6 +369,34 @@ public final class VulkanDiagnostics {
         }
     }
 
+    /**
+     * Warn-level view of what Caustica has in flight, for a GPU that is slow rather than lost. Callable
+     * from any thread and deliberately free of Vulkan calls that need the device to be responsive.
+     */
+    public static void logStallSnapshot() {
+        CausticaMod.LOGGER.warn("Vulkan in-flight state during stall: {}", IN_FLIGHT);
+        long totalBytes = BUFFERS.values().stream().mapToLong(BufferRange::size).sum();
+        CausticaMod.LOGGER.warn("Caustica live BDA buffers during stall: count={}, bytes={}",
+                BUFFERS.size(), formatBytes(totalBytes));
+        RtContext context = RtContext.currentOrNull();
+        int heaps = memoryHeapCount;
+        if (context == null || heaps <= 0) {
+            return;
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VmaBudget.Buffer budgets = VmaBudget.calloc(heaps, stack);
+            Vma.vmaGetHeapBudgets(context.vma(), budgets);
+            for (int i = 0; i < heaps; i++) {
+                VmaBudget budget = budgets.get(i);
+                long usage = budget.usage();
+                long limit = budget.budget();
+                CausticaMod.LOGGER.warn("VMA heap[{}] during stall: usage={}, budget={}{}", i,
+                        formatBytes(usage), formatBytes(limit),
+                        limit > 0L && usage > limit ? "  <-- over budget: video memory is oversubscribed" : "");
+            }
+        }
+    }
+
     private static void logRuntimeSnapshot() {
         List<String> breadcrumbs;
         synchronized (BREADCRUMBS) {

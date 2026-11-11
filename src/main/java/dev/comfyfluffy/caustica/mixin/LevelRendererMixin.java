@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
+import dev.comfyfluffy.caustica.compat.DistantHorizonsCompat;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
@@ -47,6 +48,8 @@ public abstract class LevelRendererMixin {
 		}
 
 		VanillaRenderController.INSTANCE.markWorldSkipped();
+		// DH services its upload queue from a hook inside the frame graph being cancelled here.
+		DistantHorizonsCompat.pumpRenderThreadTasks();
 		ci.cancel();
 	}
 }

@@ -21,6 +21,19 @@ repositories {
 		name = "Fabric"
 		url = "https://maven.fabricmc.net/"
 	}
+	// Sodium's config API only (compile-time): lets the optional sodium:config_api_user entrypoint
+	// implement Sodium's interface. Nothing from this repository is bundled into the JAR.
+	exclusiveContent {
+		forRepository {
+			maven {
+				name = "CaffeineMC"
+				url = "https://maven.caffeinemc.net/releases"
+			}
+		}
+		filter {
+			includeGroup "net.caffeinemc"
+		}
+	}
 	mavenCentral()
 }
 
@@ -54,6 +67,9 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	// Optional integration: Sodium is never required at run time. The API artifact is identical for
+	// Sodium 0.9.2 and 0.9.3 on 26.3; the older one is pinned so both are satisfied.
+	compileOnly("net.caffeinemc:sodium-fabric-api:${project.sodium_api_version}") { transitive = false }
 	testImplementation platform("org.junit:junit-bom:5.14.4")
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"

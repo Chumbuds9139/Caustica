@@ -66,7 +66,23 @@ them the build still succeeds and the corresponding option is simply not offered
 
 Caustica takes over the world renderer, so mods that heavily modify world rendering, shader
 pipelines, post-processing or the Vulkan backend may conflict. UI-only mods are more likely to work.
-Distant Horizons and Voxy have dedicated compatibility paths (`compat/`).
+
+| Mod | Status |
+| --- | --- |
+| **Sodium** 0.9.2 / 0.9.3 | Caustica appears as its own entry in Sodium's settings screen: a page that opens the full Ray Tracing hub, plus native pages for the renderer's options. |
+| **Distant Horizons** 3.3.x | DH's LOD meshes are captured and ray traced beyond the loaded chunks. Caustica drives DH's upload queue itself while the vanilla world pass is replaced. |
+| **Voxy** 0.2.20 (unmodified) | Voxy vetoes the Vulkan backend and only ships an OpenGL renderer. Caustica keeps Vulkan, leaves that renderer off, and ray traces the LOD voxels Voxy still ingests and stores. |
+
+Details, limits and the relevant config keys are in
+[docs/compat-sodium-voxy-dh.md](docs/compat-sodium-voxy-dh.md).
+
+## Stability
+
+Minecraft's Vulkan backend crashes when a frame's GPU work is not finished within five seconds
+("5s timeout reached when waiting for VK semaphore" / "GPU timeout attempting to acquire next
+frame"). A path tracer can exceed that while the GPU is perfectly healthy, so Caustica waits up to
+`stability.gpu-timeout-seconds` (default 60) instead, logging what it is waiting for. A genuinely lost
+device is still reported immediately.
 
 ## License
 

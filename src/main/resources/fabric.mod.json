@@ -15,6 +15,9 @@
     ],
     "client": [
       "dev.comfyfluffy.caustica.client.CausticaClient"
+    ],
+    "sodium:config_api_user": [
+      "dev.comfyfluffy.caustica.compat.sodium.CausticaSodiumConfig"
     ]
   },
   "mixins": [

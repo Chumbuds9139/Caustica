@@ -361,6 +361,63 @@ public final class DistantHorizonsCompat {
         }
     }
 
+    /**
+     * Run Distant Horizons' queued render-thread work for this frame.
+     *
+     * <p>DH drains that queue (LOD vertex-buffer creation and upload, buffer disposal) from its own
+     * {@code renderLods()} call, which it reaches through a hook inside {@code LevelRenderer}'s frame
+     * graph. While the path tracer owns the image that frame graph is cancelled, so the queue would only
+     * be serviced by DH's once-per-second safety timer with a half-second budget: uploads crawl, their
+     * futures stay pending, the quad tree stops requesting further sections, and every timer tick is a
+     * visible render-thread hitch. Draining it here, once per skipped frame and with DH's own per-frame
+     * time budget, keeps the LOD pipeline that feeds {@link #captureLodBuffers} flowing smoothly.
+     */
+    public static void pumpRenderThreadTasks() {
+        if (!LOADED || renderTaskPumpFailed) return;
+        try {
+            RenderTaskApi.INSTANCE.run();
+        } catch (java.lang.reflect.InvocationTargetException taskFailure) {
+            // One queued DH task threw. DH's own caller logs and carries on with the rest of the queue on
+            // the next frame; do the same instead of disabling the pump for the whole session.
+            if (!renderTaskFailureLogged) {
+                renderTaskFailureLogged = true;
+                dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn(
+                        "A Distant Horizons render-thread task failed (logged once)", taskFailure.getCause());
+            }
+        } catch (Throwable t) {
+            // Includes ExceptionInInitializerError/NoClassDefFoundError from a DH build with a different
+            // internal layout. DH's own timer remains as the fallback, exactly as before this pump existed.
+            renderTaskPumpFailed = true;
+            dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn(
+                    "Distant Horizons render-thread task pump is unavailable; LOD streaming falls back to "
+                            + "DH's slower built-in timer", t);
+        }
+    }
+
+    private static volatile boolean renderTaskPumpFailed;
+    private static volatile boolean renderTaskFailureLogged;
+
+    /** DH's render-thread task queue; isolated so its absence cannot affect the other reflective surfaces. */
+    private static final class RenderTaskApi {
+        static final RenderTaskApi INSTANCE = new RenderTaskApi();
+        private final Object handler;
+        private final Method runRenderThreadTasks;
+
+        private RenderTaskApi() {
+            try {
+                Class<?> type = Class.forName("com.seibel.distanthorizons.core.render.RenderThreadTaskHandler");
+                handler = type.getField("INSTANCE").get(null);
+                runRenderThreadTasks = type.getMethod("runRenderThreadTasks");
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("Unsupported Distant Horizons render task handler", e);
+            }
+        }
+
+        void run() throws ReflectiveOperationException {
+            if (handler != null) runRenderThreadTasks.invoke(handler);
+        }
+    }
+
     /** Isolated from the terrain API so a DH renderer-internal change cannot disable terrain capture. */
     private static final class RenderApi {
         static final RenderApi INSTANCE = new RenderApi();

@@ -178,3 +178,4 @@ net/minecraft/client/renderer/state/level/CameraEntityRenderState	F	isSleeping	Z
 net/minecraft/client/renderer/state/level/PlayerRenderState	F	hasPlayer	Z
 net/minecraft/client/renderer/state/level/PlayerRenderState	F	firstPersonHandsAndItems	Lnet/minecraft/client/renderer/state/level/FirstPersonHandsAndItemsRenderState;
 net/minecraft/client/renderer/state/OptionsRenderState	F	bobView	Z
+com/mojang/renderpearl/backend/vulkan/VulkanCommandEncoder	M	awaitSubmitCompletion	(JJ)Z

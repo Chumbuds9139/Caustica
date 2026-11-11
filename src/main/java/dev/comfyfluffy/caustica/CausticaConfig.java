@@ -1163,6 +1163,36 @@ public final class CausticaConfig {
          * a spyglass is scoped. The death and underwater/lava FOV modulation baked into {@code hudFov} is
          * preserved either way.
          */
+        /**
+         * Stability knobs. None of these change the image; they decide how patient the renderer is with a
+         * GPU that is alive but temporarily slow, and how optional world-rendering mods are bridged.
+         */
+        public static final class Stability {
+            /**
+             * How long a frame may wait for the GPU before the game gives up. Minecraft hard-codes five
+             * seconds, which a path tracer can exceed without anything being broken (VRAM oversubscription,
+             * a driver shader/BVH hitch, alt-tab, a huge LOD refresh). Values at or below 5 keep the vanilla
+             * behaviour; a genuinely lost device is still reported immediately, not after this budget.
+             */
+            public static final IntSetting GPU_TIMEOUT_SECONDS =
+                    clampedInt("caustica.rt.gpuTimeoutSeconds", "stability.gpu-timeout-seconds", 60, 5, 600);
+            /**
+             * Let Minecraft create the Vulkan device even though Voxy vetoes that backend. Voxy's OpenGL
+             * renderer is then left switched off and its LOD data is ray traced by Caustica instead.
+             */
+            public static final BooleanSetting VOXY_VULKAN_BRIDGE =
+                    bool("caustica.rt.voxyVulkanBridge", "stability.voxy-vulkan-bridge", true);
+            /** Ray trace Voxy's LOD terrain beyond the loaded chunks (the Voxy toggle in the RT settings). */
+            public static final BooleanSetting VOXY_LODS =
+                    bool("caustica.rt.voxyLods", "stability.voxy-lods", true);
+            /** How far Voxy LODs are ray traced, in chunks (the RT settings slider moves in steps of 32). */
+            public static final IntSetting VOXY_LOD_DISTANCE_CHUNKS =
+                    clampedInt("caustica.rt.voxyLodDistanceChunks", "stability.voxy-lod-distance-chunks", 96, 32, 512);
+
+            private Stability() {
+            }
+        }
+
         public static final class Hand {
             public static final BooleanSetting FOV_FOLLOWS_CAMERA =
                     bool("caustica.rt.handFov", "hand.fov-follows-camera", false);

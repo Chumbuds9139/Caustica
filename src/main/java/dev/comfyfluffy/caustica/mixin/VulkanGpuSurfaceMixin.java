@@ -101,6 +101,28 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Unique
 	private int caustica$colorSpace = 0;
 
+	/**
+	 * Vanilla gives the presentation engine five seconds to hand back an image and crashes with "GPU
+	 * timeout attempting to acquire next frame" otherwise. Retry the acquire in vanilla-sized slices up
+	 * to {@link dev.comfyfluffy.caustica.rt.RtGpuWatchdog}'s budget instead: {@code VK_TIMEOUT} leaves
+	 * the semaphore unsignalled and no image acquired, so calling again with the same arguments is valid.
+	 * Every other result (success, suboptimal, out of date, device lost) is returned to vanilla unchanged.
+	 */
+	@com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(
+			method = "acquireNextTexture",
+			at = @At(value = "INVOKE",
+					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkAcquireNextImageKHR(Lorg/lwjgl/vulkan/VkDevice;JJJJLjava/nio/IntBuffer;)I"))
+	private int caustica$patientAcquire(org.lwjgl.vulkan.VkDevice vkDevice, long swapchainHandle, long timeoutNanos,
+			long semaphore, long fence, java.nio.IntBuffer imageIndex,
+			com.llamalad7.mixinextras.injector.wrapoperation.Operation<Integer> original) {
+		int[] result = {org.lwjgl.vulkan.VK10.VK_TIMEOUT};
+		dev.comfyfluffy.caustica.rt.RtGpuWatchdog.await(slice -> {
+			result[0] = original.call(vkDevice, swapchainHandle, slice, semaphore, fence, imageIndex);
+			return result[0] != org.lwjgl.vulkan.VK10.VK_TIMEOUT;
+		}, timeoutNanos, "the next swapchain image");
+		return result[0];
+	}
+
 	@Inject(method = "<init>(Lcom/mojang/renderpearl/backend/vulkan/VulkanDevice;J)V", at = @At("TAIL"))
 	private void caustica$logHdrCapabilities(VulkanDevice device, long windowHandle, CallbackInfo ci) {
 		try {

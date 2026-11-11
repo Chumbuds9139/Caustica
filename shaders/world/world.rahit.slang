@@ -123,7 +123,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float2 uv = bary.x * uvs[i0] + bary.y * uvs[i1] + bary.z * uvs[i2];
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
-        MaterialHeader materialHeader;
+        // Zero-initialised: only ENTITY_BIT instances carry a material record, and every read below is
+        // gated on that kind. An explicit value keeps the SPIR-V free of OpUndef and satisfies Slang's
+        // definite-assignment check (E41035), which newer compilers report under -warnings-as-errors.
+        MaterialHeader materialHeader = (MaterialHeader)0;
         bool stochasticAlpha = false;
         if (instanceKind == ENTITY_BIT) {
             materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
