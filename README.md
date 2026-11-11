@@ -84,6 +84,11 @@ frame"). A path tracer can exceed that while the GPU is perfectly healthy, so Ca
 `stability.gpu-timeout-seconds` (default 60) instead, logging what it is waiting for. A genuinely lost
 device is still reported immediately.
 
+A GPU that Windows actually resets (TDR) cannot be recovered, so Caustica also keeps frames from
+getting that long in the first place: the TDR guard starts tracing at minimum cost, ramps up to the
+configured samples/bounces only while the GPU keeps up, and sheds load when it falls behind
+(`stability.tdr-guard`, on by default).
+
 ## License
 
 Caustica's project-owned source code and documentation are licensed under the

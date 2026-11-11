@@ -1177,6 +1177,16 @@ public final class CausticaConfig {
             public static final IntSetting GPU_TIMEOUT_SECONDS =
                     clampedInt("caustica.rt.gpuTimeoutSeconds", "stability.gpu-timeout-seconds", 60, 5, 600);
             /**
+             * Automatically trace fewer samples/bounces than configured while the GPU cannot keep a frame
+             * inside {@link #TDR_GUARD_FRAME_MS}, and ramp up to the configured quality gradually. This is
+             * what keeps a frame from running long enough for the OS to reset the GPU (TDR).
+             */
+            public static final BooleanSetting TDR_GUARD =
+                    bool("caustica.rt.tdrGuard", "stability.tdr-guard", true);
+            /** GPU frame time, in milliseconds, the guard keeps frames under (Windows resets at ~2000). */
+            public static final IntSetting TDR_GUARD_FRAME_MS =
+                    clampedInt("caustica.rt.tdrGuardFrameMs", "stability.tdr-guard-frame-ms", 350, 100, 1500);
+            /**
              * Let Minecraft create the Vulkan device even though Voxy vetoes that backend. Voxy's OpenGL
              * renderer is then left switched off and its LOD data is ray traced by Caustica instead.
              */

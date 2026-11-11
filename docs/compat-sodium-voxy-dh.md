@@ -28,6 +28,35 @@ occluded. `RtGpuWatchdog` therefore repeats the same vanilla wait in five-second
 This removes the crash for a slow-but-alive GPU. It cannot revive a device the driver or the OS has
 actually reset (for example a Windows TDR); that case is still fatal, as in vanilla.
 
+## TDR guard (GPU reset by Windows)
+
+Windows resets a GPU it cannot get a response from for about two seconds. The game sees
+`VK_ERROR_DEVICE_LOST` and cannot continue, so the only protection is to keep every frame far below
+that. A path-traced frame costs roughly resolution x samples x bounces; settings the hardware cannot
+afford, or exhausted video memory, are how frames get that long.
+
+`RtLoadGovernor` owns the two cheapest cost levers, samples per pixel and maximum bounces, and treats
+the configured values as an upper bound:
+
+* **Slow start** - tracing begins at 1 sample / 2 bounces and climbs one step at a time, only while the
+  measured frame time predicts the next step still fits. An unaffordable setting is never submitted
+  at full cost, so the first frame after joining a world or raising a slider cannot be the fatal one.
+* **Back-off** - a GPU-bound frame over the target sheds samples, then bounces; one over three times
+  the target drops straight to the minimum.
+* **CPU hitches are ignored** - only frames in which the render thread was actually blocked waiting
+  for the GPU count, so chunk loading or a menu pause does not cost image quality.
+
+Each reduction is logged ("TDR guard: ..."). Config, section `stability`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tdr-guard` | `true` | Enable the guard. `false` always traces at the configured samples/bounces. |
+| `tdr-guard-frame-ms` | `350` | GPU frame time to stay under, 100-1500. Raise it only if you deliberately run at very low frame rates. |
+
+What it does not cover: the guard limits the tracer's own cost. A reset caused by a driver fault,
+overheating, an unstable overclock, or video memory exhausted by something it does not control can
+still happen; the log line and the VMA heap budgets printed by the watchdog tell these cases apart.
+
 ## Sodium
 
 Sodium replaces the vanilla Video Settings screen, which is where the "Ray Tracing Settings..." button

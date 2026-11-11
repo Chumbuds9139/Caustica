@@ -144,12 +144,14 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
 
+    /** Samples per pixel for this frame: the configured value, as limited by the TDR guard. */
     private static int spp() {
-        return CausticaConfig.Rt.Composite.SPP.value();
+        return RtLoadGovernor.INSTANCE.spp();
     }
 
+    /** Maximum bounces for this frame: the configured value, as limited by the TDR guard. */
     private static int maxBounces() {
-        return CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
+        return RtLoadGovernor.INSTANCE.bounces();
     }
 
     private static boolean waterWaves() {
@@ -966,6 +968,9 @@ public final class RtComposite {
 
     public boolean composite(GpuTexture nativeColor, int width, int height) {
         frameCounter++; // global frame serial used by remaining per-frame/entity rings and diagnostics
+        // Settle this frame's sample/bounce budget from how the GPU coped with the previous one.
+        RtLoadGovernor.INSTANCE.beginFrame(CausticaConfig.Rt.Composite.SPP.value(),
+                CausticaConfig.Rt.Composite.MAX_BOUNCES.value());
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
         hdrWrittenThisFrame = false; // set true again below once this frame's HDR display image is written
         if (failed) {
