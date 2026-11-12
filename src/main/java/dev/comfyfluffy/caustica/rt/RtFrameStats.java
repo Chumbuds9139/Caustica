@@ -97,7 +97,8 @@ public final class RtFrameStats {
                     "entityGraphicsWaitNanos", "entityMotionFlushes", "entityTableFlushes",
                     "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements",
                     "entitySanitizedPositions", "entityTableRejected", "viewmodelInstances",
-                    "viewmodelSubmissionsUnsupported", "viewmodelVertices", "weatherColumnsCaptured"},
+                    "viewmodelSubmissionsUnsupported", "viewmodelVertices", "weatherColumnsCaptured",
+                    "gpuWaitUs", "frameIntervalUs"},
             true);
 
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
@@ -122,6 +123,16 @@ public final class RtFrameStats {
             }
         }
         return total;
+    }
+
+    private static final java.util.concurrent.atomic.AtomicLong PENDING_GPU_WAIT_NANOS =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** Time the render thread spent blocked waiting for an earlier frame's GPU work (vanilla submit). */
+    public static void noteGpuWait(long nanos) {
+        if (nanos > 0L && enabled()) {
+            PENDING_GPU_WAIT_NANOS.addAndGet(nanos);
+        }
     }
 
     private static final java.util.Set<String> UNKNOWN_NAMES = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -193,9 +204,23 @@ public final class RtFrameStats {
                 return;
             }
             active = true;
-            frameStart = System.nanoTime();
+            long now = System.nanoTime();
             Arrays.fill(stageNanos, 0L);
             Arrays.fill(counters, 0L);
+            if (trackGc) {
+                // Wall time since the previous frame began, and how long the render thread blocked on the
+                // GPU in between: together they say whether a slow frame is CPU or GPU bound, which the
+                // stage timings (CPU only) cannot.
+                int interval = counterIndices.getOrDefault("frameIntervalUs", -1);
+                if (interval >= 0 && frameStart != 0L) {
+                    counters[interval] = (now - frameStart) / 1000L;
+                }
+                int gpuWait = counterIndices.getOrDefault("gpuWaitUs", -1);
+                if (gpuWait >= 0) {
+                    counters[gpuWait] = PENDING_GPU_WAIT_NANOS.getAndSet(0L) / 1000L;
+                }
+            }
+            frameStart = now;
             if (trackGc) {
                 gcCountStart = gcCollections();
                 gcMsStart = gcMillis();

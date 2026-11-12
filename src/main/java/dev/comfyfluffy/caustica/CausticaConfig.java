@@ -1357,6 +1357,13 @@ public final class CausticaConfig {
                     bool("caustica.rt.glow", "entities.glow.enabled", true);
             public static final BooleanSetting NAME_TAGS_ENABLED =
                     bool("caustica.rt.nameTags", "entities.name-tags.enabled", true);
+            /**
+             * Capture vanilla cuboid models through the cached cube templates instead of replaying
+             * {@code renderToBuffer} into the capture. Same geometry, a fraction of the CPU time; turn off
+             * only if an entity looks wrong, and report which one.
+             */
+            public static final BooleanSetting DIRECT_MODEL_CAPTURE =
+                    bool("caustica.rt.directModelCapture", "entities.direct-model-capture", true);
             /** Debug-only: render each model submission twice and require bitwise-identical CPU captures. */
             public static final BooleanSetting CAPTURE_PARITY =
                     bool("caustica.rt.entityCaptureParity", "entities.debug.capture-parity", false);

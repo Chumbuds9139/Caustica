@@ -335,13 +335,15 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             return;
         }
 
-        RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
+        RtCuboidEmitter.ModelTemplate directTemplate = CausticaConfig.Rt.Entities.DIRECT_MODEL_CAPTURE.value()
+                ? cuboidEmitter.prepare(model) : null;
         // Boat fix: boat models (BoatModel, ChestBoatModel, RaftModel) have interior faces that the cuboid
         // emitter does not capture with correct UVs / normals (interior bottom becomes black). Force fallback
         // path (renderToBuffer) which uses the actual ModelPart vertex data with proper UVs and normals.
         // Also hide water_patch sub-mesh that is the water mask cutout (black rectangle).
-        String modelName = model.getClass().getName().toLowerCase();
-        boolean isBoatModel = modelName.contains("boat") || modelName.contains("raft");
+        // By type, not by class name: every vanilla class name contains "minecraft", and so "raft", which
+        // once sent every entity in the game down the slow path below with a full part-tree search each.
+        boolean isBoatModel = model instanceof net.minecraft.client.model.object.boat.AbstractBoatModel;
         java.util.ArrayList<ModelPart> hiddenWaterParts = null;
         java.util.ArrayList<Boolean> hiddenWaterPrevSkip = null;
         if (isBoatModel) {

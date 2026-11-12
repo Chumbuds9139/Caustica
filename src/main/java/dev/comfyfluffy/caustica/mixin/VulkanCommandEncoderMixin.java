@@ -31,7 +31,9 @@ public abstract class VulkanCommandEncoderMixin {
         } finally {
             // How long the render thread was blocked on the GPU is what tells a GPU-bound slow frame
             // from a CPU hitch; the TDR guard only reduces the load for the former.
-            RtLoadGovernor.INSTANCE.noteGpuWait(System.nanoTime() - started);
+            long waited = System.nanoTime() - started;
+            RtLoadGovernor.INSTANCE.noteGpuWait(waited);
+            dev.comfyfluffy.caustica.rt.RtFrameStats.noteGpuWait(waited);
         }
     }
 }
