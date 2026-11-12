@@ -38,8 +38,28 @@ import java.util.WeakHashMap;
  */
 public final class RtEntityTextures {
     /** Bindless array capacity (slot 0 reserved as a fallback texture). {@code -Dcaustica.rt.maxEntityTextures}. */
+    /**
+     * Never fewer than this many entity texture slots, whatever the config says. Every distinct texture
+     * an entity, block entity or glyph uses takes a slot, a texture Minecraft re-creates (a skin that
+     * finishes downloading, a re-registered dynamic texture) takes a new one, and slots are only reclaimed
+     * by the next resource reload. On a busy server (player skins, player heads, maps, banners, name tags)
+     * the old default of 256 filled within minutes, after which every new texture silently fell back to
+     * slot 0 and was drawn as the whole block atlas squeezed onto the model: multicoloured noise on heads,
+     * mobs, armour and decorations. Configs written by earlier versions still carry that 256.
+     */
+    static final int MIN_TEXTURES = 4096;
+    /** Bindless arrays sized by this capacity in the world pipeline (entity albedo + 3 material pages). */
+    private static final int ARRAYS_PER_CAPACITY = 4;
+
     public static int maxTextures() {
-        return CausticaConfig.Rt.EntityTextures.MAX_TEXTURES.value();
+        int configured = Math.max(CausticaConfig.Rt.EntityTextures.MAX_TEXTURES.value(), MIN_TEXTURES);
+        dev.comfyfluffy.caustica.rt.RtContext ctx = dev.comfyfluffy.caustica.rt.RtContext.currentOrNull();
+        if (ctx == null) {
+            return configured;
+        }
+        // One combined sampler is set aside for the block atlas binding.
+        long deviceCap = (ctx.updateAfterBindCombinedImageSamplerLimit() - 1L) / ARRAYS_PER_CAPACITY;
+        return (int) Math.max(1L, Math.min(configured, deviceCap));
     }
 
     /** Enable pack-compiled entity materials; disabled entities use the canonical neutral header. */

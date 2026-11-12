@@ -1410,7 +1410,7 @@ public final class CausticaConfig {
 
         public static final class EntityTextures {
             public static final IntSetting MAX_TEXTURES =
-                    intAtLeast("caustica.rt.maxEntityTextures", "entities.textures.max-textures", 256, 1);
+                    intAtLeast("caustica.rt.maxEntityTextures", "entities.textures.max-textures", 4096, 1);
             public static final BooleanSetting PBR = bool("caustica.rt.entityPbr", "entities.textures.pbr", true);
 
             private EntityTextures() {

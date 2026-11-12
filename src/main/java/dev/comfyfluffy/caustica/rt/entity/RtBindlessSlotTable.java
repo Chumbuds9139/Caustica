@@ -46,6 +46,7 @@ final class RtBindlessSlotTable {
     // handing out new slots immediately without invalidating the ones already in use.
     private final IntSupplier limit;
     private int nextSlot = 1; // slot 0 is the reserved fallback (the block atlas)
+    private boolean warnedFull;
 
     RtBindlessSlotTable(IntSupplier limit) {
         this.limit = limit;
@@ -89,6 +90,12 @@ final class RtBindlessSlotTable {
 
     private int allocate(long handle, Object owner) {
         if (nextSlot >= limit.getAsInt()) {
+            if (!warnedFull) {
+                warnedFull = true;
+                dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn("RT entity textures: all {} bindless slots are in "
+                        + "use; further entity textures fall back to the block atlas until the next resource "
+                        + "reload (raise entities.textures.max-textures)", limit.getAsInt());
+            }
             return 0; // full: fall back to slot 0 without caching, so a later reset can retry
         }
         int slot = nextSlot++;
@@ -162,5 +169,6 @@ final class RtBindlessSlotTable {
         byOwner.clear();
         pending.clear();
         nextSlot = 1;
+        warnedFull = false;
     }
 }

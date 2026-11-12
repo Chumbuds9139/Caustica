@@ -183,4 +183,22 @@ final class RtBindlessSlotTableTest {
         assertEquals(List.of(new RtBindlessSlotTable.Write(slot, 0xA71A5L)), slots.drainPending(),
                 "only the fallback may be written; the dead handle's pending write is dropped");
     }
+
+    /** A full table hands out the fallback slot, and a reset makes room again. */
+    @org.junit.jupiter.api.Test
+    void fullTableFallsBackUntilReset() {
+        RtBindlessSlotTable table = new RtBindlessSlotTable(() -> 3);
+        Object a = new Object(), b = new Object(), c = new Object();
+        org.junit.jupiter.api.Assertions.assertEquals(1, table.perOwner(a, 11L));
+        org.junit.jupiter.api.Assertions.assertEquals(2, table.perOwner(b, 12L));
+        org.junit.jupiter.api.Assertions.assertEquals(0, table.perOwner(c, 13L), "full: fallback slot");
+        table.reset();
+        org.junit.jupiter.api.Assertions.assertEquals(1, table.perOwner(c, 13L), "reset reclaims every slot");
+    }
+
+    @org.junit.jupiter.api.Test
+    void capacityFloorCoversABusyServer() {
+        org.junit.jupiter.api.Assertions.assertTrue(RtEntityTextures.MIN_TEXTURES >= 4096,
+                "256 slots filled within minutes on a server with many skins and player heads");
+    }
 }
