@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s 像素",
 	"caustica.options.value.microseconds": "%s 微秒",
 	"caustica.options.value.nits": "%s 尼特",
-	"caustica.options.perfTestKey": "光線追蹤效能測試"
+	"caustica.options.perfTestKey": "光線追蹤效能測試",
+	"caustica.options.perfTest.baseline": "目前設定",
+	"caustica.options.perfTest.needWorld": "Caustica：請先進入開啟光線追蹤的世界，再執行效能測試。",
+	"caustica.options.perfTest.started": "Caustica 效能測試開始：共 %1$s 步，20 FPS 下約 %2$s 秒。請站著別動、不要打開選單；再按一次該鍵可取消。",
+	"caustica.options.perfTest.progress": "效能測試 %1$s/%2$s：%3$s",
+	"caustica.options.perfTest.cancelled": "Caustica 效能測試已取消，設定已還原。",
+	"caustica.options.perfTest.done": "Caustica 效能測試完成，設定已還原。報告：rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Caustica 效能測試完成，設定已還原。報告在 latest.log 中。"
 }

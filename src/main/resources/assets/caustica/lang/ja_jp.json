@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s ピクセル",
 	"caustica.options.value.microseconds": "%s マイクロ秒",
 	"caustica.options.value.nits": "%s ニト",
-	"caustica.options.perfTestKey": "レイトレーシング性能テスト"
+	"caustica.options.perfTestKey": "レイトレーシング性能テスト",
+	"caustica.options.perfTest.baseline": "現在の設定",
+	"caustica.options.perfTest.needWorld": "Caustica：性能テストの前に、レイトレーシングを有効にしてワールドに入ってください。",
+	"caustica.options.perfTest.started": "Caustica 性能テスト開始：全 %1$s ステップ、20 FPS で約 %2$s 秒。動かず、メニューを開かないでください。もう一度キーを押すと中止します。",
+	"caustica.options.perfTest.progress": "性能テスト %1$s/%2$s：%3$s",
+	"caustica.options.perfTest.cancelled": "Caustica 性能テストを中止しました。設定は元に戻っています。",
+	"caustica.options.perfTest.done": "Caustica 性能テスト完了。設定は元に戻りました。レポート：rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Caustica 性能テスト完了。設定は元に戻りました。レポートは latest.log にあります。"
 }

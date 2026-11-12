@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s µs",
 	"caustica.options.value.nits": "%s Nits",
-	"caustica.options.perfTestKey": "Raytracing-Leistungstest"
+	"caustica.options.perfTestKey": "Raytracing-Leistungstest",
+	"caustica.options.perfTest.baseline": "deine Einstellungen",
+	"caustica.options.perfTest.needWorld": "Caustica: Betritt vor dem Leistungstest eine Welt mit aktiviertem Raytracing.",
+	"caustica.options.perfTest.started": "Caustica-Leistungstest gestartet: %1$s Schritte, etwa %2$s s bei 20 FPS. Bleib stehen, öffne keine Menüs und drücke die Taste erneut zum Abbrechen.",
+	"caustica.options.perfTest.progress": "Leistungstest %1$s/%2$s: %3$s",
+	"caustica.options.perfTest.cancelled": "Caustica-Leistungstest abgebrochen; deine Einstellungen wurden wiederhergestellt.",
+	"caustica.options.perfTest.done": "Caustica-Leistungstest abgeschlossen; Einstellungen wiederhergestellt. Bericht: rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Caustica-Leistungstest abgeschlossen; Einstellungen wiederhergestellt. Der Bericht steht in latest.log."
 }

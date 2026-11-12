@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s µs",
 	"caustica.options.value.nits": "%s nits",
-	"caustica.options.perfTestKey": "Prueba de rendimiento de trazado de rayos"
+	"caustica.options.perfTestKey": "Prueba de rendimiento de trazado de rayos",
+	"caustica.options.perfTest.baseline": "tu configuración",
+	"caustica.options.perfTest.needWorld": "Caustica: entra en un mundo con el trazado de rayos activado antes de ejecutar la prueba de rendimiento.",
+	"caustica.options.perfTest.started": "Prueba de rendimiento de Caustica iniciada: %1$s pasos, unos %2$s s a 20 FPS. Quédate quieto, no abras menús y pulsa la tecla otra vez para cancelar.",
+	"caustica.options.perfTest.progress": "Prueba de rendimiento %1$s/%2$s: %3$s",
+	"caustica.options.perfTest.cancelled": "Prueba de rendimiento de Caustica cancelada; se restauró tu configuración.",
+	"caustica.options.perfTest.done": "Prueba de rendimiento de Caustica terminada; configuración restaurada. Informe: rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Prueba de rendimiento de Caustica terminada; configuración restaurada. El informe está en latest.log."
 }

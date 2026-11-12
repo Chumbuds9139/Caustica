@@ -21,7 +21,10 @@ import net.minecraft.network.chat.Component;
  *
  * <p>GPU timestamps can time a whole dispatch but not the pieces of one shader. This measures the pieces
  * by subtraction instead: it runs the scene with the player's own settings, then with one feature at a
- * time switched off or reduced, and reports how much GPU time each change removed. Every variant runs
+ * time switched off or reduced, and reports how much GPU time each change removed. A laptop GPU's clock
+ * drifts by more than most single features cost while it heats up, so the player's settings are measured
+ * again between every two variants and each variant is compared with the mean of the two baselines on
+ * either side of it, which cancels any drift that is close to linear over that span. Every step runs
  * {@value #WARMUP_FRAMES} frames to settle (the GPU timer reads results four frames late, and the TDR
  * guard steps bounces up over a few frames) and is then measured over {@value #MEASURE_FRAMES} frames,
  * reported as medians. Settings are changed in memory only, are restored after every variant and when
@@ -34,14 +37,14 @@ public final class RtPerfSweep {
     public static final RtPerfSweep INSTANCE = new RtPerfSweep();
 
     private static final int WARMUP_FRAMES = 45;
-    private static final int MEASURE_FRAMES = 150;
+    private static final int MEASURE_FRAMES = 120;
     private static final double MOVE_TOLERANCE_BLOCKS = 2.0;
 
-    private record Variant(String name, Runnable apply) {
+    private record Variant(String name, boolean baseline, Runnable apply) {
     }
 
-    private record Result(String name, double indirectMs, double primaryMs, double gpuFrameMs,
-                          double frameMs, int samples, boolean moved) {
+    record Result(String name, boolean baseline, double indirectMs, double primaryMs, double gpuFrameMs,
+                  double frameMs, int samples) {
     }
 
     private final List<Variant> variants = new ArrayList<>();
@@ -83,7 +86,7 @@ public final class RtPerfSweep {
     private void start() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || RtContext.currentOrNull() == null) {
-            say("Caustica: join a world with ray tracing on before running the performance test.");
+            say(Component.translatable("caustica.options.perfTest.needWorld"), false);
             return;
         }
         buildVariants();
@@ -92,10 +95,9 @@ public final class RtPerfSweep {
         startY = mc.player.getY();
         startZ = mc.player.getZ();
         moved = false;
-        beginVariant(0);
         int seconds = variants.size() * (WARMUP_FRAMES + MEASURE_FRAMES) / 20;
-        say("Caustica performance test started: " + variants.size() + " settings, about " + seconds
-                + " s at 20 FPS. Stand still and do not open menus. Press the key again to cancel.");
+        say(Component.translatable("caustica.options.perfTest.started", variants.size(), seconds), false);
+        beginVariant(0);
     }
 
     private void buildVariants() {
@@ -122,49 +124,56 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.SSS.set(sss);
             CausticaConfig.Rt.Entities.GI_BOUNCES.set(giBounces);
         };
-        variants.add(new Variant("your settings (baseline)", () -> { }));
+        List<Variant> tests = new ArrayList<>();
         for (int b = bounces - 1; b >= 2; b--) {
             int target = b;
-            variants.add(new Variant("max bounces " + bounces + " -> " + target,
+            tests.add(new Variant("max bounces " + bounces + " -> " + target, false,
                     () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(target)));
         }
         if (spp > 1) {
-            variants.add(new Variant("samples per pixel " + spp + " -> 1",
+            tests.add(new Variant("samples per pixel " + spp + " -> 1", false,
                     () -> CausticaConfig.Rt.Composite.SPP.set(1)));
         }
         if (ris > 0) {
             if (ris > 4) {
-                variants.add(new Variant("RIS light candidates " + ris + " -> 4",
+                tests.add(new Variant("RIS light candidates " + ris + " -> 4", false,
                         () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(4)));
             }
-            variants.add(new Variant("RIS light sampling off (block lights via bounces only)",
+            tests.add(new Variant("RIS light sampling off (block lights via bounces only)", false,
                     () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(0)));
         }
         if (restir) {
-            variants.add(new Variant("ReSTIR off", () -> CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(false)));
+            tests.add(new Variant("ReSTIR off", false, () -> CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(false)));
         }
         if (sharc) {
-            variants.add(new Variant("SHaRC radiance cache off", () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
+            tests.add(new Variant("SHaRC radiance cache off", false, () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
         }
         if (clouds) {
-            variants.add(new Variant("clouds off", () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));
+            tests.add(new Variant("clouds off", false, () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));
         }
         if (fog) {
-            variants.add(new Variant("fog off", () -> CausticaConfig.Rt.Composite.FOG_ENABLED.set(false)));
+            tests.add(new Variant("fog off", false, () -> CausticaConfig.Rt.Composite.FOG_ENABLED.set(false)));
         }
         if (parallax) {
-            variants.add(new Variant("parallax off", () -> CausticaConfig.Rt.Composite.PARALLAX_ENABLED.set(false)));
+            tests.add(new Variant("parallax off", false, () -> CausticaConfig.Rt.Composite.PARALLAX_ENABLED.set(false)));
         }
         if (sss) {
-            variants.add(new Variant("subsurface scattering off", () -> CausticaConfig.Rt.Composite.SSS.set(false)));
+            tests.add(new Variant("subsurface scattering off", false, () -> CausticaConfig.Rt.Composite.SSS.set(false)));
         }
         if (giBounces > 0) {
-            variants.add(new Variant("entities out of indirect light (gi-bounces 0)",
+            tests.add(new Variant("entities out of indirect light (gi-bounces 0)", false,
                     () -> CausticaConfig.Rt.Entities.GI_BOUNCES.set(0)));
         }
-        // The baseline once more, last: if it differs from the first run, the scene or the GPU clock
-        // changed during the test and the differences above are not trustworthy.
-        variants.add(new Variant("your settings again (drift check)", () -> { }));
+        // Baseline, test, baseline, test, ..., baseline: every test sits between two baselines.
+        variants.add(baselineVariant());
+        for (Variant test : tests) {
+            variants.add(test);
+            variants.add(baselineVariant());
+        }
+    }
+
+    private static Variant baselineVariant() {
+        return new Variant("your settings (baseline)", true, () -> { });
     }
 
     private void beginVariant(int index) {
@@ -175,6 +184,10 @@ public final class RtPerfSweep {
         samples = 0;
         pendingValid = false;
         lastFrameNanos = 0L;
+        Variant v = variants.get(index);
+        say(Component.translatable("caustica.options.perfTest.progress", index + 1, variants.size(),
+                v.baseline ? Component.translatable("caustica.options.perfTest.baseline")
+                        : Component.literal(v.name)), true);
     }
 
     /** One GPU-timed frame's pass durations, as harvested by {@link RtGpuTimer}. */
@@ -220,9 +233,9 @@ public final class RtPerfSweep {
         pendingIndirect = pendingPrimary = pendingGpuFrame = 0.0;
         pendingValid = false;
         if (samples >= MEASURE_FRAMES || frameInVariant > WARMUP_FRAMES + MEASURE_FRAMES * 3) {
-            results.add(new Result(variants.get(variantIndex).name, median(indirect, samples),
-                    median(primary, samples), median(gpuFrame, samples), median(interval, samples), samples,
-                    moved));
+            Variant v = variants.get(variantIndex);
+            results.add(new Result(v.name, v.baseline, median(indirect, samples), median(primary, samples),
+                    median(gpuFrame, samples), median(interval, samples), samples));
             if (variantIndex + 1 < variants.size()) {
                 beginVariant(variantIndex + 1);
             } else {
@@ -244,45 +257,78 @@ public final class RtPerfSweep {
         }
         variantIndex = -1;
         if (cancelled) {
-            say("Caustica performance test cancelled; your settings are restored.");
+            say(Component.translatable("caustica.options.perfTest.cancelled"), false);
             return;
         }
-        String report = report();
+        String report = report(results, moved);
         CausticaMod.LOGGER.info("\n{}", report);
         Path file = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats").resolve("perf-test-"
                 + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH.mm.ss")) + ".txt");
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, report, StandardCharsets.UTF_8);
-            say("Caustica performance test done; settings restored. Report: rt-frame-stats/" + file.getFileName());
+            say(Component.translatable("caustica.options.perfTest.done", file.getFileName().toString()), false);
         } catch (IOException e) {
-            say("Caustica performance test done; settings restored. Report is in latest.log.");
+            say(Component.translatable("caustica.options.perfTest.doneLog"), false);
         }
     }
 
     String report() {
+        return report(results, moved);
+    }
+
+    /**
+     * Each variant against the mean of the baselines measured right before and right after it. The
+     * baseline rows show how far the GPU drifted over the test; a variant whose two baselines differ by
+     * more than its own difference is flagged, because that difference is then within the noise.
+     */
+    static String report(List<Result> results, boolean moved) {
         StringBuilder sb = new StringBuilder("Caustica performance test (GPU medians, ms)\n");
-        Result base = results.isEmpty() ? null : results.get(0);
         sb.append(String.format(Locale.ROOT, "%-52s %9s %9s %9s %9s %8s%n", "setting", "indirect", "saved",
                 "primary", "RT frame", "FPS"));
-        for (Result r : results) {
-            double saved = base == null ? 0.0 : base.indirectMs - r.indirectMs;
-            sb.append(String.format(Locale.ROOT, "%-52s %9.2f %+9.2f %9.2f %9.2f %8.1f%s%n", r.name, r.indirectMs,
-                    -saved, r.primaryMs, r.gpuFrameMs, r.frameMs > 0 ? 1000.0 / r.frameMs : 0.0,
-                    r.samples < MEASURE_FRAMES ? "  (only " + r.samples + " samples)" : ""));
+        double minBase = Double.MAX_VALUE;
+        double maxBase = -Double.MAX_VALUE;
+        for (int i = 0; i < results.size(); i++) {
+            Result r = results.get(i);
+            String note = r.samples < MEASURE_FRAMES ? "  (only " + r.samples + " samples)" : "";
+            if (r.baseline) {
+                minBase = Math.min(minBase, r.indirectMs);
+                maxBase = Math.max(maxBase, r.indirectMs);
+                sb.append(String.format(Locale.ROOT, "%-52s %9.2f %9s %9.2f %9.2f %8.1f%s%n", r.name,
+                        r.indirectMs, "", r.primaryMs, r.gpuFrameMs, fps(r), note));
+                continue;
+            }
+            Result before = i > 0 && results.get(i - 1).baseline ? results.get(i - 1) : null;
+            Result after = i + 1 < results.size() && results.get(i + 1).baseline ? results.get(i + 1) : null;
+            double base = Double.NaN;
+            double spread = Double.NaN;
+            if (before != null && after != null) {
+                base = (before.indirectMs + after.indirectMs) * 0.5;
+                spread = Math.abs(before.indirectMs - after.indirectMs);
+            } else if (before != null || after != null) {
+                base = (before != null ? before : after).indirectMs;
+            }
+            double saved = base - r.indirectMs;
+            if (!Double.isNaN(spread) && spread > Math.abs(saved)) {
+                note += String.format(Locale.ROOT, "  (noisy: baselines around it differ by %.2f)", spread);
+            }
+            sb.append(String.format(Locale.ROOT, "  %-50s %9.2f %+9.2f %9.2f %9.2f %8.1f%s%n", r.name,
+                    r.indirectMs, -saved, r.primaryMs, r.gpuFrameMs, fps(r), note));
         }
-        if (results.size() >= 2) {
-            Result last = results.get(results.size() - 1);
-            double drift = Math.abs(last.indirectMs - base.indirectMs);
-            sb.append(String.format(Locale.ROOT, "drift between first and last baseline: %.2f ms%s%n", drift,
-                    drift > 0.1 * base.indirectMs ? " - TOO LARGE, the scene or GPU clocks changed; rerun" : ""));
+        if (maxBase >= minBase) {
+            sb.append(String.format(Locale.ROOT, "baseline range over the test: %.2f - %.2f ms (drift %.2f ms)%n",
+                    minBase, maxBase, maxBase - minBase));
         }
         if (moved) {
             sb.append("WARNING: the player moved during the test; differences mix setting cost with scene change.\n");
         }
-        sb.append("'saved' is the indirect-pass time each change removes relative to the baseline "
-                + "(negative = cheaper). FPS includes CPU time.\n");
+        sb.append("'saved' is the indirect-pass time a change removes relative to the mean of the baselines "
+                + "measured just before and after it (negative = cheaper). FPS includes CPU time.\n");
         return sb.toString();
+    }
+
+    private static double fps(Result r) {
+        return r.frameMs > 0 ? 1000.0 / r.frameMs : 0.0;
     }
 
     static double median(double[] values, int count) {
@@ -294,10 +340,10 @@ public final class RtPerfSweep {
         return count % 2 == 1 ? copy[count / 2] : (copy[count / 2 - 1] + copy[count / 2]) * 0.5;
     }
 
-    private static void say(String message) {
-        CausticaMod.LOGGER.info(message);
+    private static void say(Component message, boolean actionBar) {
+        CausticaMod.LOGGER.info(message.getString());
         try {
-            Minecraft.getInstance().gui.chatListener().handleSystemMessage(Component.literal(message), false);
+            Minecraft.getInstance().gui.chatListener().handleSystemMessage(message, actionBar);
         } catch (RuntimeException ignored) {
             // The log line above carries the message when there is no chat to show it in.
         }

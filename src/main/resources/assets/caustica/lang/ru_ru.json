@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s пкс",
 	"caustica.options.value.microseconds": "%s мкс",
 	"caustica.options.value.nits": "%s нит",
-	"caustica.options.perfTestKey": "Тест производительности трассировки лучей"
+	"caustica.options.perfTestKey": "Тест производительности трассировки лучей",
+	"caustica.options.perfTest.baseline": "ваши настройки",
+	"caustica.options.perfTest.needWorld": "Caustica: перед тестом производительности войдите в мир с включённой трассировкой лучей.",
+	"caustica.options.perfTest.started": "Тест производительности Caustica начат: %1$s шагов, около %2$s с при 20 FPS. Стойте на месте, не открывайте меню; повторное нажатие клавиши отменит тест.",
+	"caustica.options.perfTest.progress": "Тест производительности %1$s/%2$s: %3$s",
+	"caustica.options.perfTest.cancelled": "Тест производительности Caustica отменён; ваши настройки восстановлены.",
+	"caustica.options.perfTest.done": "Тест производительности Caustica завершён; настройки восстановлены. Отчёт: rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Тест производительности Caustica завершён; настройки восстановлены. Отчёт — в latest.log."
 }

@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s µs",
 	"caustica.options.value.nits": "%s nits",
-	"caustica.options.perfTestKey": "Test de performances du lancer de rayons"
+	"caustica.options.perfTestKey": "Test de performances du lancer de rayons",
+	"caustica.options.perfTest.baseline": "vos réglages",
+	"caustica.options.perfTest.needWorld": "Caustica : rejoignez un monde avec le lancer de rayons activé avant de lancer le test de performances.",
+	"caustica.options.perfTest.started": "Test de performances Caustica lancé : %1$s étapes, environ %2$s s à 20 FPS. Restez immobile, n'ouvrez pas de menu et appuyez à nouveau sur la touche pour annuler.",
+	"caustica.options.perfTest.progress": "Test de performances %1$s/%2$s : %3$s",
+	"caustica.options.perfTest.cancelled": "Test de performances Caustica annulé ; vos réglages ont été restaurés.",
+	"caustica.options.perfTest.done": "Test de performances Caustica terminé ; réglages restaurés. Rapport : rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Test de performances Caustica terminé ; réglages restaurés. Le rapport se trouve dans latest.log."
 }

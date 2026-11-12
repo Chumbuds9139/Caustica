@@ -411,5 +411,12 @@
 	"caustica.options.value.pixels": "%s 픽셀",
 	"caustica.options.value.microseconds": "%s 마이크로초",
 	"caustica.options.value.nits": "%s 니트",
-	"caustica.options.perfTestKey": "레이 트레이싱 성능 테스트"
+	"caustica.options.perfTestKey": "레이 트레이싱 성능 테스트",
+	"caustica.options.perfTest.baseline": "현재 설정",
+	"caustica.options.perfTest.needWorld": "Caustica: 성능 테스트 전에 레이 트레이싱을 켠 상태로 월드에 접속하세요.",
+	"caustica.options.perfTest.started": "Caustica 성능 테스트 시작: 총 %1$s단계, 20 FPS 기준 약 %2$s초. 움직이지 말고 메뉴를 열지 마세요. 키를 다시 누르면 취소됩니다.",
+	"caustica.options.perfTest.progress": "성능 테스트 %1$s/%2$s: %3$s",
+	"caustica.options.perfTest.cancelled": "Caustica 성능 테스트가 취소되었습니다. 설정이 복원되었습니다.",
+	"caustica.options.perfTest.done": "Caustica 성능 테스트 완료. 설정이 복원되었습니다. 보고서: rt-frame-stats/%s",
+	"caustica.options.perfTest.doneLog": "Caustica 성능 테스트 완료. 설정이 복원되었습니다. 보고서는 latest.log에 있습니다."
 }
