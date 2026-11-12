@@ -35,7 +35,8 @@ public final class RtGpuTimer {
     /** Start timing a composite frame recorded into {@code cmd}; harvests the slot's previous frame first. */
     public static void beginFrame(RtContext ctx, VkCommandBuffer cmd) {
         frameCmd = null;
-        if (!RtFrameStats.enabled() || ctx == null || ctx.timestampPeriodNanos() <= 0.0f) {
+        boolean sweep = RtPerfSweep.INSTANCE.running();
+        if (!(RtFrameStats.enabled() || sweep) || ctx == null || ctx.timestampPeriodNanos() <= 0.0f) {
             return;
         }
         if (pool == 0L && !create(ctx)) {
@@ -43,6 +44,7 @@ public final class RtGpuTimer {
         }
         frame = (frame + 1) % RING;
         harvest(ctx, frame);
+        RtPerfSweep.INSTANCE.onFrame();
         VK10.vkCmdResetQueryPool(cmd, pool, frame * MAX_QUERIES, MAX_QUERIES);
         STAGE_COUNT[frame] = 0;
         RECORDED[frame] = true;
@@ -142,7 +144,9 @@ public final class RtGpuTimer {
                 if (beginReady == 0L || endReady == 0L || end < begin) {
                     continue;
                 }
-                RtFrameStats.FRAME.addStageNanos(STAGES[slot][i], (long) ((end - begin) * (double) periodNanos));
+                long nanos = (long) ((end - begin) * (double) periodNanos);
+                RtFrameStats.FRAME.addStageNanos(STAGES[slot][i], nanos);
+                RtPerfSweep.INSTANCE.onGpuStage(STAGES[slot][i], nanos);
             }
         }
     }

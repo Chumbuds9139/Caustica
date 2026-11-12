@@ -410,5 +410,7 @@
 	"caustica.options.value.millimetres": "%s mm",
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s us",
-	"caustica.options.value.nits": "%s nits"
+	"caustica.options.value.nits": "%s nits",
+	"key.caustica.perf_test": "Run ray tracing performance test",
+	"key.category.caustica.main": "Caustica"
 }

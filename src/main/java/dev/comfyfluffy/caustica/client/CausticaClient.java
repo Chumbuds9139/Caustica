@@ -35,6 +35,21 @@ public final class CausticaClient implements ClientModInitializer {
 
 		// The GpuDevice exists well before the first tick, so a one-shot at tick start
 		// runs on the render thread with the device idle between frames.
+		// One key starts (or cancels) the GPU cost breakdown; unbound by default would hide it, F8 is free
+		// in vanilla. Rebindable under Controls > Caustica.
+		net.minecraft.client.KeyMapping perfTestKey = net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
+				.registerKeyMapping(new net.minecraft.client.KeyMapping("key.caustica.perf_test",
+						com.mojang.blaze3d.platform.InputConstants.Type.KEYBOARD,
+						com.mojang.blaze3d.platform.InputConstants.KEY_F8,
+						net.minecraft.client.KeyMapping.Category.register(
+								net.minecraft.resources.Identifier.fromNamespaceAndPath("caustica", "main"))));
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			while (perfTestKey.consumeClick()) {
+				dev.comfyfluffy.caustica.rt.RtPerfSweep.INSTANCE.toggle();
+			}
+			dev.comfyfluffy.caustica.rt.RtPerfSweep.INSTANCE.tick(client);
+		});
+
 		ClientTickEvents.START_CLIENT_TICK.register(client -> {
 			if (!VanillaRenderController.rtRuntimeWorkRequested()) {
 				if (rtInitDone) {
