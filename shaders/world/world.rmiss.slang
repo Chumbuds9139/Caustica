@@ -38,6 +38,13 @@ static const float  OZONE_WIDTH_H  = 15000.0;
 static const float  SUN_INTENSITY = 24.0; // slightly brighter for clear day
 static const int    ATMOS_PRIMARY_STEPS = 16;
 static const int    ATMOS_LIGHT_STEPS   = 8;
+// Diffuse continuation rays: the sky they see is integrated over the hemisphere and denoised, so the
+// single-scattering march does not need the precision of the sky the camera looks at. 12 x 4 costs 42%
+// of 16 x 8. Measured against 16 x 8 over sun elevations 3-60 degrees: the cosine-weighted sky a
+// receiver integrates differs by under 2%, and no single direction above 2 degrees by more than 4.5%.
+// Cheaper splits were tried and rejected: 8 x 4 darkens that integral by 7%, 16 x 3 by 13%.
+static const int    ATMOS_PRIMARY_STEPS_DIFFUSE = 12;
+static const int    ATMOS_LIGHT_STEPS_DIFFUSE   = 4;
 
 // AGGRESSIVE: drastically cut Mie to eliminate gray haze, boost Rayleigh blue for vivid
 static const float3 RAY_BETA   = float3(3.2e-6, 8.5e-6, 24.5e-6); // strong blue, minimal red
@@ -58,7 +65,7 @@ float2 raySphere(float3 o, float3 d, float r) {
     return float2(-b - disc, -b + disc);
 }
 
-float3 atmosphere(float3 dir, float3 sunDir) {
+float3 atmosphere(float3 dir, float3 sunDir, int primarySteps, int lightSteps) {
     float3 orig = float3(0.0, PLANET_R + 2000.0, 0.0);
     float2 t = raySphere(orig, dir, ATMOS_R);
     if (t.x > t.y) return float3(0.0, 0.0, 0.0);
@@ -66,7 +73,7 @@ float3 atmosphere(float3 dir, float3 sunDir) {
     float tEnd = t.y;
     float2 tGround = raySphere(orig, dir, PLANET_R);
     if (tGround.x > 0.0) tEnd = min(tEnd, tGround.x);
-    float segLen = (tEnd - tStart) / float(ATMOS_PRIMARY_STEPS);
+    float segLen = (tEnd - tStart) / float(primarySteps);
 
     float mu = dot(dir, sunDir);
     float phaseR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
@@ -77,7 +84,7 @@ float3 atmosphere(float3 dir, float3 sunDir) {
     float3 sumR = float3(0.0, 0.0, 0.0), sumM = float3(0.0, 0.0, 0.0);
     float odR = 0.0, odM = 0.0, odO = 0.0;
     float tCur = tStart;
-    for (int i = 0; i < ATMOS_PRIMARY_STEPS; i++) {
+    for (int i = 0; i < primarySteps; i++) {
         float3 p = orig + dir * (tCur + segLen * 0.5);
         float h = length(p) - PLANET_R;
         float hr = exp(-h / RAY_SCALE_H) * segLen;
@@ -85,10 +92,10 @@ float3 atmosphere(float3 dir, float3 sunDir) {
         odR += hr; odM += hm; odO += ozoneDensity(h) * segLen;
 
         float2 tl = raySphere(p, sunDir, ATMOS_R);
-        float segLenL = tl.y / float(ATMOS_LIGHT_STEPS);
+        float segLenL = tl.y / float(lightSteps);
         float tlCur = 0.0, odRL = 0.0, odML = 0.0, odOL = 0.0;
         bool blocked = false;
-        for (int j = 0; j < ATMOS_LIGHT_STEPS; j++) {
+        for (int j = 0; j < lightSteps; j++) {
             float3 pl = p + sunDir * (tlCur + segLenL * 0.5);
             float hl = length(pl) - PLANET_R;
             if (hl < 0.0) { blocked = true; break; }
@@ -305,7 +312,9 @@ void main(inout Payload payload) {
         mdir = fl > 1.0e-4 ? float3(flat2.x / fl, 0.0, flat2.y / fl) : float3(1.0, 0.0, 0.0);
         downFade = exp(dir.y * 3.0);
     }
-    float3 col = atmosphere(mdir, sd);
+    float3 col = showCelestial
+            ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
+            : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
 
     // RTX/Areal vivid: smooth gradient from light cyan at horizon to pure saturated blue at zenith
     // No gray/brown haze injection - clean blue only

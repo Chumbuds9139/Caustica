@@ -552,6 +552,9 @@ static const float3 GLINT_GRAYSCALE_TINT = float3(1.30, 0.42, 1.55);
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
+    // Camera and mirror-chain rays carry PAYLOAD_SHOW_CELESTIAL; diffuse continuation rays do not. Read
+    // before anything below rewrites payload.flags with the hit's material bits.
+    bool cameraOrMirrorRay = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
 
     // Native DH/Voxy LOD triangles participate in camera, GI, reflection and shadow rays through the
     // same TLAS. They carry no sprite: shading comes from vertex colour + the mini-material class.
@@ -942,7 +945,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // grass overlays and translucent blocks cannot shade a different texel than the one that
     // established their any-hit coverage. Block sprites tile, so the height walk may wrap.
     ParallaxHit terrainParallax = parallaxFlat(uv, n);
-    if (GeometryIndex() == BUCKET_SOLID && materialHeader.model == MATERIAL_OPAQUE) {
+    // Relief is a view-dependent texel shift: it is visible where the camera or a mirror looks at the
+    // surface, and nowhere in the cosine-weighted, denoised average a diffuse bounce feeds into. Marching
+    // the height field there was a large share of the indirect pass for no visible difference.
+    if (cameraOrMirrorRay && GeometryIndex() == BUCKET_SOLID && materialHeader.model == MATERIAL_OPAQUE) {
         terrainParallax = parallaxTrace(materialHeader, uv, blockLod, n, tp0, tp1, tp2,
                 uv0, uv1, uv2, vdir, true);
         uv = terrainParallax.uv;
