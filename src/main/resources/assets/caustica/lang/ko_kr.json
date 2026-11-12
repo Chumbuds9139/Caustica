@@ -410,5 +410,6 @@
 	"caustica.options.value.millimetres": "%s mm",
 	"caustica.options.value.pixels": "%s 픽셀",
 	"caustica.options.value.microseconds": "%s 마이크로초",
-	"caustica.options.value.nits": "%s 니트"
+	"caustica.options.value.nits": "%s 니트",
+	"caustica.options.perfTestKey": "레이 트레이싱 성능 테스트"
 }

@@ -411,6 +411,5 @@
 	"caustica.options.value.pixels": "%s 像素",
 	"caustica.options.value.microseconds": "%s 微秒",
 	"caustica.options.value.nits": "%s 尼特",
-	"key.caustica.perf_test": "运行光追性能测试",
-	"key.category.caustica.main": "Caustica"
+	"caustica.options.perfTestKey": "光线追踪性能测试"
 }

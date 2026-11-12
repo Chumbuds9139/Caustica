@@ -410,5 +410,6 @@
 	"caustica.options.value.millimetres": "%s мм",
 	"caustica.options.value.pixels": "%s пкс",
 	"caustica.options.value.microseconds": "%s мкс",
-	"caustica.options.value.nits": "%s нит"
+	"caustica.options.value.nits": "%s нит",
+	"caustica.options.perfTestKey": "Тест производительности трассировки лучей"
 }

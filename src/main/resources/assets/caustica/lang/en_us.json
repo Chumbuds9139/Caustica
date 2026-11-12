@@ -411,6 +411,5 @@
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s us",
 	"caustica.options.value.nits": "%s nits",
-	"key.caustica.perf_test": "Run ray tracing performance test",
-	"key.category.caustica.main": "Caustica"
+	"caustica.options.perfTestKey": "Ray tracing performance test"
 }

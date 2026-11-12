@@ -410,5 +410,6 @@
 	"caustica.options.value.millimetres": "%s mm",
 	"caustica.options.value.pixels": "%s ピクセル",
 	"caustica.options.value.microseconds": "%s マイクロ秒",
-	"caustica.options.value.nits": "%s ニト"
+	"caustica.options.value.nits": "%s ニト",
+	"caustica.options.perfTestKey": "レイトレーシング性能テスト"
 }

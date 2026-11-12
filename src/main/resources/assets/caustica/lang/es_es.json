@@ -410,5 +410,6 @@
 	"caustica.options.value.millimetres": "%s mm",
 	"caustica.options.value.pixels": "%s px",
 	"caustica.options.value.microseconds": "%s µs",
-	"caustica.options.value.nits": "%s nits"
+	"caustica.options.value.nits": "%s nits",
+	"caustica.options.perfTestKey": "Prueba de rendimiento de trazado de rayos"
 }
