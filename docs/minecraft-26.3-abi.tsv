@@ -179,3 +179,5 @@ net/minecraft/client/renderer/state/level/PlayerRenderState	F	hasPlayer	Z
 net/minecraft/client/renderer/state/level/PlayerRenderState	F	firstPersonHandsAndItems	Lnet/minecraft/client/renderer/state/level/FirstPersonHandsAndItemsRenderState;
 net/minecraft/client/renderer/state/OptionsRenderState	F	bobView	Z
 com/mojang/renderpearl/backend/vulkan/VulkanCommandEncoder	M	awaitSubmitCompletion	(JJ)Z
+net/minecraft/client/renderer/texture/atlas/sources/PalettedPermutations	M	loadPaletteEntryFromImage	(Lnet/minecraft/server/packs/resources/ResourceManager;Lnet/minecraft/resources/Identifier;)Lnet/minecraft/client/resources/palette/Palette;
+net/minecraft/server/packs/resources/ResourceProvider	M	getResource	(Lnet/minecraft/resources/Identifier;)Ljava/util/Optional;

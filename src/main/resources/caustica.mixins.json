@@ -21,6 +21,7 @@
 		"OptionInstanceAccessor",
 		"OptionsMixin",
 		"OptionsSubScreenAccessor",
+		"PalettedPermutationsMixin",
 		"ParticleEngineAccessor",
 		"RenderSetupAccessor",
 		"RenderTypeAccessor",
