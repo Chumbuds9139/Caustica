@@ -359,5 +359,9 @@ final class RtViewmodelRayTracingTest {
         assertTrue(pipeline.contains("closestHitShader(h >= RtAccel.SBT_ENTITY_OFFSET ? entityChitStage : chitStage)"));
         String rchit = Files.readString(WORLD_RCHIT);
         assertTrue(rchit.contains("#if !defined(CAUSTICA_CHIT_ENTITY)") && rchit.contains("#if defined(CAUSTICA_CHIT_ENTITY)"));
+        assertTrue(pipeline.contains("? (h >= RtAccel.SBT_ENTITY_OFFSET ? entityAhitStage : ahitStage)"),
+                "entity any-hit variant must serve exactly the entity records");
+        String rahit = Files.readString(WORLD_RCHIT.resolveSibling("world.rahit.slang"));
+        assertTrue(rahit.contains("#if !defined(CAUSTICA_AHIT_ENTITY)") && rahit.contains("#if defined(CAUSTICA_AHIT_ENTITY)"));
     }
 }

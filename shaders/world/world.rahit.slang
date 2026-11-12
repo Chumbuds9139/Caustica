@@ -83,6 +83,10 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
 
     uint instanceKind = InstanceID() & (ENTITY_BIT | PARTICLE_BIT);
+    // Compiled twice like world.rchit: world.rahit for terrain/LOD hit records, world_entity.rahit
+    // (CAUSTICA_AHIT_ENTITY) for the entity records from SBT_ENTITY_OFFSET. Each keeps only the branch
+    // its instances reach; what runs for any instance is unchanged.
+#if !defined(CAUSTICA_AHIT_ENTITY)
     if (instanceKind == DH_INSTANCE_KIND) {
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
         if (vanillaRtSectionReady(hitPos)) {
@@ -112,6 +116,8 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         }
         return;
     }
+#endif
+#if defined(CAUSTICA_AHIT_ENTITY)
     if (instanceKind != 0u) {
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
         pid += g.triBase[GeometryIndex()];
@@ -249,6 +255,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         }
         return;
     }
+    // Unreachable: only entity, particle and viewmodel instances carry SBT_ENTITY_OFFSET.
+    return;
+#else
 
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
     uint bucket = GeometryIndex();
@@ -300,4 +309,5 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if (blockAlbedoAtlas.SampleLevel(uv, 0.0).a < ALPHA_CUTOFF) {
         IgnoreHit();
     }
+#endif
 }

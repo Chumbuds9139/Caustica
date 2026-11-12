@@ -187,6 +187,11 @@ abstract class CompileShaders extends DefaultTask {
 					compileOneSlang(src, spv, [])
 					compileOneSlang(src, new File(scratchDir, "world_ser.rgen.spv"),
 							["-DCAUSTICA_ENABLE_EXT_SER", "-capability", "spvShaderInvocationReorderEXT"])
+				} else if (base == "world.rahit") {
+					// Split the same way as world.rchit: terrain/LOD records and entity records.
+					compileOneSlang(src, spv, [])
+					compileOneSlang(src, new File(scratchDir, "world_entity.rahit.spv"),
+							["-DCAUSTICA_AHIT_ENTITY"])
 				} else if (base == "world.rchit") {
 					// One source, two closest-hit shaders: terrain/LOD records and entity records (see the
 					// top of its main()). Each keeps only the branches its instances reach.
@@ -626,7 +631,8 @@ tasks.register("verifyModJar") {
 					zip.getEntry("META-INF/LICENSE.md") == null) {
 				throw new GradleException("Missing compiled entrypoint or license")
 			}
-			["world.rgen.spv", "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv", "world.rmiss.spv",
+			["world.rgen.spv", "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv",
+			 "world_entity.rahit.spv", "world.rmiss.spv",
 			 "world_primary.rgen.spv", "shadow.rmiss.spv", "display.comp.spv", "svgf_reproject.comp.spv",
 			 "exposure_hist.comp.spv", "sdr_present.comp.spv", "hdr_ui_composite.comp.spv",
 			 "overlay_fullscreen_triangle.vert.spv", "block_outline.vert.spv"].each { shader ->
