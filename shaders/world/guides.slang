@@ -187,7 +187,7 @@ public void resolveTransmissionGuide(float3 origin, float3 transmittedDir,
 
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
-    for (uint crossing = 0u; crossing < worldPush.maxBounces; ++crossing) {
+    for (uint crossing = 0u; crossing < (worldPush.maxBounces & 0xFFu); ++crossing) {
         traceGuide(CULL_PRIMARY, ro, RAY_TMIN, direction, 10000.0,
                 rayConeWidth, rayConeSpread);
         if (payload.hitT <= 0.0) {

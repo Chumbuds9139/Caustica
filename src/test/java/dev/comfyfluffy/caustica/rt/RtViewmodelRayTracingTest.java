@@ -106,8 +106,9 @@ final class RtViewmodelRayTracingTest {
                 "\n}\n");
         assertTrue(visibility.contains("PAYLOAD_VIEWMODEL"),
                 "visibility() must key off the payload's viewmodel flag, not off a caller-threaded parameter");
-        assertTrue(visibility.contains("CULL_VIEWMODEL_SHADOW") && visibility.contains("CULL_SECONDARY"),
-                "a viewmodel surface swaps to the player-free mask; everything else keeps the ordinary one");
+        assertTrue(visibility.contains("CULL_VIEWMODEL_SHADOW") && visibility.contains("gv_secondaryCull"),
+                "a viewmodel surface swaps to the player-free mask; everything else keeps the ordinary one "
+                        + "(CULL_SECONDARY, or CULL_SECONDARY_FAR on a deep diffuse bounce)");
         // The shadow trace must not clobber the surface it is shading, or the swap would only survive the
         // first occlusion query of the pass.
         assertTrue(trace.contains("TraceRay(topLevelAS,\n"
@@ -308,5 +309,26 @@ final class RtViewmodelRayTracingTest {
             }
         }
         throw new IllegalStateException("could not locate the repository root from " + dir);
+    }
+
+    /**
+     * Instance and ray masks are ANDed by the traversal hardware. Pin the combinations the far-bounce mask
+     * relies on: deep diffuse rays still find terrain and LOD but no entity, and none of the special
+     * shadow masks start finding LOD geometry because LOD gained bit 5.
+     */
+    @Test
+    void farBounceMaskSkipsEntitiesOnly() {
+        int terrain = 0xF7, entity = 0xD7, lod = 0x23, firstPersonBody = 0x01, particles = 0x02;
+        int far = 0x20, secondary = 0x01, primary = 0x02, handLight = 0xD4, viewmodelShadow = 0xD0;
+        assertTrue((terrain & far) != 0 && (lod & far) != 0, "deep bounces must still hit the world");
+        assertTrue((entity & far) == 0 && (firstPersonBody & far) == 0 && (particles & far) == 0,
+                "deep bounces skip entities, the player body and particles");
+        for (int ray : new int[] {secondary, primary}) {
+            assertTrue((entity & ray) != 0 && (terrain & ray) != 0, "ordinary rays keep seeing entities");
+        }
+        for (int ray : new int[] {handLight, viewmodelShadow}) {
+            assertTrue((terrain & ray) != 0 && (entity & ray) != 0, "special shadows keep their occluders");
+            assertTrue((lod & ray) == 0, "special shadows must keep ignoring LOD geometry");
+        }
     }
 }

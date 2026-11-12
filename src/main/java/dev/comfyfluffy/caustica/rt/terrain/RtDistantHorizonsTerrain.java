@@ -39,7 +39,7 @@ public final class RtDistantHorizonsTerrain {
     /** ENTITY_BIT | PARTICLE_BIT is otherwise unused and still fits Vulkan's 24-bit custom index. */
     public static final int DH_INSTANCE_KIND = 0xC00000;
     /** Camera, shadow, GI and reflection rays all see native DH LOD triangles. */
-    private static final int RAY_MASK = 0x03;
+    private static final int RAY_MASK = 0x23; // bit 5: still hit by deep diffuse bounces (CULL_SECONDARY_FAR)
     /** Rebuilding at every chunk crossing is too expensive for multi-million-triangle DH meshes. */
     private static final int ANCHOR_BLOCKS = 256;
     /** Keep each DH section wholly outside vanilla terrain to avoid overlap at the transition. */

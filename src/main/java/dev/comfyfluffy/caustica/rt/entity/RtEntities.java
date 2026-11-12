@@ -97,7 +97,7 @@ public final class RtEntities {
      * nothing else. Every cull mask the world shaders actually use (0x01 / 0x02 / 0xFC-ish) still matches
      * 0xF7, so this is invisible to everything except the overlay pass it exists for.
      */
-    private static final int MASK_ALL = 0xF7;
+    private static final int MASK_ALL = 0xD7; // 0xF7 minus bit 5: see CULL_SECONDARY_FAR in trace.slang
     /**
      * The first-person viewmodel: reachable only by the primary above-blocks overlay trace, so it is lit by
      * and visible to the camera while no shadow, GI, reflection or held-item-light ray can ever hit it.

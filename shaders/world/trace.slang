@@ -15,6 +15,15 @@ public static const uint CULL_PRIMARY = 0x02u;
 // reflection and held-light rays — which never carry this bit — cannot hit it at all, so it casts no shadow
 // and never hides what is behind it.
 public static const uint CULL_VIEWMODEL = 0x08u;
+// Deep diffuse bounces (see entities.gi-bounces): bit 5 is set on terrain (0xF7) and DH/Voxy LOD (0x23)
+// but deliberately clear on entities and block entities (0xD7), on the first-person body (0x01) and on
+// particles (0x02). A ray carrying only this bit is skipped past every mob, item and chest by the
+// traversal hardware itself. Those objects add next to nothing to the second and later bounces of
+// diffuse light, while dense crowds of them made those bounces cost twice as much.
+public static const uint CULL_SECONDARY_FAR = 0x20u;
+// The mask the current shading point's shadow rays use: CULL_SECONDARY, or CULL_SECONDARY_FAR when the
+// point was reached by a deep diffuse bounce. Set by world.rgen per bounce; per-invocation state.
+public static uint gv_secondaryCull = CULL_SECONDARY;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither
@@ -24,14 +33,14 @@ public static const uint CULL_VIEWMODEL = 0x08u;
 // it casts (the visible hand is vanilla's screen-space overlay, not the captured pose). Bit 3 joins that
 // exclusion list for free: it is the ray-traced viewmodel's own bit, and a held block must not shade the
 // hand holding it either.
-public static const uint CULL_HAND_LIGHT = 0xF4u;
+public static const uint CULL_HAND_LIGHT = 0xD4u; // bit 5 clear so LOD (0x23) stays excluded
 // Shadow rays fired from a viewmodel surface. Terrain and ordinary entities still occlude (0xF7 matches),
 // but the first-person body (0x01), particles (0x02), the hand's own geometry (0x08) and DH LODs (0x03) do
 // not — otherwise the arm the camera is sitting inside throws a hard shadow across the item in it, and the
 // held block shadows the fingers holding it. Selected by visibility() whenever the surface being shaded
 // carries PAYLOAD_VIEWMODEL, which is how "ignore the player's own shadow when shading the viewmodel" is
 // enforced without threading a flag through every lighting and fog call site.
-public static const uint CULL_VIEWMODEL_SHADOW = 0xF0u;
+public static const uint CULL_VIEWMODEL_SHADOW = 0xD0u; // bit 5 clear so LOD (0x23) stays excluded
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
@@ -166,7 +175,7 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     // occlusion, fog and the above-blocks shadow in both raygens: a viewmodel surface asks for the
     // player-free mask, everything else keeps the ordinary one.
     return visibilityCulled(origin, dir, tmax,
-            (payload.flags & PAYLOAD_VIEWMODEL) != 0u ? CULL_VIEWMODEL_SHADOW : CULL_SECONDARY);
+            (payload.flags & PAYLOAD_VIEWMODEL) != 0u ? CULL_VIEWMODEL_SHADOW : gv_secondaryCull);
 }
 
 // Explicit instance-cull variant of visibility(); the held-item light uses CULL_HAND_LIGHT so the

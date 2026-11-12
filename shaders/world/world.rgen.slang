@@ -127,7 +127,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     }
     float rayConeWidth = seg.rayConeWidth;
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
-    int maxBounces = int(worldPush.maxBounces);
+    int maxBounces = int(worldPush.maxBounces & 0xFFu);
+    // Bits 8-15: the last diffuse bounce that still sees entities and block entities (entities.gi-bounces).
+    int entityGiBounces = int((worldPush.maxBounces >> 8u) & 0xFFu);
     int rrStart = maxBounces <= 3 ? 1 : 2;
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
@@ -171,7 +173,12 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // remains active with its full configured candidate count at every hit. Pass A's primary/interface
     // prefix is outside this SSS quality budget.
     int indirectDepth = 0;
+    gv_secondaryCull = CULL_SECONDARY; // a new path starts with the full scene; set per bounce below
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
+        // Camera rays, mirror chains and the first entityGiBounces diffuse bounces see everything; deeper
+        // diffuse bounces skip entities and block entities (CULL_SECONDARY_FAR, see trace.slang).
+        uint secondaryCull = (showCelestial || bounce <= entityGiBounces)
+                ? CULL_SECONDARY : CULL_SECONDARY_FAR;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -180,13 +187,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
-        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                                showCelestial, medium.current.water, rayConeWidth, rayConeSpread,
                                pathPhaseHint);
 #else
-        traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+        traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
 #endif
+        // The point this ray reaches is shaded with the same view of the scene it was found with.
+        gv_secondaryCull = secondaryCull;
 
         if (bounce == 0) {
             // Camera rays only: the viewmodel is masked out of every other ray type, so only the primary

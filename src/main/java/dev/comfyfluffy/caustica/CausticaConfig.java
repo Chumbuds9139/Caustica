@@ -1364,6 +1364,16 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting DIRECT_MODEL_CAPTURE =
                     bool("caustica.rt.directModelCapture", "entities.direct-model-capture", true);
+            /**
+             * The last diffuse bounce that still sees entities and block entities. Camera rays, mirror
+             * reflections and the direct shadows entities cast are never affected. 1 (default) keeps them
+             * in the first bounce of indirect light, which carries almost all of their visible effect
+             * (contact darkening, colour bleeding next to them); deeper bounces skip them, which in crowded
+             * places is a large share of the frame. 0 drops them from indirect light entirely; 8 keeps
+             * them in every bounce, as before.
+             */
+            public static final IntSetting GI_BOUNCES =
+                    clampedInt("caustica.rt.entityGiBounces", "entities.gi-bounces", 1, 0, 8);
             /** Debug-only: render each model submission twice and require bitwise-identical CPU captures. */
             public static final BooleanSetting CAPTURE_PARITY =
                     bool("caustica.rt.entityCaptureParity", "entities.debug.capture-parity", false);

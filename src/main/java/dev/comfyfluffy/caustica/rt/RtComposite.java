@@ -1830,7 +1830,8 @@ public final class RtComposite {
                     spp(),
                     new Float2(jitterX, jitterY),
                     flags,
-                    maxBounces(),
+                    // Bits 0-7 max bounces, bits 8-15 the last bounce entities are traced in (world.rgen).
+                    (maxBounces() & 0xFF) | ((CausticaConfig.Rt.Entities.GI_BOUNCES.value() & 0xFF) << 8),
                     sky.sunDir(),
                     sky.lightDir(),
                     sky.lightRadiance(),
