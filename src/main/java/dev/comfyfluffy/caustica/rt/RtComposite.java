@@ -1109,7 +1109,7 @@ public final class RtComposite {
                             RtDeviceBringup.worldPrimaryRaygenShader(),
                             RtDeviceBringup.worldRaygenShader()},
                     new String[]{"world.rmiss.spv", "world_guide.rmiss.spv"},
-                    "world.rchit.spv", "world.rahit.spv",
+                    "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv",
                     WorldPushConstantsData.BYTE_SIZE, true, GUIDE_COUNT, bindlessTextureCapacity, true);
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {

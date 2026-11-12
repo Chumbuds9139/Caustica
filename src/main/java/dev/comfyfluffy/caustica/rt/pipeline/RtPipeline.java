@@ -136,6 +136,20 @@ public final class RtPipeline {
      * dispatch by index.
      */
     public static RtPipeline create(RtContext ctx, String[] rgen, String[] rmiss, String rchit, String rahit, int pushConstantSize, boolean withBlockAlbedoAtlas, int extraStorageImages, int bindlessTextures, boolean skyAtlas) {
+        return create(ctx, rgen, rmiss, rchit, null, rahit, pushConstantSize, withBlockAlbedoAtlas,
+                extraStorageImages, bindlessTextures, skyAtlas);
+    }
+
+    /**
+     * As above, with {@code rchitEntity} (nullable) as the closest-hit shader of every hit group from
+     * {@link RtAccel#SBT_ENTITY_OFFSET} on, the records entity, particle and viewmodel instances use.
+     * {@code rchit} then serves only terrain and LOD records. Splitting by record keeps each shader to
+     * the branches its instances reach, which lowers register use and raises occupancy without
+     * changing what any hit computes.
+     */
+    public static RtPipeline create(RtContext ctx, String[] rgen, String[] rmiss, String rchit, String rchitEntity,
+                                    String rahit, int pushConstantSize, boolean withBlockAlbedoAtlas,
+                                    int extraStorageImages, int bindlessTextures, boolean skyAtlas) {
         VkDevice vk = ctx.vk();
         boolean hasAhit = rahit != null;
         String label = "world RT pipeline";
@@ -278,7 +292,9 @@ public final class RtPipeline {
             int hitGroupIdx = raygenCount + missCount;
             int chitStage = raygenCount + missCount;
             int ahitStage = chitStage + 1;
-            int stageCount = raygenCount + missCount + 1 + (hasAhit ? 1 : 0);
+            boolean splitHit = rchitEntity != null && hitGroupCount > RtAccel.SBT_ENTITY_OFFSET;
+            int stageCount = raygenCount + missCount + 1 + (hasAhit ? 1 : 0) + (splitHit ? 1 : 0);
+            int entityChitStage = splitHit ? stageCount - 1 : chitStage;
             long[] mGen = new long[raygenCount];
             for (int g = 0; g < raygenCount; g++) {
                 mGen[g] = loadModule(vk, stack, rgen[g]);
@@ -292,6 +308,10 @@ public final class RtPipeline {
             long mHit = loadModule(vk, stack, rchit);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit, label + " " + rchit);
             long mAhit = hasAhit ? loadModule(vk, stack, rahit) : 0L;
+            long mHitEntity = splitHit ? loadModule(vk, stack, rchitEntity) : 0L;
+            if (splitHit) {
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHitEntity, label + " " + rchitEntity);
+            }
             if (hasAhit) {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit, label + " " + rahit);
             }
@@ -307,6 +327,10 @@ public final class RtPipeline {
             if (hasAhit) {
                 stages.get(ahitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(mAhit).pName(entry);
             }
+            if (splitHit) {
+                stages.get(entityChitStage).sType$Default().stage(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR)
+                        .module(mHitEntity).pName(entry);
+            }
 
             VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
             for (int g = 0; g < raygenCount; g++) {
@@ -319,7 +343,8 @@ public final class RtPipeline {
             }
             for (int h = 0; h < hitGroupCount; h++) {
                 groups.get(hitGroupIdx + h).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
-                        .generalShader(VK_SHADER_UNUSED_KHR).closestHitShader(chitStage)
+                        .generalShader(VK_SHADER_UNUSED_KHR)
+                        .closestHitShader(h >= RtAccel.SBT_ENTITY_OFFSET ? entityChitStage : chitStage)
                         .anyHitShader(hasAhit && hitGroupUsesAnyHit(h) ? ahitStage : VK_SHADER_UNUSED_KHR)
                         .intersectionShader(VK_SHADER_UNUSED_KHR);
             }
@@ -346,6 +371,9 @@ public final class RtPipeline {
             VK10.vkDestroyShaderModule(vk, mHit, null);
             if (hasAhit) {
                 VK10.vkDestroyShaderModule(vk, mAhit, null);
+            }
+            if (mHitEntity != 0L) {
+                VK10.vkDestroyShaderModule(vk, mHitEntity, null);
             }
 
             // SBT: one record per group. Over-align the stride so every region start is base-aligned and

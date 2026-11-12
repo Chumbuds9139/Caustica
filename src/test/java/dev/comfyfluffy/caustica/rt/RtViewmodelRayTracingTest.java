@@ -122,7 +122,8 @@ final class RtViewmodelRayTracingTest {
     @Test
     void hitShaderTagsEveryViewmodelReturn() throws IOException {
         String rchit = Files.readString(WORLD_RCHIT);
-        String entity = slice(rchit, "if ((InstanceID() & ENTITY_BIT) != 0u) {", "\n    }\n\n    Section sec");
+        String entity = slice(rchit, "if ((InstanceID() & ENTITY_BIT) != 0u) {",
+                "\n    }\n    // Unreachable: only entity, particle and viewmodel instances carry SBT_ENTITY_OFFSET.");
         assertEquals(3, count(entity, "payload.flags |= PAYLOAD_VIEWMODEL;"),
                 "portal, glint and ordinary entity hits all need the tag: each one returns early");
         assertTrue(entity.contains("bool viewmodelGeom = (g.flags & ENTITY_GEOM_VIEWMODEL) != 0u;"),
@@ -330,5 +331,33 @@ final class RtViewmodelRayTracingTest {
             assertTrue((terrain & ray) != 0 && (entity & ray) != 0, "special shadows keep their occluders");
             assertTrue((lod & ray) == 0, "special shadows must keep ignoring LOD geometry");
         }
+    }
+
+    /**
+     * world.rchit compiles to a terrain/LOD shader and an entity shader, chosen per hit record. That is only
+     * equivalent to the single shader if every entity-family instance uses the entity records and nothing
+     * else does: pin the instance constructors and the pipeline's record split.
+     */
+    @Test
+    void entityInstancesUseTheEntityHitRecords() throws IOException {
+        java.nio.file.Path root = java.nio.file.Path.of("src/main/java/dev/comfyfluffy/caustica/rt");
+        String entities = Files.readString(root.resolve("entity/RtEntities.java"));
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("new RtAccel\\.Instance\\(([^;]*?)\\)\\);",
+                java.util.regex.Pattern.DOTALL).matcher(entities);
+        int instances = 0;
+        while (m.find()) {
+            instances++;
+            assertTrue(m.group(1).contains("RtAccel.SBT_ENTITY_OFFSET"),
+                    "entity-family instance without the entity hit records: " + m.group());
+        }
+        assertTrue(instances >= 5, "the scan found too few entity instance sites: " + instances);
+        for (String file : new String[] {"terrain/RtSectionTable.java", "terrain/RtDistantHorizonsTerrain.java"}) {
+            assertTrue(!Files.readString(root.resolve(file)).contains("SBT_ENTITY_OFFSET"),
+                    file + " must keep terrain/LOD instances on the world hit records");
+        }
+        String pipeline = Files.readString(root.resolve("pipeline/RtPipeline.java"));
+        assertTrue(pipeline.contains("closestHitShader(h >= RtAccel.SBT_ENTITY_OFFSET ? entityChitStage : chitStage)"));
+        String rchit = Files.readString(WORLD_RCHIT);
+        assertTrue(rchit.contains("#if !defined(CAUSTICA_CHIT_ENTITY)") && rchit.contains("#if defined(CAUSTICA_CHIT_ENTITY)"));
     }
 }

@@ -556,6 +556,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // before anything below rewrites payload.flags with the hit's material bits.
     bool cameraOrMirrorRay = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
 
+    // This source compiles to two closest-hit shaders. The SBT routes every instance by kind: terrain
+    // sections and DH/Voxy LODs use hit records from 0 (world.rchit), entities, particles and the
+    // viewmodel from SBT_ENTITY_OFFSET (world_entity.rchit, CAUSTICA_CHIT_ENTITY). Each variant keeps
+    // only the branches its instances can reach, so neither pays the register cost of the other's
+    // shading code; for any instance the code that runs is exactly what the single shader ran.
+#if !defined(CAUSTICA_CHIT_ENTITY)
     // Native DH/Voxy LOD triangles participate in camera, GI, reflection and shadow rays through the
     // same TLAS. They carry no sprite: shading comes from vertex colour + the mini-material class.
     if ((InstanceID() & DH_INSTANCE_KIND) == DH_INSTANCE_KIND) {
@@ -633,6 +639,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         return;
     }
 
+#endif
+
+#if defined(CAUSTICA_CHIT_ENTITY)
     // Particle billboard: same geom-table/UV/bindless-atlas path as entities. Albedo is atlas texel *
     // per-particle colour; raygen treats material 2 as a primary-visible diffuse receiver with no
     // emission or specular response. Reached only by the primary ray (instance mask 0x02). Cutout: rahit.
@@ -878,6 +887,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         }
         return;
     }
+    // Unreachable: only entity, particle and viewmodel instances carry SBT_ENTITY_OFFSET.
+    return;
+#else
 
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
     // Any-hit/SBT opt: the section BLAS has one fixed geometry per material bucket (solid / cutout /
@@ -1129,4 +1141,5 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;
     }
+#endif
 }
