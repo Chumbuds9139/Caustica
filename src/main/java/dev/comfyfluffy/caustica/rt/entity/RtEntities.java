@@ -372,6 +372,12 @@ public final class RtEntities {
         long refIndexAddr, refUvAddr, refPrimAddr;
         int[] refBucketTris;
         long retryYawFitAfter;
+        // Static reuse: how many consecutive captures came out identical to the one before (same local
+        // mesh, same anchor), the local transform the last emission placed the reference mesh with, and
+        // the frame it was emitted in.
+        int staticFrames;
+        float[] lastLocal = IDENTITY;
+        long lastEmitFrame = -1L;
     }
 
     /** This frame's terrain and dynamic instance segments, entity BLAS builds, and geometry-table address. */
@@ -750,6 +756,21 @@ public final class RtEntities {
             float iz;
             int id = entity.getId();
             EntityPrev prev = prevVerts.get(id);
+            if (!firstPersonSelf && prev != null && canReuseStatic(entity, id)) {
+                long reuseStart = RtFrameStats.FRAME.startStage();
+                try {
+                    appendStaticReuse(ctx, build, id, mask, prev.anchorX - rbx, prev.anchorY - rby,
+                            prev.anchorZ - rbz);
+                } finally {
+                    RtFrameStats.FRAME.endStage("entity.capture.rigidReuse", reuseStart);
+                }
+                curVerts.put(id, prev); // unchanged: next frame's motion is measured against the same mesh
+                build.logicalCount++;
+                RtFrameStats.FRAME.count("entitiesCaptured", 1);
+                RtFrameStats.FRAME.count("entityStaticReuse", 1);
+                capturedThisFrame++;
+                continue;
+            }
             capture.reset(prev != null ? prev.size / 3 : 0);
             try {
                 EntityRenderState state;
@@ -827,6 +848,9 @@ public final class RtEntities {
             } finally {
                 RtFrameStats.FRAME.endStage("entity.capture.motion", motionStart);
             }
+            boolean unchanged = prev != null && prev.size == capture.verts.size()
+                    && prev.anchorX == ix && prev.anchorY == iy && prev.anchorZ == iz
+                    && positionsBitwiseEqual(prev.verts, capture.verts.elements(), prev.size);
             curVerts.put(id, storeEntityPrev(prev, capture.verts, ix, iy, iz));
             // Rigid reuse first: a pose that is a rigid transform of the entity's last-built mesh
             // re-references that AS through the instance transform — no upload, no refit.
@@ -840,6 +864,11 @@ public final class RtEntities {
             if (!reused) {
                 appendCapture(ctx, build, motion, id, ENTITY_BIT, mask,
                         translationTransform(ix - rbx, iy - rby, iz - rbz));
+            }
+            EntityAccel captured = entityAccels.get(id);
+            if (captured != null) {
+                captured.staticFrames = unchanged ? captured.staticFrames + 1 : 0;
+                captured.lastEmitFrame = RtComposite.frameCounter();
             }
             build.logicalCount++;
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
@@ -1572,6 +1601,7 @@ public final class RtEntities {
         writeTableEntry(build, ea.refPrimAddr, ea.refIndexAddr, ea.refUvAddr,
                 motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris, 0,
                 "entity rigid reuse");
+        ea.lastLocal = localTransform;
         addEntityInstance(build, new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
                 ea.refAccel.deviceAddress,
                 ENTITY_BIT | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
@@ -1839,6 +1869,7 @@ public final class RtEntities {
         ea.refVertCount = vertCount;
         ea.refIdxCount = idxCount;
         ea.refShadeHash = shadeHash();
+        ea.lastLocal = IDENTITY; // a fresh build places the captured local mesh as is
         build.count++;
     }
 
@@ -1881,6 +1912,72 @@ public final class RtEntities {
                     "RT entities: replaced {} non-finite vertex coordinate(s) in a captured mesh; "
                             + "left alone these corrupt the acceleration-structure refit", fixed);
         }
+    }
+
+    /** Identical captures in a row before an entity is treated as standing still. */
+    private static final int STATIC_FRAMES_BEFORE_REUSE = 8;
+    /** A still entity is captured in full on one frame in this many (staggered by id) to catch changes. */
+    private static final int STATIC_REVALIDATE_FRAMES = 16;
+
+    /**
+     * Whether {@code entity} can skip capture this frame and re-emit last frame's result.
+     *
+     * <p>Capture (extract, pose, submit, compare) is most of the CPU cost of ray tracing in crowded places,
+     * and on a busy server most entities are decorations or idle: armour stands, item frames, displays,
+     * resting mobs. One that came out identical {@value #STATIC_FRAMES_BEFORE_REUSE} captures in a row,
+     * and whose position, rotations and damage state have not changed since, re-emits its previous mesh.
+     * It is still captured in full on one frame in {@value #STATIC_REVALIDATE_FRAMES}, so a change that
+     * leaves all of those alone (an item placed in a frame, a profession texture) appears within that
+     * many frames. Excluded outright: anything named, glowing, burning, leashed, or a player, because
+     * name tags, outlines, flames and leash ropes are produced by the capture itself.
+     */
+    private boolean canReuseStatic(Entity entity, int id) {
+        if (!CausticaConfig.Rt.Entities.STATIC_REUSE.value()) {
+            return false;
+        }
+        EntityAccel ea = entityAccels.get(id);
+        long frame = RtComposite.frameCounter();
+        if (ea == null || ea.refAccel == null || ea.refSlot == null || ea.refBucketTris == null
+                || ea.staticFrames < STATIC_FRAMES_BEFORE_REUSE || ea.lastEmitFrame != frame - 1L) {
+            return false;
+        }
+        if (((frame + id) % STATIC_REVALIDATE_FRAMES) == 0L) {
+            return false;
+        }
+        if (entity.getX() != entity.xo || entity.getY() != entity.yo || entity.getZ() != entity.zo
+                || entity.getYRot() != entity.yRotO || entity.getXRot() != entity.xRotO) {
+            return false;
+        }
+        if (entity instanceof net.minecraft.world.entity.player.Player || entity.hasCustomName()
+                || entity.isCurrentlyGlowing() || entity.isOnFire()) {
+            return false;
+        }
+        if (entity instanceof net.minecraft.world.entity.Leashable leashable && leashable.isLeashed()) {
+            return false;
+        }
+        if (entity instanceof net.minecraft.world.entity.LivingEntity living
+                && (living.yBodyRot != living.yBodyRotO || living.yHeadRot != living.yHeadRotO
+                || living.hurtTime > 0 || living.deathTime > 0)) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Re-emit a still entity's last result: its reference mesh and AS, at the same local transform. */
+    private void appendStaticReuse(RtContext ctx, FrameBuild build, int id, int mask,
+                                   float placeX, float placeY, float placeZ) {
+        EntityAccel ea = entityAccels.get(id);
+        beginBuildIfNeeded(ctx, build);
+        long frame = RtComposite.frameCounter();
+        ea.lastSeen = frame;
+        ea.lastEmitFrame = frame;
+        build.lists.usedEntitySlots.add(ea.refSlot);
+        writeTableEntry(build, ea.refPrimAddr, ea.refIndexAddr, ea.refUvAddr, 0L, 0f, 0f, 0f,
+                ea.refBucketTris, 0, "entity static reuse");
+        addEntityInstance(build, new RtAccel.Instance(placeTransform(ea.lastLocal, placeX, placeY, placeZ),
+                ea.refAccel.deviceAddress, ENTITY_BIT | (build.count & 0x3FFFFF), mask,
+                RtAccel.SBT_ENTITY_OFFSET));
+        build.count++;
     }
 
     /** Clear the latest rigid-reuse view; the backing remains owned by its retired ring slot. */
