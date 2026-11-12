@@ -118,7 +118,12 @@ public final class VoxyLodMesher {
         if (self == 0) return false;
         int selfKind = self >>> 28;
         int otherKind = other >>> 28;
-        if (selfKind == KIND_OPAQUE) return otherKind != KIND_OPAQUE;
+        if (selfKind == KIND_OPAQUE) {
+            // Distant water is shaded as a reflective surface that nothing is seen through, so the bed
+            // and banks beneath it can never be visible: leave them out of the BVH altogether.
+            if (otherKind == KIND_TRANSLUCENT && ((other >>> 24) & 0xF) == MATERIAL_WATER) return false;
+            return otherKind != KIND_OPAQUE;
+        }
         if (otherKind == KIND_AIR) return true;
         return otherKind == KIND_TRANSLUCENT && ((self ^ other) & 0x0F000000) != 0;
     }
@@ -132,6 +137,19 @@ public final class VoxyLodMesher {
      * @param palette  appearance tables
      */
     public static Result mesh(long[][] sections, Borders borders, int level, Palette palette) {
+        return mesh(sections, borders, level, palette, false);
+    }
+
+    /** How far below its own column's surface side air is still trusted to be open, in voxels. */
+    static final int CAVE_DEPTH = 8;
+
+    /**
+     * Mesh one column.
+     *
+     * @param sealCaves fill air that cannot be reached from the open sky (see {@link #sealEnclosedAir});
+     *                  only meaningful where the top of the stack is open sky, i.e. not under a ceiling
+     */
+    public static Result mesh(long[][] sections, Borders borders, int level, Palette palette, boolean sealCaves) {
         int stack = sections.length;
         int height = stack * SIZE;
         if (stack == 0) return new Result(new byte[0], new byte[0]);
@@ -162,6 +180,10 @@ public final class VoxyLodMesher {
             }
         }
         if (!any) return new Result(new byte[0], new byte[0]);
+        if (sealCaves) {
+            int fill = (KIND_OPAQUE << 28) | ((palette.fallbackMaterial & 0xF) << 24) | (palette.fallbackRgb & 0xFFFFFF);
+            sealEnclosedAir(cells, height, borders, palette, fill);
+        }
 
         QuadSink opaque = new QuadSink();
         QuadSink transparent = new QuadSink();
@@ -258,6 +280,102 @@ public final class VoxyLodMesher {
             }
         }
         return new Result(opaque.toArray(), transparent.toArray());
+    }
+
+    /**
+     * Turn air that cannot be reached from the open sky into solid rock.
+     *
+     * <p>A distant-terrain proxy only ever needs the outside of the world. Without this, every cave
+     * system inside the selected radius is meshed in full: in ordinary terrain that is several times
+     * the area of the visible surface, all of it BVH memory, build time and traversal cost for geometry
+     * no ray from the outside can usefully see.
+     *
+     * <p>Reachability is a flood fill through air and translucent matter (so windows do not seal a
+     * room, and water does not seal what is above it), seeded from the top of the stack and from side
+     * air that is near its own column's surface (within {@link #CAVE_DEPTH} voxels). Anything genuinely
+     * open to the sky inside the cell, such as a ravine or a shaft, is reached and kept; pockets with no
+     * opening, and tunnels that only continue into a neighbouring cell deep underground, are not.
+     * Everything not reached is filled; the result stays watertight because a filled voxel that borders
+     * reachable air simply shows a rock face there.
+     *
+     * <p>Air under an overhang or a floating island stays connected sideways to open air and is kept,
+     * as long as the open side lies within the same cell.
+     */
+    static void sealEnclosedAir(int[] cells, int height, Borders borders, Palette palette, int fill) {
+        int[] top = new int[AREA];
+        int lowestSurface = Integer.MAX_VALUE;
+        for (int z = 0; z < SIZE; z++) {
+            for (int x = 0; x < SIZE; x++) {
+                int y = height - 1;
+                while (y >= 0 && cells[(y * SIZE + z) * SIZE + x] == 0) y--;
+                top[z * SIZE + x] = y; // -1: nothing in this column
+                lowestSurface = Math.min(lowestSurface, y);
+            }
+        }
+        int floor = Math.max(0, lowestSurface - CAVE_DEPTH);
+
+        boolean[] reached = new boolean[cells.length];
+        int[] queue = new int[cells.length];
+        int head = 0;
+        int tail = 0;
+        // Open sky: the whole top layer of the stack.
+        for (int i = (height - 1) * AREA; i < height * AREA; i++) {
+            if (passable(cells[i])) {
+                reached[i] = true;
+                queue[tail++] = i;
+            }
+        }
+        // Side air continues into the neighbouring cell. Only air near the surface of its own column is
+        // trusted to be open; a deep tunnel crossing the border is sealed here and shows a rock face
+        // towards the neighbour instead.
+        for (int w = 0; w < SIZE; w++) {
+            tail = seedBorderColumn(cells, reached, queue, tail, height, floor, top, 0, w, borders.west(), w, palette);
+            tail = seedBorderColumn(cells, reached, queue, tail, height, floor, top, SIZE - 1, w, borders.east(), w, palette);
+            tail = seedBorderColumn(cells, reached, queue, tail, height, floor, top, w, 0, borders.north(), w, palette);
+            tail = seedBorderColumn(cells, reached, queue, tail, height, floor, top, w, SIZE - 1, borders.south(), w, palette);
+        }
+        while (head < tail) {
+            int index = queue[head++];
+            int x = index & 31;
+            int z = (index >> 5) & 31;
+            int y = index >> 10;
+            if (x > 0) tail = visit(cells, reached, queue, tail, index - 1);
+            if (x < SIZE - 1) tail = visit(cells, reached, queue, tail, index + 1);
+            if (z > 0) tail = visit(cells, reached, queue, tail, index - SIZE);
+            if (z < SIZE - 1) tail = visit(cells, reached, queue, tail, index + SIZE);
+            if (y < height - 1) tail = visit(cells, reached, queue, tail, index + AREA);
+            if (y > floor) tail = visit(cells, reached, queue, tail, index - AREA);
+        }
+        for (int i = 0; i < cells.length; i++) {
+            if (cells[i] == 0 && !reached[i]) cells[i] = fill;
+        }
+    }
+
+    private static boolean passable(int key) {
+        return (key >>> 28) != KIND_OPAQUE;
+    }
+
+    private static int visit(int[] cells, boolean[] reached, int[] queue, int tail, int index) {
+        if (!reached[index] && passable(cells[index])) {
+            reached[index] = true;
+            queue[tail++] = index;
+        }
+        return tail;
+    }
+
+    /** Seed the passable voxels of one side column whose outside neighbour is passable too. */
+    private static int seedBorderColumn(int[] cells, boolean[] reached, int[] queue, int tail, int height,
+                                        int floor, int[] top, int x, int z, long[][] plane, int planeW,
+                                        Palette palette) {
+        int from = Math.max(floor, top[z * SIZE + x] - CAVE_DEPTH);
+        for (int y = Math.max(0, from); y < height; y++) {
+            int index = (y * SIZE + z) * SIZE + x;
+            if (reached[index] || !passable(cells[index])) continue;
+            if (!passable(borderKey(plane, y, planeW, palette))) continue;
+            reached[index] = true;
+            queue[tail++] = index;
+        }
+        return tail;
     }
 
     /** Appearance of the voxel at stacked height {@code y}, in-plane coordinate {@code w}, of a border. */

@@ -52,6 +52,7 @@ Each reduction is logged ("TDR guard: ..."). Config, section `stability`:
 | --- | --- | --- |
 | `tdr-guard` | `true` | Enable the guard. `false` always traces at the configured samples/bounces. |
 | `tdr-guard-frame-ms` | `350` | GPU frame time to stay under, 100-1500. Raise it only if you deliberately run at very low frame rates. |
+| `validate-tlas` | `true` | Before each frame's top-level acceleration structure is built, drop instances that point at a destroyed bottom-level structure or carry a non-finite transform. Either would be a lost device; a dropped instance is logged as `TLAS audit:`. |
 
 What it does not cover: the guard limits the tracer's own cost. A reset caused by a driver fault,
 overheating, an unstable overclock, or video memory exhausted by something it does not control can
@@ -133,6 +134,7 @@ Config (`config/caustica.toml`, section `stability`):
 | `voxy-vulkan-bridge` | `true` | Keep the Vulkan backend when Voxy is installed. `false` restores Voxy's veto (the game then runs on OpenGL without ray tracing). Needs a restart. |
 | `voxy-lods` | `true` | Ray trace Voxy LODs (the "Voxy LODs" toggle in the RT settings). |
 | `voxy-lod-distance-chunks` | `96` | LOD distance for ray tracing, 32–512. Separate from Voxy's own render distance on purpose. |
+| `voxy-lod-seal-caves` | `true` | Fill air that cannot be reached from the sky before meshing a LOD cell (overworld-like dimensions only). Sealed caves cost triangles and BLAS memory and are never seen at LOD distance. |
 
 Limits:
 
@@ -157,3 +159,17 @@ Voxy's.
 
 Not verified: anything that needs a running game on ray-tracing hardware — the image, frame pacing,
 memory use at large LOD distances, and behaviour with other mods installed alongside.
+
+## Reading a device-loss report
+
+When the GPU is lost Caustica logs the `VK_EXT_device_fault` report and resolves each fault address:
+
+- `'<label>' range=...` - the address is inside a live Caustica buffer.
+- `USE AFTER FREE of '<label>' ... destroyed N ms before this report` - the address belonged to a buffer
+  Caustica destroyed recently (the last 65536 frees are remembered). This names the buffer whose lifetime
+  is wrong.
+- `unresolved, not a live or recently destroyed Caustica buffer` - the address is not Caustica buffer
+  memory at all: an out-of-range index in a shader, an image, or the driver's own memory.
+
+Entity meshes are also scrubbed of non-finite vertex positions before upload (`RT entities: replaced ...`),
+because a NaN appearing during an acceleration-structure refit is undefined behaviour in Vulkan.

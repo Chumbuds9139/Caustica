@@ -453,6 +453,10 @@ public static const uint DH_SURFACE_WATER = 1u;
 public static const uint DH_SURFACE_GLASS = 2u;
 public static const uint DH_SURFACE_EMISSIVE = 3u;
 public static const uint DH_SURFACE_EMISSIVE_GLASS = 4u;
+// Distant (DH/Voxy LOD) water: the share of the biome water colour returned diffusely by the water body,
+// and the roughness of its reflective surface. See the LOD water branch in world.rchit.
+public static const float DH_WATER_BODY_ALBEDO = 0.18;
+public static const float DH_WATER_ROUGHNESS = 0.04;
 
 public static const uint DH_MATERIAL_UNKNOWN = 0u;
 public static const uint DH_MATERIAL_LEAVES = 1u;

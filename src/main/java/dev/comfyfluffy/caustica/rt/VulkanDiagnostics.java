@@ -261,7 +261,66 @@ public final class VulkanDiagnostics {
     }
 
     public static void unregisterBuffer(long address, long handle) {
-        BUFFERS.computeIfPresent(address, (ignored, range) -> range.handle == handle ? null : range);
+        BUFFERS.computeIfPresent(address, (ignored, range) -> {
+            if (range.handle != handle) {
+                return range;
+            }
+            rememberFreed(range);
+            return null;
+        });
+    }
+
+    // ---- Recently freed buffers -------------------------------------------------------------------
+    //
+    // A device-loss report gives the address the GPU faulted on. When that address belongs to no live
+    // buffer the interesting question is whether it belonged to one a moment ago: that is the
+    // difference between "something read a buffer after it was destroyed" (and which one) and "a wild
+    // pointer / an image". A fixed ring of the most recent frees answers it at the cost of four array
+    // writes per destroyed buffer.
+    private static final int FREED_RING = 1 << 16;
+    private static final long[] FREED_ADDRESS = new long[FREED_RING];
+    private static final long[] FREED_SIZE = new long[FREED_RING];
+    private static final long[] FREED_NANOS = new long[FREED_RING];
+    private static final String[] FREED_LABEL = new String[FREED_RING];
+    private static long freedCount;
+
+    private static void rememberFreed(BufferRange range) {
+        synchronized (FREED_LABEL) {
+            int slot = (int) (freedCount++ & (FREED_RING - 1));
+            FREED_ADDRESS[slot] = range.address;
+            FREED_SIZE[slot] = range.size;
+            FREED_NANOS[slot] = System.nanoTime();
+            FREED_LABEL[slot] = range.label;
+        }
+    }
+
+    /** The most recently freed buffer that contained {@code address}, described for a log line, or null. */
+    private static String resolveFreedBuffer(long address) {
+        synchronized (FREED_LABEL) {
+            long now = System.nanoTime();
+            long entries = Math.min(freedCount, FREED_RING);
+            for (long back = 1; back <= entries; back++) {
+                int slot = (int) ((freedCount - back) & (FREED_RING - 1));
+                long base = FREED_ADDRESS[slot];
+                if (Long.compareUnsigned(address, base) >= 0
+                        && Long.compareUnsigned(address - base, FREED_SIZE[slot]) < 0) {
+                    return "'" + FREED_LABEL[slot] + "' range=0x" + Long.toUnsignedString(base, 16) + "+"
+                            + FREED_SIZE[slot] + " offset=" + Long.toUnsignedString(address - base)
+                            + ", destroyed " + (now - FREED_NANOS[slot]) / 1_000_000L + " ms before this report ("
+                            + back + " frees ago)";
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Whether {@code address} lies inside a buffer Caustica currently owns. Used to catch a TLAS instance
+     * that still points at a destroyed bottom-level structure before the GPU ever traverses it.
+     */
+    public static boolean isLiveBufferAddress(long address) {
+        var entry = BUFFERS.floorEntry(address);
+        return entry != null && entry.getValue().contains(address);
     }
 
     /** Query fault details once, immediately after a device-loss result is observed. */
@@ -469,13 +528,17 @@ public final class VulkanDiagnostics {
                     + " range=0x" + Long.toUnsignedString(range.address, 16) + "+" + range.size
                     + " offset=" + Long.toUnsignedString(address - range.address);
         }
+        String freed = resolveFreedBuffer(address);
+        if (freed != null) {
+            return "USE AFTER FREE of " + freed;
+        }
         var next = BUFFERS.ceilingEntry(address);
         String nearest = entry == null ? "none" : "prev='" + entry.getValue().label + "'@0x"
                 + Long.toUnsignedString(entry.getKey(), 16);
         if (next != null) {
             nearest += ", next='" + next.getValue().label + "'@0x" + Long.toUnsignedString(next.getKey(), 16);
         }
-        return "unresolved (" + nearest + ")";
+        return "unresolved, not a live or recently destroyed Caustica buffer (" + nearest + ")";
     }
 
     private static void writeVendorBinary(ByteBuffer binary, long reportedSize) {

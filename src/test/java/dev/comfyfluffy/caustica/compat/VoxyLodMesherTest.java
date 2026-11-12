@@ -190,10 +190,105 @@ final class VoxyLodMesherTest {
         assertEquals(0x0D, result.transparent()[8] & 0xFF);
         assertEquals(0x0E, result.transparent()[9] & 0xFF);
         assertEquals(0x0F, result.transparent()[10] & 0xFF);
-        // Stone bed: its top is visible through the water.
-        assertEquals(64, result.opaque().length);
-        assertArrayEquals(new int[]{0, 1, 0}, normal(result.opaque(), 0));
-        assertEquals(1, vertex(result.opaque(), 0, 0)[1]);
+        // Distant water is shaded as an opaque reflective surface, so the bed under it is never
+        // visible and must not cost any geometry.
+        assertEquals(0, result.opaque().length);
+    }
+
+    private static long[] solidBelow(int surface) {
+        long[] data = section();
+        for (int y = 0; y < surface; y++) {
+            for (int z = 0; z < SIZE; z++) {
+                for (int x = 0; x < SIZE; x++) set(data, x, y, z, STONE, 0);
+            }
+        }
+        return data;
+    }
+
+    private static VoxyLodMesher.Borders solidBorders(int surface) {
+        long[] plane = new long[SIZE * SIZE];
+        for (int y = 0; y < surface; y++) {
+            for (int w = 0; w < SIZE; w++) plane[y * SIZE + w] = VoxyLodMesher.composeId(STONE, 0);
+        }
+        long[][] p = {plane};
+        return new VoxyLodMesher.Borders(p, p, p, p);
+    }
+
+    @Test
+    void sealedCavesCostNoGeometry() {
+        long[] data = solidBelow(24);
+        // A closed cavern well below the surface.
+        for (int y = 4; y < 10; y++) {
+            for (int z = 8; z < 20; z++) {
+                for (int x = 8; x < 20; x++) set(data, x, y, z, 0, 0);
+            }
+        }
+        VoxyLodMesher.Result open = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(24), 0, palette(), false);
+        VoxyLodMesher.Result sealed = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(24), 0, palette(), true);
+        assertTrue(open.opaque().length > 64, "without sealing the cavern walls are meshed");
+        assertEquals(64, sealed.opaque().length, "with sealing only the flat surface remains");
+        assertArrayEquals(new int[]{0, 1, 0}, normal(sealed.opaque(), 0));
+        assertEquals(24, vertex(sealed.opaque(), 0, 0)[1]);
+    }
+
+    @Test
+    void cavesOpenToTheSkyAreKeptWhileSealedOnesBesideThemAreFilled() {
+        long[] data = solidBelow(24);
+        // A 2x2 shaft from the surface down to y=2: open to the sky, so it is real visible geometry.
+        for (int y = 2; y < 24; y++) {
+            for (int z = 10; z < 12; z++) {
+                for (int x = 10; x < 12; x++) set(data, x, y, z, 0, 0);
+            }
+        }
+        // A closed pocket elsewhere, not connected to anything.
+        for (int y = 6; y < 9; y++) {
+            for (int z = 20; z < 24; z++) {
+                for (int x = 20; x < 24; x++) set(data, x, y, z, 0, 0);
+            }
+        }
+        VoxyLodMesher.Result sealed = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(24), 0, palette(), true);
+        int lowest = Integer.MAX_VALUE;
+        for (int q = 0; q < sealed.opaque().length / 64; q++) {
+            for (int v = 0; v < 4; v++) {
+                int[] p = vertex(sealed.opaque(), q, v);
+                lowest = Math.min(lowest, p[1]);
+                boolean inPocket = p[0] >= 20 && p[0] <= 24 && p[2] >= 20 && p[2] <= 24 && p[1] < 24;
+                assertTrue(!inPocket, "the sealed pocket must not produce any face");
+            }
+        }
+        assertEquals(2, lowest, "the open shaft keeps its walls and floor");
+    }
+
+    @Test
+    void airUnderAnOverhangStaysOpen() {
+        long[] data = solidBelow(4);
+        // A slab floating over half of the cell, 10 voxels above the ground.
+        for (int z = 0; z < SIZE; z++) {
+            for (int x = 0; x < 16; x++) set(data, x, 14, z, STONE, 0);
+        }
+        VoxyLodMesher.Result open = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(4), 0, palette(), false);
+        VoxyLodMesher.Result sealed = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(4), 0, palette(), true);
+        assertArrayEquals(open.opaque(), sealed.opaque(),
+                "air connected sideways to the open sky is not a cave: the slab must not grow a pillar");
+    }
+
+    @Test
+    void windowsDoNotSealARoom() {
+        long[] data = solidBelow(4);
+        // A hollow stone box with one glass block in its wall.
+        for (int y = 4; y < 10; y++) {
+            for (int z = 8; z < 16; z++) {
+                for (int x = 8; x < 16; x++) {
+                    boolean shell = y == 9 || x == 8 || x == 15 || z == 8 || z == 15;
+                    if (shell) set(data, x, y, z, STONE, 0);
+                }
+            }
+        }
+        set(data, 8, 6, 11, GLASS, 0);
+        VoxyLodMesher.Result open = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(4), 0, palette(), false);
+        VoxyLodMesher.Result sealed = VoxyLodMesher.mesh(new long[][]{data}, solidBorders(4), 0, palette(), true);
+        assertArrayEquals(open.opaque(), sealed.opaque(), "the interior is reachable through the window");
+        assertArrayEquals(open.transparent(), sealed.transparent());
     }
 
     @Test

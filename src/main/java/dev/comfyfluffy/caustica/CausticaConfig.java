@@ -1187,6 +1187,13 @@ public final class CausticaConfig {
             public static final IntSetting TDR_GUARD_FRAME_MS =
                     clampedInt("caustica.rt.tdrGuardFrameMs", "stability.tdr-guard-frame-ms", 350, 100, 1500);
             /**
+             * Check every instance of each frame's top-level acceleration structure before it is built and
+             * drop the ones that would make the GPU read invalid memory (a destroyed bottom-level
+             * structure, a non-finite transform). Costs well under a millisecond per frame.
+             */
+            public static final BooleanSetting VALIDATE_TLAS =
+                    bool("caustica.rt.validateTlas", "stability.validate-tlas", true);
+            /**
              * Let Minecraft create the Vulkan device even though Voxy vetoes that backend. Voxy's OpenGL
              * renderer is then left switched off and its LOD data is ray traced by Caustica instead.
              */
@@ -1195,6 +1202,13 @@ public final class CausticaConfig {
             /** Ray trace Voxy's LOD terrain beyond the loaded chunks (the Voxy toggle in the RT settings). */
             public static final BooleanSetting VOXY_LODS =
                     bool("caustica.rt.voxyLods", "stability.voxy-lods", true);
+            /**
+             * Leave caves that cannot be reached from the open sky out of the Voxy LOD geometry. Much less
+             * BVH memory and traversal work; turn off if large overhangs or floating terrain show rock
+             * faces underneath that should not be there.
+             */
+            public static final BooleanSetting VOXY_LOD_SEAL_CAVES =
+                    bool("caustica.rt.voxyLodSealCaves", "stability.voxy-lod-seal-caves", true);
             /** How far Voxy LODs are ray traced, in chunks (the RT settings slider moves in steps of 32). */
             public static final IntSetting VOXY_LOD_DISTANCE_CHUNKS =
                     clampedInt("caustica.rt.voxyLodDistanceChunks", "stability.voxy-lod-distance-chunks", 96, 32, 512);

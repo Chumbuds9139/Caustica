@@ -805,6 +805,7 @@ public final class RtEntities {
             if (capture.isEmpty()) {
                 continue; // non-model entity (arrow/etc.) — no body geometry captured
             }
+            sanitizePositions(capture.verts.elements(), capture.verts.size());
             if (glow && !firstPersonSelf) {
                 // Vanilla never draws the local player's own body in first person (no model to outline —
                 // only the held-item hand), so it never shows the Glowing outline on yourself either. Our
@@ -1299,6 +1300,7 @@ public final class RtEntities {
         if (entry != null) {
             entry.lastSeen = now;
         }
+        sanitizePositions(capture.verts.elements(), capture.verts.size());
         long hash = meshHash();
         float[] disp = null; // static unless the mesh changed this frame (chest lid / spawner animation)
         if (entry == null || entry.meshHash != hash) {
@@ -1746,6 +1748,7 @@ public final class RtEntities {
     /** Pack one changed entity's four logical geometry regions into its retired ring slot's backing. */
     private void appendPackedEntity(RtContext ctx, FrameBuild build, Motion motion, int entityId,
                                     int instanceBit, int mask, float[] instanceTransform) {
+        sanitizePositions(capture.verts.elements(), capture.verts.size());
         int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         int vertCount = capture.verts.size() / 3;
@@ -1834,6 +1837,47 @@ public final class RtEntities {
         ea.refIdxCount = idxCount;
         ea.refShadeHash = shadeHash();
         build.count++;
+    }
+
+    /** Positions further than this from the rebased origin are a broken pose, not geometry. */
+    private static final float MAX_POSITION = 1.0e6f;
+    private static long lastSanitizeLogNanos;
+
+    /**
+     * Replace non-finite or absurd vertex positions with the origin.
+     *
+     * <p>Vulkan treats a triangle whose first vertex has a NaN X as <em>inactive</em>, and forbids an
+     * acceleration-structure UPDATE from changing which triangles are active. Entity structures are
+     * refit every frame, so a single NaN from a broken animation (a zero-length bone, a divide by a
+     * zero tick delta in some mod's model) turns a legal refit into undefined behaviour inside the
+     * driver, which surfaces as a lost device rather than as an error. A collapsed triangle is still
+     * active and merely invisible.
+     */
+    static int sanitizePositions(float[] positions, int count) {
+        int fixed = 0;
+        for (int i = 0; i < count; i++) {
+            float v = positions[i];
+            // Written so NaN fails the comparison too.
+            if (!(v >= -MAX_POSITION && v <= MAX_POSITION)) {
+                positions[i] = 0.0f;
+                fixed++;
+            }
+        }
+        if (fixed != 0) {
+            noteSanitized(fixed);
+        }
+        return fixed;
+    }
+
+    private static void noteSanitized(int fixed) {
+        RtFrameStats.FRAME.count("entitySanitizedPositions", fixed);
+        long now = System.nanoTime();
+        if (lastSanitizeLogNanos == 0L || now - lastSanitizeLogNanos >= 5_000_000_000L) {
+            lastSanitizeLogNanos = now;
+            dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn(
+                    "RT entities: replaced {} non-finite vertex coordinate(s) in a captured mesh; "
+                            + "left alone these corrupt the acceleration-structure refit", fixed);
+        }
     }
 
     /** Clear the latest rigid-reuse view; the backing remains owned by its retired ring slot. */

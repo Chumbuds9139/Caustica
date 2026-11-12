@@ -598,12 +598,20 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             // Our unified dielectric raygen derives the medium from the payload, so the safe adaptation
             // is a glossy opaque water-tinted surface: correct colour and a plausible sun highlight at
             // horizon distances, with zero medium-stack interaction.
-            payload.albedo = half3(dpr.tint.rgb);
+            //
+            // What makes it read as water rather than as a painted block is the split between the two
+            // lobes. Open water returns very little light diffusely (a few percent, coloured by what is
+            // dissolved in it); nearly everything the eye sees at a distance is the mirror reflection of
+            // the sky, which grows towards the horizon with Fresnel. Using the biome tint as a full
+            // diffuse albedo instead lit the surface like blue concrete. So: a dim, tint-coloured body
+            // term, the dielectric F0 of water, and a roughness low enough for a clean sky reflection
+            // but not zero, which keeps the sun's glitter path from aliasing on coarse LOD faces.
+            payload.albedo = half3(dpr.tint.rgb * DH_WATER_BODY_ALBEDO);
             payload.normal = half3(dn);
             payload.hitT = RayTCurrent();
             payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
             payload.f0 = half3(0.02h, 0.02h, 0.02h);
-            payloadSetPacked(payload, MATERIAL_OPAQUE, 0.075, 0.0, 0.0, 0.0,
+            payloadSetPacked(payload, MATERIAL_OPAQUE, DH_WATER_ROUGHNESS, 0.0, 0.0, 0.0,
                     1.333, 0.0, EMISSION_SOURCE_NONE);
             return;
         }

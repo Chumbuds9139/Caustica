@@ -165,11 +165,14 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
 // Select one light from the emitted-power distribution in O(1).
 public void selectGlobalLight(inout uint proposalSeed, out uint lightIndex) {
     float aliasSample = rndf(proposalSeed) * float(worldPush.lightCount);
-    uint column = min(uint(aliasSample), worldPush.lightCount - 1u);
+    // lastLight also bounds the result: every index this returns is dereferenced as a device address, so
+    // an index outside the light table is not a wrong pixel but a GPU page fault (a lost device).
+    uint lastLight = max(worldPush.lightCount, 1u) - 1u;
+    uint column = min(uint(aliasSample), lastLight);
     if (pc.lightAliasAddr != 0) {
         LightAlias a = ConstPtr<LightAlias>(pc.lightAliasAddr)[column];
         bool self = aliasSample - float(column) < a.accept;
-        lightIndex = self ? column : a.aliasIndex;
+        lightIndex = min(self ? column : a.aliasIndex, lastLight);
     } else {
         lightIndex = column;
     }
@@ -196,11 +199,13 @@ public bool findLightGridCell(float3 p, out LightGridCell cell, out int3 cellCoo
 public void selectSectionLight(uint firstLight, uint lightCount, inout uint proposalSeed,
                         out uint lightIndex) {
     float aliasSample = rndf(proposalSeed) * float(lightCount);
-    uint column = min(uint(aliasSample), lightCount - 1u);
-    LightAlias alias = ConstPtr<LightAlias>(pc.lightLocalAliasAddr)[firstLight + column];
+    uint lastLight = max(worldPush.lightCount, 1u) - 1u;
+    uint column = min(uint(aliasSample), max(lightCount, 1u) - 1u);
+    // The local alias table has exactly one entry per light, so the global bound holds for it too.
+    LightAlias alias = ConstPtr<LightAlias>(pc.lightLocalAliasAddr)[min(firstLight + column, lastLight)];
     bool self = aliasSample - float(column) < alias.accept;
     uint localIndex = self ? column : alias.aliasIndex;
-    lightIndex = firstLight + localIndex;
+    lightIndex = min(firstLight + localIndex, lastLight);
 }
 
 public float unpackUnsignedFloat(uint bits, uint mantissaBits) {

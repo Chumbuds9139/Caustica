@@ -409,6 +409,10 @@ final class VoxyNativeBridge {
         VoxyLodMesher.Palette palette = paletteBuilder.snapshot();
         int minY = clientLevel.getMinY();
         int maxYExclusive = minY + clientLevel.getHeight();
+        // Sealing assumes the top of the world is open sky; under a ceiling (the Nether) the whole
+        // playable space would count as an enclosed cave.
+        boolean sealCaves = CausticaConfig.Rt.Stability.VOXY_LOD_SEAL_CAVES.value()
+                && clientLevel.dimensionType().hasSkyLight() && !clientLevel.dimensionType().hasCeiling();
         for (long key : desired) {
             if (inFlight.get() >= MAX_IN_FLIGHT) break;
             if (building.contains(key)) continue;
@@ -422,7 +426,7 @@ final class VoxyNativeBridge {
             long taskEpoch = epoch;
             Object taskEngine = engine;
             try {
-                workers.execute(() -> build(taskEpoch, taskEngine, key, minY, maxYExclusive, palette));
+                workers.execute(() -> build(taskEpoch, taskEngine, key, minY, maxYExclusive, palette, sealCaves));
             } catch (RuntimeException rejected) {
                 inFlight.decrementAndGet();
                 building.remove(key);
@@ -433,12 +437,12 @@ final class VoxyNativeBridge {
 
     /** Worker thread: copy one column out of Voxy and mesh it. */
     private void build(long taskEpoch, Object taskEngine, long key, int minY, int maxYExclusive,
-                       VoxyLodMesher.Palette palette) {
+                       VoxyLodMesher.Palette palette, boolean sealCaves) {
         DistantHorizonsCompat.LodMesh mesh = null;
         Throwable failure = null;
         try {
             if (taskEpoch == epoch) {
-                mesh = meshCell(taskEngine, key, minY, maxYExclusive, palette);
+                mesh = meshCell(taskEngine, key, minY, maxYExclusive, palette, sealCaves);
             }
         } catch (Throwable t) {
             failure = t;
@@ -449,7 +453,7 @@ final class VoxyNativeBridge {
     }
 
     private DistantHorizonsCompat.LodMesh meshCell(Object taskEngine, long key, int minY, int maxYExclusive,
-                                                   VoxyLodMesher.Palette palette)
+                                                   VoxyLodMesher.Palette palette, boolean sealCaves)
             throws ReflectiveOperationException {
         int lvl = cellLevel(key);
         int cx = cellX(key);
@@ -487,7 +491,7 @@ final class VoxyNativeBridge {
         }
         if (!any) return null;
         VoxyLodMesher.Result result = VoxyLodMesher.mesh(sections,
-                new VoxyLodMesher.Borders(west, east, north, south), lvl, palette);
+                new VoxyLodMesher.Borders(west, east, north, south), lvl, palette, sealCaves);
         if (result.isEmpty()) return null;
         return new DistantHorizonsCompat.LodMesh(key, MESH_VERSION.incrementAndGet(),
                 cx * sectionBlocks, firstSection * sectionBlocks, cz * sectionBlocks,
