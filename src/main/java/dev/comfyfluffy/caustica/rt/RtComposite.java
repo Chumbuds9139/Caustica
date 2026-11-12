@@ -1643,6 +1643,7 @@ public final class RtComposite {
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
+        RtGpuTimer.beginFrame(ctx, cmd);
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // The active upscaler drives the frame: trace + jitter at render res, then DLSS-RR
             // (denoise+upscale) or FSR 3 (upscale only) brings it to display res. They occupy one
@@ -3016,6 +3017,7 @@ public final class RtComposite {
     public void destroy() {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
+        RtGpuTimer.destroy(RtContext.currentOrNull());
         tlasRing.destroy();
         sharc.destroy(RtContext.currentOrNull());
         // Unconditional: RtDlssRr.enabled() reflects the CURRENT toggles, and the denoiser toggle can

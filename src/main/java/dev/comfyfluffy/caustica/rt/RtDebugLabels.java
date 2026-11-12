@@ -44,9 +44,11 @@ public final class RtDebugLabels {
         }
         VulkanDiagnostics.breadcrumb("record " + label + " cmd=0x" + Long.toUnsignedString(cmd.address(), 16));
         VulkanDiagnostics.checkpoint(cmd, "begin " + label);
+        int timer = RtGpuTimer.open(cmd, label);
         ctx.device().instance().debug().beginDebugGroup(cmd, () -> PREFIX + label);
         return () -> {
             ctx.device().instance().debug().endDebugGroup(cmd);
+            RtGpuTimer.close(cmd, timer);
             VulkanDiagnostics.checkpoint(cmd, "end " + label);
         };
     }

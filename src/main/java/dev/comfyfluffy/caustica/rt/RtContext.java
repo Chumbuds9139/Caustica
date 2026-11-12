@@ -67,10 +67,12 @@ public final class RtContext {
     private final int maxShaderGroupStride;
     private final int accelerationStructureScratchAlignment;
     private final long updateAfterBindCombinedImageSamplerLimit;
+    private final float timestampPeriodNanos;
     private long commandPool;
 
     private RtContext(VulkanDevice device, long vma, int handleSize, int baseAlign, int handleAlign,
-                      int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit) {
+                      int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit,
+                      float timestampPeriodNanos) {
         this.device = device;
         this.vk = device.vkDevice();
         this.vma = vma;
@@ -83,6 +85,7 @@ public final class RtContext {
         this.maxShaderGroupStride = maxSbtStride;
         this.accelerationStructureScratchAlignment = scratchAlign;
         this.updateAfterBindCombinedImageSamplerLimit = updateAfterBindCombinedImageSamplerLimit;
+        this.timestampPeriodNanos = timestampPeriodNanos;
         this.gpuExecutor = new RtGpuExecutor(this);
     }
 
@@ -144,6 +147,7 @@ public final class RtContext {
             VK12.vkGetPhysicalDeviceProperties2(phys, props2);
 
             var limits = props2.properties().limits();
+            float timestampPeriod = limits.timestampComputeAndGraphics() ? limits.timestampPeriod() : 0.0f;
             long combinedImageSamplerLimit = minUnsigned(
                     limits.maxPerStageDescriptorSamplers(),
                     limits.maxPerStageDescriptorSampledImages(),
@@ -164,7 +168,8 @@ public final class RtContext {
 
             return new RtContext(device, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                     rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
-                    asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
+                    asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit,
+                    timestampPeriod);
         }
     }
 
@@ -178,6 +183,11 @@ public final class RtContext {
 
     public VulkanDevice device() {
         return device;
+    }
+
+    /** Nanoseconds per GPU timestamp tick, or 0 when graphics/compute queues cannot write timestamps. */
+    public float timestampPeriodNanos() {
+        return timestampPeriodNanos;
     }
 
     public VkDevice vk() {

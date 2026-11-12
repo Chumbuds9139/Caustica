@@ -80,7 +80,19 @@ public final class RtFrameStats {
                     "frame.xess",
                     "frame.dof",
                     "frame.displayMap",
-                    "frame.copyOutput"
+                    "frame.copyOutput",
+                    "gpu.frame",
+                    "gpu.blasBuild",
+                    "gpu.tlasBuild",
+                    "gpu.tracePrimary",
+                    "gpu.traceIndirect",
+                    "gpu.dlssRr",
+                    "gpu.nrd",
+                    "gpu.svgf",
+                    "gpu.upscale",
+                    "gpu.exposure",
+                    "gpu.bloom",
+                    "gpu.display"
             },
             new String[] {"sectionsSnapshotted", "sectionCopies", "terrainBuildsCompleted",
                     "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
@@ -263,6 +275,17 @@ public final class RtFrameStats {
             int idx = indexOf(stageIndices, stageName);
             if (idx >= 0) {
                 stageNanos[idx] += System.nanoTime() - startNanos;
+            }
+        }
+
+        /** Add a duration measured elsewhere (GPU timestamps) to a named stage of the current frame. */
+        public void addStageNanos(String stageName, long nanos) {
+            if (!enabled() || !active || nanos <= 0L) {
+                return;
+            }
+            int idx = indexOf(stageIndices, stageName);
+            if (idx >= 0) {
+                stageNanos[idx] += nanos;
             }
         }
 
