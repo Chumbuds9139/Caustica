@@ -38,6 +38,7 @@ public final class RtFrameStats {
                     "terrain.drainCompletion",
                     "terrain.snapshotDispatch",
                     "terrain.publish",
+                    "terrain.lightGridPublish",
                     "entity.capture",
                     "entity.capture.extract",
                     "entity.capture.submit",
@@ -61,13 +62,23 @@ public final class RtFrameStats {
                     "entity.blockEntities",
                     "entity.particles",
                     "entity.blasRecord",
+                    "entity.viewmodel",
+                    "viewmodel.capture",
                     "frame.prepareTlas",
                     "frame.recordTlas",
                     "frame.trace",
+                    "frame.tracePrimary",
+                    "frame.traceIndirect",
+                    "frame.svgf",
+                    "frame.nrd",
+                    "frame.nrdCombine",
                     "frame.exposure",
                     "frame.bloom",
                     "frame.dlssRr",
                     "frame.upscale",
+                    "frame.fsr",
+                    "frame.xess",
+                    "frame.dof",
                     "frame.displayMap",
                     "frame.copyOutput"
             },
@@ -84,7 +95,9 @@ public final class RtFrameStats {
                     "entityPackedBytes", "entityPackedPaddingBytes", "entityRetainedGeometryBytes",
                     "entityFrameListsWaits", "entityTableWaits", "entitySlotWaits",
                     "entityGraphicsWaitNanos", "entityMotionFlushes", "entityTableFlushes",
-                    "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements"},
+                    "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements",
+                    "entitySanitizedPositions", "entityTableRejected", "viewmodelInstances",
+                    "viewmodelSubmissionsUnsupported", "viewmodelVertices", "weatherColumnsCaptured"},
             true);
 
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
@@ -111,7 +124,19 @@ public final class RtFrameStats {
         return total;
     }
 
+    private static final java.util.Set<String> UNKNOWN_NAMES = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private RtFrameStats() {
+    }
+
+    /** Every stage name registered in {@link #FRAME}, for the instrumentation consistency test. */
+    static List<String> frameStageNames() {
+        return List.of(FRAME.stageNames);
+    }
+
+    /** Every counter name registered in {@link #FRAME}, for the instrumentation consistency test. */
+    static List<String> frameCounterNames() {
+        return List.of(FRAME.counterNames);
     }
 
     public static boolean enabled() {
@@ -190,6 +215,9 @@ public final class RtFrameStats {
                 return Scope.NOOP;
             }
             int idx = indexOf(stageIndices, stageName);
+            if (idx < 0) {
+                return Scope.NOOP;
+            }
             long start = System.nanoTime();
             return () -> stageNanos[idx] += System.nanoTime() - start;
         }
@@ -207,7 +235,10 @@ public final class RtFrameStats {
             if (startNanos == 0L) {
                 return;
             }
-            stageNanos[indexOf(stageIndices, stageName)] += System.nanoTime() - startNanos;
+            int idx = indexOf(stageIndices, stageName);
+            if (idx >= 0) {
+                stageNanos[idx] += System.nanoTime() - startNanos;
+            }
         }
 
         /** Add to a named counter for the current frame. */
@@ -215,7 +246,10 @@ public final class RtFrameStats {
             if (!enabled() || !active || delta == 0) {
                 return;
             }
-            counters[indexOf(counterIndices, counterName)] += delta;
+            int idx = indexOf(counterIndices, counterName);
+            if (idx >= 0) {
+                counters[idx] += delta;
+            }
         }
 
         /** Finish the current frame: record it into the rolling median and log a hitch line if it's slow. */
@@ -339,10 +373,19 @@ public final class RtFrameStats {
             return result;
         }
 
+        /**
+         * Column index of {@code name}, or -1 for a name missing from the profile's lists. A missing name
+         * is a bug in the instrumentation, not in the game: it is logged once and the measurement dropped,
+         * because an opt-in diagnostic must never be what takes the game down.
+         */
         private static int indexOf(Map<String, Integer> indices, String name) {
             Integer index = indices.get(name);
             if (index == null) {
-                throw new IllegalArgumentException("Unknown RtFrameStats name: " + name);
+                if (UNKNOWN_NAMES.add(name)) {
+                    CausticaMod.LOGGER.warn("RtFrameStats: '{}' is not a registered stage or counter; ignoring it",
+                            name);
+                }
+                return -1;
             }
             return index;
         }
