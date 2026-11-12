@@ -81,7 +81,7 @@ public bool viewZEnabled() { return worldFeature(worldPush, FEATURE_VIEWZ); }
 public bool restirEnabled() {
     // Use the explicit hot push uniform as the authoritative live toggle. The featureFlags copy remains
     // useful to diagnostics, but must not be able to leave the shading branch stuck on the RIS fallback.
-    return pc.restirMode != 0u
+    return restirModeFlag(pc.restirModePacked) != 0u
             && pc.restirPreviousAddr != 0 && pc.restirCurrentAddr != 0;
 }
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }

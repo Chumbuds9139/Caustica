@@ -129,7 +129,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         MaterialHeader materialHeader = (MaterialHeader)0;
         bool stochasticAlpha = false;
         if (instanceKind == ENTITY_BIT) {
-            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId];
+            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(epr.materialId, pc.restirModePacked)];
             stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
         }
         // Enchantment glint (PRIM_GLINT): the whole streak pattern scrolls with time — vanilla's
@@ -142,7 +142,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             float glintTime = worldPush.waterParams.w; // per-frame animation clock (same as portals)
             sampleUv = glintScrolledUv(materialHeader, uv, glintTime);
         }
-        float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(sampleUv, 0.0);
+        float4 texel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))].SampleLevel(sampleUv, 0.0);
         // aux0 stores a float coverage multiplier written by RtEntityCapture. For enchantment glint
         // this is 1.0 — the glint is special-captured (PRIM_GLINT) and its coverage is derived below
         // from the texel's BRIGHTNESS (26.x glint textures have no alpha channel; see the glint branch
@@ -204,7 +204,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             bool armourOpaque = true;
             if (epr.aux1 != 0u) {
                 int armourSlot = asint(epr.aux1);
-                float4 armourTexel = entityAlbedoTex[NonUniformResourceIndex(armourSlot)].SampleLevel(uv, 0.0);
+                float4 armourTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(armourSlot, pc.debugViewPacked))].SampleLevel(uv, 0.0);
                 armourOpaque = armourTexel.a >= 0.1;
             }
             if (armourOpaque) {
@@ -282,7 +282,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // non-linearly. Multiplying into payload.albedo compounds correctly across stacked panes.
     if (bucket == BUCKET_TRANSLUCENT) {
         TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
-        MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+        MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(pr.materialId, pc.restirModePacked)];
         float3 avgColor = max(materialHeader.average.rgb * pr.tint.rgb,
                 float3(1.0e-3, 1.0e-3, 1.0e-3));
         float3 colorExtinction = max(-log(avgColor), float3(0.0, 0.0, 0.0));

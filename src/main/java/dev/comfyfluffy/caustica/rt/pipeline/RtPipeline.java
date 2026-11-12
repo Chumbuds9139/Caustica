@@ -477,6 +477,25 @@ public final class RtPipeline {
         setBindlessTexture(ENTITY_ALBEDO_BINDING, slot, imageView, sampler);
     }
 
+    /** Point entity-albedo slots [0, count) at one image in a single descriptor update. */
+    public void fillEntityAlbedoTextures(int count, long imageView, long sampler) {
+        if (bindlessSet == 0L || count <= 0) {
+            return;
+        }
+        // Heap, not the thread stack: the capacity is user-configurable and can exceed the stack's size.
+        try (MemoryStack stack = MemoryStack.stackPush();
+             VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(count)) {
+            for (int i = 0; i < count; i++) {
+                info.get(i).sampler(sampler).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            }
+            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
+            write.get(0).sType$Default().dstSet(bindlessSet).dstBinding(ENTITY_ALBEDO_BINDING).dstArrayElement(0)
+                    .descriptorCount(count).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .pImageInfo(info);
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
+    }
+
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */
     public void setMaterialPage(int page, long surface0View, long normalAoView, long surface1View,
                                 long sampler) {

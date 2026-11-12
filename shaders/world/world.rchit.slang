@@ -490,8 +490,8 @@ float3 applyBreaking(float3 albedo, uint rayCone, float3 rayOrigin, float3 rayDi
             float2 decalUv = (an.x >= an.y && an.x >= an.z) ? local.zy
                            : (an.y >= an.z) ? local.xz
                            : local.xy;
-            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(ps.w)]));
-            float3 crack = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
+            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(ps.w, pc.debugViewPacked))]));
+            float3 crack = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(ps.w, pc.debugViewPacked))].SampleLevel(decalUv, decalLod).rgb);
             return clamp(crack * albedo, 0.0, 1.0);
         }
     }
@@ -569,7 +569,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         bool dhEmissive = dhSurface == DH_SURFACE_EMISSIVE;
         bool dhEmissiveGlass = dhSurface == DH_SURFACE_EMISSIVE_GLASS;
         float dhEmission = (dhEmissive || dhEmissiveGlass) ? clamp(asfloat(dpr.aux0), 0.0, 4.0) : 0.0;
-        MaterialHeader dhHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[dpr.materialId];
+        MaterialHeader dhHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(dpr.materialId, pc.restirModePacked)];
 
         if (dhGlass || dhEmissiveGlass) {
             float opticalAlpha = clamp(asfloat(dhEmissiveGlass ? dpr.aux1 : dpr.aux0), 0.04, 0.80);
@@ -650,13 +650,13 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float3 pp0 = mul(o2w, HitTriangleVertexPosition(0));
         float3 pp1 = mul(o2w, HitTriangleVertexPosition(1));
         float3 pp2 = mul(o2w, HitTriangleVertexPosition(2));
-        float particleLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(pslot)]),
+        float particleLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(pslot, pc.debugViewPacked))]),
                 pp0, pp1, pp2, uvb[p0], uvb[p1], uvb[p2]);
         float3 pn = normalize(pr.normal.xyz);
         if (dot(pn, WorldRayDirection()) > 0.0) {
             pn = -pn;
         }
-        float4 particleTexel = entityAlbedoTex[NonUniformResourceIndex(pslot)].SampleLevel(puv, particleLod);
+        float4 particleTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(pslot, pc.debugViewPacked))].SampleLevel(puv, particleLod);
         bool weatherSheet = (pr.flags & PRIM_WEATHER) != 0u;
         bool snowSheet = (pr.flags & PRIM_WEATHER_SNOW) != 0u;
         // Rain columns and splash billboards are clear-water droplets, not blue paint: neutral near-white
@@ -729,9 +729,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float3 ep0 = mul(entityO2w, HitTriangleVertexPosition(0));
         float3 ep1 = mul(entityO2w, HitTriangleVertexPosition(1));
         float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
-        float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
+        float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
-        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(pr.materialId, pc.restirModePacked)];
         uint material = header.model;
         // The ray-traced first-person viewmodel (RtViewmodel) is tagged per geometry, not per instance kind,
         // so it inherits every entity material path above. Two things differ: a held glass/ice block or water
@@ -763,7 +763,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 float2 scrolled = frac(localUv + float2(portalTime * NETHER_PORTAL_SCROLL_U,
                         portalTime * NETHER_PORTAL_SCROLL_V));
                 float2 swirlUv = header.albedoUv.xy + scrolled / header.albedoUv.zw;
-                float4 swirlTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(swirlUv, 0.0);
+                float4 swirlTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))].SampleLevel(swirlUv, 0.0);
                 float3 swirl = srgbToLinear(swirlTexel.rgb) * pr.tint.rgb * (0.35 + 0.65 * swirlTexel.a);
                 portalColor = swirl;
                 portalEmission = luminance(swirl) * NETHER_PORTAL_EMISSION;
@@ -801,7 +801,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             // Same scrolled UV world.rahit used for the coverage gate, so both sample the moving
             // pattern in lock-step (see glintScrolledUv in world_common).
             float2 glintUv = glintScrolledUv(header, euvCoord, glintTime);
-            float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(glintUv, entityLod);
+            float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))].SampleLevel(glintUv, entityLod);
             float3 glintRgb = srgbToLinear(glintTexel.rgb);
             // Grayscale 26.x glint maps (no colour channel) are tinted purple like vanilla's default
             // texture; actual coloured glint textures are used as-is.
@@ -839,7 +839,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                     euv[e0], euv[e1], euv[e2], vdir, false);
             euvCoord = entityParallax.uv;
         }
-        float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
+        float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))].SampleLevel(euvCoord, entityLod);
         float3 baseAlbedo = srgbToLinear(entityTexel.rgb) * pr.tint.rgb;
         float3 albedo = material == MATERIAL_DIELECTRIC
                 ? lerp(float3(1.0, 1.0, 1.0), baseAlbedo, entityTexel.a) : baseAlbedo;
@@ -883,7 +883,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Water prims keep tint.w == 1, converted to the packed material enum below.
     uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
     TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];
-    MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+    MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(pr.materialId, pc.restirModePacked)];
     float3 n = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
 

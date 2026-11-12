@@ -105,13 +105,14 @@ final class RtShaderConstantMirrorTest {
         String raygen = Files.readString(WORLD_RGEN);
         String java = Files.readString(JAVA);
 
-        assertTrue(common.contains("public uint restirMode;"),
-                "the live ReSTIR/RIS selector must be an explicit push uniform");
-        assertTrue(core.contains("pc.restirMode != 0u")
+        assertTrue(common.contains("public uint restirModePacked;")
+                        && common.contains("return packed & 1u;"),
+                "the live ReSTIR/RIS selector must be an explicit push uniform (bit 0 of restirModePacked)");
+        assertTrue(core.contains("restirModeFlag(pc.restirModePacked) != 0u")
                         && core.contains("pc.restirPreviousAddr != 0")
                         && core.contains("pc.restirCurrentAddr != 0"),
                 "restirEnabled must require both the live mode and bound ping-pong buffers");
-        assertTrue(java.contains("terrain.lightGeneration(), restirMode()).write(pushConstants)"),
+        assertTrue(java.contains("RtPushLimits.pack(restirMode(), RtMaterialRegistry.INSTANCE.recordLimit())).write(pushConstants)"),
                 "RtComposite must write restirMode into the world pipeline push constants every frame");
         assertTrue(raygen.contains("bool shadeWithRestir = restirReceiverPending && restirOwner;")
                         && raygen.contains("r = restirSpatiotemporal(r")
@@ -192,5 +193,36 @@ final class RtShaderConstantMirrorTest {
             }
         }
         throw new IllegalStateException("could not locate the repository root from " + dir);
+    }
+
+    /** Every data-derived material id and bindless slot in the hit shaders goes through its clamp. */
+    @Test
+    void dataDerivedIndicesAreBounded() throws IOException {
+        for (String shader : new String[] {"world.rchit.slang", "world.rahit.slang"}) {
+            String source = Files.readString(SLANG.resolveSibling(shader));
+            java.util.regex.Matcher tex = java.util.regex.Pattern
+                    .compile("entityAlbedoTex\\[NonUniformResourceIndex\\(([^\\]]*)\\]").matcher(source);
+            int texSites = 0;
+            while (tex.find()) {
+                texSites++;
+                assertTrue(tex.group(1).startsWith("safeTextureSlot("), shader + ": unbounded slot " + tex.group());
+            }
+            java.util.regex.Matcher mat = java.util.regex.Pattern
+                    .compile("\\(pc\\.materialTableAddr\\)\\[([^\\]]*)\\]").matcher(source);
+            int matSites = 0;
+            while (mat.find()) {
+                matSites++;
+                assertTrue(mat.group(1).startsWith("safeMaterialId("), shader + ": unbounded id " + mat.group());
+            }
+            assertTrue(texSites > 0 && matSites > 0, shader + ": the scan found no index sites");
+        }
+    }
+
+    @Test
+    void packedLimitsKeepTheLowByteAndDropLimitsThatDoNotFit() {
+        org.junit.jupiter.api.Assertions.assertEquals(13 | (256 << 8), RtPushLimits.pack(13, 256));
+        org.junit.jupiter.api.Assertions.assertEquals(1, RtPushLimits.pack(1, 0));
+        org.junit.jupiter.api.Assertions.assertEquals(1, RtPushLimits.pack(1, 1 << 24));
+        org.junit.jupiter.api.Assertions.assertEquals(0xFF, RtPushLimits.pack(0x1FF, -5));
     }
 }

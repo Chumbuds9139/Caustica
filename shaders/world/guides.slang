@@ -340,17 +340,17 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
 public void writeDebugView(int2 pix) {
     float4 normalRough = gNormal[pix];
     float3 dbg;
-    if (pc.debugView == 1u) {
+    if (debugViewId(pc.debugViewPacked) == 1u) {
         dbg = normalRough.xyz * 0.5 + 0.5;
-    } else if (pc.debugView == 2u) {
+    } else if (debugViewId(pc.debugViewPacked) == 2u) {
         dbg = gAlbedo[pix].rgb;
-    } else if (pc.debugView == 3u) {
+    } else if (debugViewId(pc.debugViewPacked) == 3u) {
         dbg = float3(gDepth[pix], gDepth[pix], gDepth[pix]);
-    } else if (pc.debugView == 4u) {
+    } else if (debugViewId(pc.debugViewPacked) == 4u) {
         dbg = float3(normalRough.w, normalRough.w, normalRough.w);
-    } else if (pc.debugView == 6u) {
+    } else if (debugViewId(pc.debugViewPacked) == 6u) {
         dbg = gSpecAlbedo[pix].rgb;
-    } else if (pc.debugView == 7u) {
+    } else if (debugViewId(pc.debugViewPacked) == 7u) {
         dbg = float3(clamp(0.5 + gSpecMotion[pix] * 0.05, 0.0, 1.0), 0.5);
     } else {
         dbg = float3(clamp(0.5 + gMotion[pix] * 0.05, 0.0, 1.0), 0.5);

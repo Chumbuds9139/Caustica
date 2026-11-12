@@ -34,10 +34,43 @@ public struct WorldPushConstants {
     public uint64_t restirPreviousAddr;
     public uint64_t restirCurrentAddr;
     public uint frameIndex;
-    public uint debugView;
+    // Bits 0-7: debug view id. Bits 8-31: number of entity bindless texture descriptors (see
+    // safeTextureSlot). Packed so the block stays at the 128 bytes every Vulkan device guarantees.
+    public uint debugViewPacked;
     public uint lightGeneration;         // low bits reject history after the emitter hierarchy changes
-    public uint restirMode;              // explicit 0=RIS fallback, 1=ReSTIR read+shade (live UI toggle)
+    // Bit 0: 0=RIS fallback, 1=ReSTIR read+shade (live UI toggle). Bits 8-31: number of records in the
+    // material table (see safeMaterialId).
+    public uint restirModePacked;
 };
+
+public uint debugViewId(uint packed) {
+    return packed & 0xFFu;
+}
+
+public uint restirModeFlag(uint packed) {
+    return packed & 1u;
+}
+
+// Data-derived indices are bounded before they address memory. A material id or texture slot comes out
+// of per-primitive data; one that is out of range does not shade a wrong colour, it reads (or samples
+// through a descriptor at) an address no allocation backs, and the GPU is lost. Index 0 is always valid:
+// the first material record and the block-atlas fallback slot. A limit of 0 means "unknown" and leaves
+// the index alone.
+public uint safeMaterialId(uint id, uint packed) {
+    uint limit = packed >> 8u;
+    return (limit == 0u || id < limit) ? id : 0u;
+}
+
+public uint safeTextureSlot(int slot, uint packed) {
+    uint limit = packed >> 8u;
+    uint s = uint(max(slot, 0));
+    return (limit == 0u || s < limit) ? s : 0u;
+}
+
+public uint safeTextureSlot(uint slot, uint packed) {
+    uint limit = packed >> 8u;
+    return (limit == 0u || slot < limit) ? slot : 0u;
+}
 
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
 // w = bindless entityAlbedoTex slot of the destroy-stage texture.

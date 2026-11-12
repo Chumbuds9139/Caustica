@@ -324,6 +324,14 @@ public final class RtMaterialRegistry {
         return current.deviceAddress;
     }
 
+    /**
+     * Number of material records written to the current table: every id below this addresses a real
+     * record. The shaders clamp data-derived ids to it (see safeMaterialId in world_common.slang).
+     */
+    public int recordLimit() {
+        return table != null ? Math.max(0, nextDynamicId) : 0;
+    }
+
     /** Neutral canonical material used by runtime-only textures (player skins, generated glyph atlases, etc.). */
     public int entityFallbackId() {
         return entityFallbackId;

@@ -1041,7 +1041,7 @@ void main() {
         // frame, or a frame with no emitters cannot leave stale current-buffer history behind.
         restirInvalidate(pixelIndex);
     }
-    if (pc.debugView != 0u && pc.debugView != SHARC_DEBUG_VIEW_ID) {
+    if (debugViewId(pc.debugViewPacked) != 0u && debugViewId(pc.debugViewPacked) != SHARC_DEBUG_VIEW_ID) {
         return; // pass A owns guide visualization output
     }
     int2 pix = int2(dispatchIndex);
@@ -1113,7 +1113,7 @@ void main() {
     // the cache is seen warming up), red = a query missed (cold cell / rejected entry), dark grey =
     // no query reached (path ended before the start bounce, specular, sky, or SHaRC off). This is
     // the first-class replacement for the temporary red/green overlay used to diagnose the cache.
-    if (pc.debugView == SHARC_DEBUG_VIEW_ID) {
+    if (debugViewId(pc.debugViewPacked) == SHARC_DEBUG_VIEW_ID) {
         float3 sharcDbg;
         if (gv_sharcDbgHit != 0u) {
             float warm = clamp(gv_sharcDbgCount / 8.0, 0.0, 1.0);

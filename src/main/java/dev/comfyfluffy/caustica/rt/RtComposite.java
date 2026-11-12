@@ -1166,7 +1166,10 @@ public final class RtComposite {
         RtEmissionSemantics emissionSemantics = RtEmissionSemantics.analyze();
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
-        worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
+        // Every descriptor of the entity array starts as the fallback, so a slot the registry has not
+        // handed out yet is still a valid image: the shaders clamp slots to the array's capacity, not
+        // to the number of slots in use.
+        worldPipeline.fillEntityAlbedoTextures(bindlessTextureCapacity, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides);
         materialBindingsReady = true;
@@ -1982,8 +1985,10 @@ public final class RtComposite {
                     // The SVGF debug ids are consumed by the denoiser, not the tracer: forwarding
                     // them would make the raygen paint a guide overlay over the very image we are
                     // trying to inspect. The tracer sees 0 (normal shading) for those.
-                    (int) frameCounter, svgfDebugView ? 0 : debugView,
-                    terrain.lightGeneration(), restirMode()).write(pushConstants);
+                    (int) frameCounter,
+                    RtPushLimits.pack(svgfDebugView ? 0 : debugView, bindlessTextureCapacity),
+                    terrain.lightGeneration(),
+                    RtPushLimits.pack(restirMode(), RtMaterialRegistry.INSTANCE.recordLimit())).write(pushConstants);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
