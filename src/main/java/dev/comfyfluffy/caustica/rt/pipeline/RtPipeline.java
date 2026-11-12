@@ -518,7 +518,7 @@ public final class RtPipeline {
         if (raygenIndex < 0 || raygenIndex >= raygenCount) {
             throw new IllegalArgumentException("raygen index " + raygenIndex + " out of range [0, " + raygenCount + ")");
         }
-        try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "trace rays")) {
+        try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "trace rays (raygen " + raygenIndex + ")")) {
             VK10.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             java.nio.LongBuffer boundSets = bindlessSet != 0L
                     ? stack.longs(descriptorSets[currentSet], bindlessSet)

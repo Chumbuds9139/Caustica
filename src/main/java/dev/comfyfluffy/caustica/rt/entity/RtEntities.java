@@ -608,6 +608,7 @@ public final class RtEntities {
         long geomTableAddr;
         TableSlot table;
         int count;        // geometry-table entries / TLAS instances
+        boolean entryRejected; // the last geometry-table entry named memory that no longer exists
         int logicalCount; // ordinary entities + block entities + individual particles
 
         final GraphicsUseWaiter graphicsUseWaiter;
@@ -1416,10 +1417,11 @@ public final class RtEntities {
         // passes null ⇒ dispAddr 0 ⇒ no MV. The disp buffer is a per-frame transient, so a BE that stops
         // animating reverts to MV 0 next frame.
         long dispAddr = uploadDisp(ctx, build, disp);
-        writeTableEntry(build, e.primAddr, e.indexAddr, e.uvAddr, dispAddr, 0f, 0f, 0f, e.bucketTris);
+        writeTableEntry(build, e.primAddr, e.indexAddr, e.uvAddr, dispAddr, 0f, 0f, 0f, e.bucketTris, 0,
+                "block entity cache");
         // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
         float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
-        build.instances.add(new RtAccel.Instance(xform, e.accel.deviceAddress,
+        addEntityInstance(build, new RtAccel.Instance(xform, e.accel.deviceAddress,
                 ENTITY_BIT | (build.count & 0x7FFFFF), MASK_ALL, RtAccel.SBT_ENTITY_OFFSET));
         build.count++;
         build.lists.usedBlockEntities.add(e);
@@ -1568,8 +1570,9 @@ public final class RtEntities {
         }
         build.lists.usedEntitySlots.add(ea.refSlot);
         writeTableEntry(build, ea.refPrimAddr, ea.refIndexAddr, ea.refUvAddr,
-                motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris);
-        build.instances.add(new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
+                motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris, 0,
+                "entity rigid reuse");
+        addEntityInstance(build, new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
                 ea.refAccel.deviceAddress,
                 ENTITY_BIT | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
         build.count++;
@@ -1737,9 +1740,9 @@ public final class RtEntities {
         build.pooledBlas.add(blas);
 
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), geomFlags);
+                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), geomFlags, "particles");
 
-        build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
+        addEntityInstance(build, new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
         build.buffers.add(geometry);
         build.count++;
@@ -1816,8 +1819,8 @@ public final class RtEntities {
         }
 
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris());
-        build.instances.add(new RtAccel.Instance(instanceTransform, accel.deviceAddress,
+                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), 0, "entity mesh");
+        addEntityInstance(build, new RtAccel.Instance(instanceTransform, accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
 
         EntityAccel ea = slot.owner;
@@ -1920,15 +1923,12 @@ public final class RtEntities {
 
     /** Write one std430 EntityGeom entry, including bases for the two packed BLAS geometries. */
     private void writeTableEntry(FrameBuild build, long primAddr, long idxAddr, long uvAddr, long dispAddr,
-                                 float rigidX, float rigidY, float rigidZ, int[] bucketTris) {
-        writeTableEntry(build, primAddr, idxAddr, uvAddr, dispAddr, rigidX, rigidY, rigidZ, bucketTris, 0);
-    }
-
-    private void writeTableEntry(FrameBuild build, long primAddr, long idxAddr, long uvAddr, long dispAddr,
-                                 float rigidX, float rigidY, float rigidZ, int[] bucketTris, int geomFlags) {
+                                 float rigidX, float rigidY, float rigidZ, int[] bucketTris, int geomFlags,
+                                 String path) {
         if (bucketTris == null || bucketTris.length != RtAccel.ENTITY_BUCKETS) {
             throw new IllegalArgumentException("Missing entity BLAS bucket counts");
         }
+        build.entryRejected = auditTableAddresses(path, primAddr, idxAddr, uvAddr, dispAddr);
         long entry = build.tableBase + (long) build.count * TABLE_ENTRY_BYTES;
         MemoryUtil.memPutLong(entry, primAddr);
         MemoryUtil.memPutLong(entry + 8, idxAddr);
@@ -1943,6 +1943,58 @@ public final class RtEntities {
         // +56 is EntityGeom.flags (the geometry kind lane; ENTITY_GEOM_VIEWMODEL today), +60 stays reserved.
         MemoryUtil.memPutInt(entry + 56, geomFlags);
         MemoryUtil.memPutInt(entry + 60, 0);
+    }
+
+    /**
+     * Add the TLAS instance for the geometry-table entry just written, unless that entry names memory that
+     * no longer exists. Every address in the entry is dereferenced by the hit shaders, and a dangling one
+     * is a lost device; dropping the instance for one frame is invisible. The table slot stays consumed so
+     * custom indices remain the table index.
+     */
+    private static void addEntityInstance(FrameBuild build, RtAccel.Instance instance) {
+        if (build.entryRejected) {
+            build.entryRejected = false;
+            return;
+        }
+        build.instances.add(instance);
+    }
+
+    private static long lastTableAuditLogNanos;
+
+    /** @return true if any non-zero address is outside every live Caustica buffer */
+    private static boolean auditTableAddresses(String path, long primAddr, long idxAddr, long uvAddr, long dispAddr) {
+        if (!dev.comfyfluffy.caustica.CausticaConfig.Rt.Stability.VALIDATE_TLAS.value()) {
+            return false;
+        }
+        String bad = null;
+        if (!liveOrZero(primAddr)) bad = "prim";
+        else if (!liveOrZero(idxAddr)) bad = "index";
+        else if (!liveOrZero(uvAddr)) bad = "uv";
+        else if (!liveOrZero(dispAddr)) bad = "motion";
+        if (bad == null) {
+            return false;
+        }
+        RtFrameStats.FRAME.count("entityTableRejected", 1);
+        long now = System.nanoTime();
+        if (lastTableAuditLogNanos == 0L || now - lastTableAuditLogNanos >= 5_000_000_000L) {
+            lastTableAuditLogNanos = now;
+            long address = switch (bad) {
+                case "prim" -> primAddr;
+                case "index" -> idxAddr;
+                case "uv" -> uvAddr;
+                default -> dispAddr;
+            };
+            dev.comfyfluffy.caustica.CausticaMod.LOGGER.error(
+                    "Entity table audit: dropped an instance from the '{}' path whose {} address 0x{} is not in "
+                            + "any live buffer ({}). This would have been a lost device; please report this line.",
+                    path, bad, Long.toUnsignedString(address, 16),
+                    dev.comfyfluffy.caustica.rt.VulkanDiagnostics.describeAddress(address));
+        }
+        return true;
+    }
+
+    private static boolean liveOrZero(long address) {
+        return address == 0L || dev.comfyfluffy.caustica.rt.VulkanDiagnostics.isLiveBufferAddress(address);
     }
 
     /** Select the next per-entity slot, waiting on its exact last graphics use before mutable reuse. */

@@ -319,7 +319,7 @@ public final class VulkanDiagnostics {
     // difference between "something read a buffer after it was destroyed" (and which one) and "a wild
     // pointer / an image". A fixed ring of the most recent frees answers it at the cost of four array
     // writes per destroyed buffer.
-    private static final int FREED_RING = 1 << 16;
+    private static final int FREED_RING = 1 << 18;
     private static final long[] FREED_ADDRESS = new long[FREED_RING];
     private static final long[] FREED_SIZE = new long[FREED_RING];
     private static final long[] FREED_NANOS = new long[FREED_RING];
@@ -583,6 +583,11 @@ public final class VulkanDiagnostics {
         } catch (Throwable t) {
             CausticaMod.LOGGER.error("Failed to retrieve NVIDIA checkpoints for " + label, t);
         }
+    }
+
+    /** What the diagnostics registry knows about {@code address}, for a log line. */
+    public static String describeAddress(long address) {
+        return resolveBuffer(address);
     }
 
     private static String resolveBuffer(long address) {

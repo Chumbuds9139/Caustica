@@ -166,7 +166,7 @@ When the GPU is lost Caustica logs the `VK_EXT_device_fault` report and resolves
 
 - `'<label>' range=...` - the address is inside a live Caustica buffer.
 - `USE AFTER FREE of '<label>' ... destroyed N ms before this report` - the address belonged to a buffer
-  Caustica destroyed recently (the last 65536 frees are remembered). This names the buffer whose lifetime
+  Caustica destroyed recently (the last 262144 frees are remembered; the report says how many seconds that covers). This names the buffer whose lifetime
   is wrong.
 - `unresolved, not a live or recently destroyed Caustica buffer` - the address is not Caustica buffer
   memory at all: an out-of-range index in a shader, an image, or the driver's own memory.
