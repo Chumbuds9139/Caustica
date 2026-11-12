@@ -334,6 +334,13 @@ public final class RtEntities {
         long signature;                          // beSignature() at the last full capture
         BlockEntity owner;                       // the block entity of the last full capture
         int textureGeneration;                   // texture slot generation at the last full capture
+        // Animated mode (animId != 0): the mesh changed on several captures in a row, so instead of a fresh
+        // BLAS + buffers per frame it is refit in place through the entity ring under this synthetic id;
+        // accel/backing/geometry are null meanwhile. changedFrames counts consecutive changed captures,
+        // settledFrames consecutive unchanged ones while animated.
+        int animId;
+        int changedFrames;
+        int settledFrames;
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
     }
 
@@ -955,6 +962,7 @@ public final class RtEntities {
             return NO_MOTION;
         }
 
+        long checkStart = RtFrameStats.FRAME.startStage();
         float dx0 = (curVerts[0] - prevVerts[0]) + sx;
         float dy0 = (curVerts[1] - prevVerts[1]) + sy;
         float dz0 = (curVerts[2] - prevVerts[2]) + sz;
@@ -970,13 +978,17 @@ public final class RtEntities {
                 break;
             }
         }
+        RtFrameStats.FRAME.endStage("entity.capture.motion.check", checkStart);
         if (rigid) {
             return new Motion(0L, dx0, dy0, dz0);
         }
 
         beginBuildIfNeeded(ctx, build);
         long bytes = (long) vc * 4L * Float.BYTES;
+        long allocStart = RtFrameStats.FRAME.startStage();
         MotionSlice disp = build.motion.allocate(ctx, bytes);
+        RtFrameStats.FRAME.endStage("entity.capture.motion.alloc", allocStart);
+        long writeStart = RtFrameStats.FRAME.startStage();
         long out = disp.mapped;
         for (int i = 0; i < vc; i++) {
             MemoryUtil.memPutFloat(out, (curVerts[i * 3] - prevVerts[i * 3]) + sx);
@@ -985,6 +997,7 @@ public final class RtEntities {
             MemoryUtil.memPutFloat(out + 12, 0f);
             out += 16;
         }
+        RtFrameStats.FRAME.endStage("entity.capture.motion.write", writeStart);
         RtFrameStats.FRAME.count("entityMotionUploadBytes", bytes);
         return new Motion(disp.deviceAddress, 0f, 0f, 0f);
     }
@@ -1332,7 +1345,8 @@ public final class RtEntities {
                                   int textureGeneration, int rbx, int rby, int rbz) {
         BeEntry entry = beCache.get(candidate.posKey);
         BlockEntity be = candidate.be;
-        if (entry == null || entry.owner != be || entry.staticFrames < STATIC_FRAMES_BEFORE_REUSE
+        if (entry == null || entry.accel == null || entry.owner != be
+                || entry.staticFrames < STATIC_FRAMES_BEFORE_REUSE
                 || entry.lastEmitFrame != now - 1L || entry.textureGeneration != textureGeneration
                 || entry.signature == BE_NO_SIGNATURE) {
             return false;
@@ -1473,6 +1487,33 @@ public final class RtEntities {
         }
         sanitizePositions(capture.verts.elements(), capture.verts.size());
         long hash = meshHash();
+        if (entry != null && entry.animId != 0) {
+            entry.settledFrames = entry.meshHash == hash ? entry.settledFrames + 1 : 0;
+            if (entry.settledFrames < BE_SETTLE_FRAMES || beBuildsThisFrame >= beBuildsPerFrame()) {
+                emitAnimatedBe(ctx, build, entry, hash, now, rbx, rby, rbz);
+                return;
+            }
+            // It stopped moving: cache it as a static mesh again (one build) and leave animated mode. Its
+            // entity-ring slots age out like a despawned entity's.
+            BeEntry rebuilt = buildBe(ctx, build, be, hash);
+            rebuilt.lastSeen = now;
+            beCache.put(key, rebuilt);
+            entry = rebuilt;
+            entry.owner = be;
+            entry.signature = beSignature(be, Minecraft.getInstance().level, partial);
+            entry.textureGeneration = RtEntityTextures.INSTANCE.generation();
+            emitBe(ctx, build, entry, null, rbx, rby, rbz);
+            entry.lastEmitFrame = now;
+            return;
+        }
+        if (entry != null && entry.meshHash != hash && entry.owner == be
+                && entry.changedFrames + 1 >= BE_ANIMATED_AFTER) {
+            // Changed on several captures in a row (a waving banner, an opening lid): stop rebuilding it
+            // from scratch every frame and refit it in place instead.
+            enterAnimatedMode(ctx, entry);
+            emitAnimatedBe(ctx, build, entry, hash, now, rbx, rby, rbz);
+            return;
+        }
         float[] disp = null; // static unless the mesh changed this frame (chest lid / spawner animation)
         if (entry == null || entry.meshHash != hash) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
@@ -1480,6 +1521,7 @@ public final class RtEntities {
             if (beBuildsThisFrame >= beBuildsPerFrame()) {
                 if (entry != null) {
                     entry.staticFrames = 0; // showing stale geometry: never re-use it
+                    entry.changedFrames = entry.owner == be ? entry.changedFrames + 1 : 0;
                     emitBe(ctx, build, entry, null, rbx, rby, rbz); // over budget: keep last geometry, no MV
                     entry.lastEmitFrame = now;
                 }
@@ -1493,20 +1535,79 @@ public final class RtEntities {
             BeEntry rebuilt = buildBe(ctx, build, be, hash);
             rebuilt.lastSeen = now;
             if (entry != null) {
+                rebuilt.changedFrames = entry.owner == be ? entry.changedFrames + 1 : 0;
                 retireBe(ctx, entry);
             }
             beCache.put(key, rebuilt);
             entry = rebuilt;
         } else if (entry.owner == be) {
             entry.staticFrames++;
+            entry.changedFrames = 0;
         } else {
             entry.staticFrames = 0;
+            entry.changedFrames = 0;
         }
         entry.owner = be;
         entry.signature = beSignature(be, Minecraft.getInstance().level, partial);
         entry.textureGeneration = RtEntityTextures.INSTANCE.generation();
         emitBe(ctx, build, entry, disp, rbx, rby, rbz);
         entry.lastEmitFrame = now;
+    }
+
+    /** Consecutive changed captures after which a block entity is refit in place instead of rebuilt. */
+    private static final int BE_ANIMATED_AFTER = 2;
+    /** Consecutive unchanged captures after which an animated block entity is cached as static again. */
+    private static final int BE_SETTLE_FRAMES = 8;
+    /**
+     * Synthetic entity-ring ids for animated block entities, above any id Minecraft hands out to real
+     * entities (a counter from 0), so they never share a ring with one.
+     */
+    private static final int BE_ANIM_ID_BASE = 0x40000000;
+    private int nextBeAnimId = BE_ANIM_ID_BASE;
+
+    /** Hand a cached block entity's static BLAS and buffers back and give it an entity-ring id. */
+    private void enterAnimatedMode(RtContext ctx, BeEntry entry) {
+        retireBe(ctx, entry);
+        entry.accel = null;
+        entry.backing = null;
+        entry.geometry = null;
+        entry.staticFrames = 0;
+        entry.settledFrames = 0;
+        if (nextBeAnimId == Integer.MAX_VALUE) {
+            nextBeAnimId = BE_ANIM_ID_BASE; // ~1e9 entries later; anything that old has long been evicted
+        }
+        entry.animId = nextBeAnimId++;
+        RtFrameStats.FRAME.count("blockEntityAnimatedEnters", 1);
+    }
+
+    /**
+     * Emit an animated block entity from {@link #capture}: same geometry, motion vectors and instance as the
+     * static path, but uploaded into its entity-ring slot and refit rather than built into new buffers.
+     */
+    private void emitAnimatedBe(RtContext ctx, FrameBuild build, BeEntry entry, long hash, long now,
+                                int rbx, int rby, int rbz) {
+        if (build.full()) {
+            return;
+        }
+        beginBuildIfNeeded(ctx, build);
+        int size = capture.verts.size();
+        float[] disp = null;
+        if (entry.prevVerts != null && entry.prevVerts.length == size && entry.meshHash != hash) {
+            disp = buildDisp(capture.verts.elements(), size, entry.prevVerts, 0f, 0f, 0f);
+        }
+        appendCapture(ctx, build, new Motion(uploadDisp(ctx, build, disp), 0f, 0f, 0f), entry.animId,
+                ENTITY_BIT, MASK_ALL, translationTransform(entry.bx - rbx, entry.by - rby, entry.bz - rbz));
+        if (entry.prevVerts == null || entry.prevVerts.length != size) {
+            entry.prevVerts = new float[size];
+        }
+        System.arraycopy(capture.verts.elements(), 0, entry.prevVerts, 0, size);
+        entry.meshHash = hash;
+        entry.staticFrames = 0;
+        entry.lastSeen = now;
+        entry.lastEmitFrame = now;
+        build.logicalCount++;
+        RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
+        RtFrameStats.FRAME.count("blockEntityAnimatedRefits", 1);
     }
 
     /** Upload the already-captured BE mesh to fresh buffers and build its BLAS (block-local). */
@@ -1614,6 +1715,9 @@ public final class RtEntities {
         RtAccel accel = e.accel;
         RtBuffer backing = e.backing;
         RtBuffer geometry = e.geometry;
+        if (accel == null && geometry == null) {
+            return; // animated mode: nothing of its own to free, its entity-ring slots age out
+        }
         ctx.gpuExecutor().retireAfterGraphics(e.graphicsUse, () -> {
             RtAccel.destroyEntityAccel(accel, backing);
             geometry.destroy();
@@ -1660,6 +1764,15 @@ public final class RtEntities {
         if (build.instances != null) {
             return;
         }
+        long beginStart = RtFrameStats.FRAME.startStage();
+        try {
+            beginBuild(ctx, build);
+        } finally {
+            RtFrameStats.FRAME.endStage("entity.beginBuild", beginStart);
+        }
+    }
+
+    private void beginBuild(RtContext ctx, FrameBuild build) {
         FrameLists lists = frameLists[(int) (RtComposite.frameCounter() % frameLists.length)];
         awaitGraphicsUse(build, lists.graphicsUse, "entityFrameListsWaits");
         lists.releaseDeferred();
@@ -2489,8 +2602,12 @@ public final class RtEntities {
         }
         entityAccels.clear();
         for (BeEntry e : beCache.values()) {
-            RtAccel.destroyEntityAccel(e.accel, e.backing);
-            e.geometry.destroy();
+            if (e.accel != null) {
+                RtAccel.destroyEntityAccel(e.accel, e.backing);
+            }
+            if (e.geometry != null) {
+                e.geometry.destroy();
+            }
         }
         beCache.clear();
         if (tableRing != null) {
