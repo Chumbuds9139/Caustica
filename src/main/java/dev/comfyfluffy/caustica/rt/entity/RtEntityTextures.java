@@ -79,6 +79,8 @@ public final class RtEntityTextures {
     // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
+    /** Highest slot handed out before the last {@link #reset}; scrubbed by the next upload. */
+    private int slotsBeforeReset;
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
     private boolean loggedRetirement;
@@ -228,6 +230,7 @@ public final class RtEntityTextures {
      * the fallback for a frame is a wrong colour at worst, sampling the freed image is a lost device.
      */
     public void uploadPending(RtPipeline pipeline, long sampler, long fallbackView) {
+        scrubSlotsFromBeforeReset(pipeline, sampler, fallbackView);
         int retired = slots.retireDeadOwners(
                 owner -> owner instanceof GpuTextureView view && isDead(view), fallbackView);
         if (retired > 0) {
@@ -240,6 +243,25 @@ public final class RtEntityTextures {
         }
         for (RtBindlessSlotTable.Write w : slots.drainPending()) {
             pipeline.setEntityAlbedoTexture(w.slot(), w.handle(), sampler);
+        }
+    }
+
+    /**
+     * {@link #reset} forgets which texture every slot describes, but a reset that is not a pipeline
+     * rebuild keeps the same descriptor set, so the slots above the new allocation mark still describe the
+     * old images. Nothing tracks those images any more, so when Minecraft destroys one the descriptor
+     * would keep pointing at freed memory for as long as anything can still name the slot. Point them all
+     * at the fallback once, before the first trace after the reset.
+     */
+    private void scrubSlotsFromBeforeReset(RtPipeline pipeline, long sampler, long fallbackView) {
+        int stale = slotsBeforeReset;
+        if (stale <= 0 || fallbackView == 0L) {
+            return;
+        }
+        slotsBeforeReset = 0;
+        int limit = Math.min(stale, slotLimit() - 1);
+        for (int slot = slots.allocatedSlots() + 1; slot <= limit; slot++) {
+            pipeline.setEntityAlbedoTexture(slot, fallbackView, sampler);
         }
     }
 
@@ -264,6 +286,7 @@ public final class RtEntityTextures {
     /** Drop the registry for a pipeline whose bindless descriptor arrays have this capacity. */
     public void reset(int descriptorCapacity) {
         capacity = Math.max(1, descriptorCapacity);
+        slotsBeforeReset = Math.max(slotsBeforeReset, slots.allocatedSlots());
         viewCache.clear();
         unresolved.clear();
         locationCache.clear();

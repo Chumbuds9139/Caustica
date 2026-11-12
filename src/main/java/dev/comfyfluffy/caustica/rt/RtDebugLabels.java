@@ -43,8 +43,12 @@ public final class RtDebugLabels {
             return Scope.NOOP;
         }
         VulkanDiagnostics.breadcrumb("record " + label + " cmd=0x" + Long.toUnsignedString(cmd.address(), 16));
+        VulkanDiagnostics.checkpoint(cmd, "begin " + label);
         ctx.device().instance().debug().beginDebugGroup(cmd, () -> PREFIX + label);
-        return () -> ctx.device().instance().debug().endDebugGroup(cmd);
+        return () -> {
+            ctx.device().instance().debug().endDebugGroup(cmd);
+            VulkanDiagnostics.checkpoint(cmd, "end " + label);
+        };
     }
 
     public interface Scope extends AutoCloseable {

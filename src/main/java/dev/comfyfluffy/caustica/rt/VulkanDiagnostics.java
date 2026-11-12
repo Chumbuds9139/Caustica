@@ -229,6 +229,48 @@ public final class VulkanDiagnostics {
         }
     }
 
+    // ---- GPU checkpoints for Caustica's own passes --------------------------------------------------
+    //
+    // Minecraft records NVIDIA diagnostic checkpoints around its render passes only, so after a lost
+    // device the graphics queue reports the last *vanilla* pass that completed and nothing about the ray
+    // tracing work recorded after it. Each Caustica scope records a begin and an end marker; a marker is
+    // an index into a ring of labels, tagged with a high bit so it can never be mistaken for one of
+    // Minecraft's small sequential ids. TOP_OF_PIPE / BOTTOM_OF_PIPE then name the pass that was running.
+    private static final int MARKER_TAG = 0x40000000;
+    private static final int MARKER_RING = 1 << 13;
+    private static final String[] MARKER_LABELS = new String[MARKER_RING];
+    private static final int[] MARKER_SEQ = new int[MARKER_RING];
+    private static int markerSeq;
+
+    /** Record an NVIDIA checkpoint named {@code label} into {@code cmd}; a no-op without the extension. */
+    public static void checkpoint(org.lwjgl.vulkan.VkCommandBuffer cmd, String label) {
+        if (cmd == null || cmd.getCapabilities().vkCmdSetCheckpointNV == 0L) {
+            return;
+        }
+        int marker;
+        synchronized (MARKER_LABELS) {
+            int seq = markerSeq++ & (MARKER_TAG - 1);
+            int slot = seq & (MARKER_RING - 1);
+            MARKER_LABELS[slot] = label;
+            MARKER_SEQ[slot] = seq;
+            marker = MARKER_TAG | seq;
+        }
+        NVDeviceDiagnosticCheckpoints.vkCmdSetCheckpointNV(cmd, marker);
+    }
+
+    /** The label recorded for a checkpoint marker, or null for a marker Caustica did not record. */
+    static String describeMarker(long marker) {
+        int value = (int) marker;
+        if ((value & MARKER_TAG) == 0 || (marker >>> 32) != 0L) {
+            return null;
+        }
+        int seq = value & (MARKER_TAG - 1);
+        synchronized (MARKER_LABELS) {
+            int slot = seq & (MARKER_RING - 1);
+            return MARKER_SEQ[slot] == seq ? MARKER_LABELS[slot] : "(label evicted, seq " + seq + ")";
+        }
+    }
+
     public static void breadcrumb(String label) {
         String entry = Instant.now() + " [" + Thread.currentThread().getName() + "] " + label;
         synchronized (BREADCRUMBS) {
@@ -314,6 +356,20 @@ public final class VulkanDiagnostics {
         }
     }
 
+    /** How far back the freed-buffer search reaches, for the "unresolved" verdict to be read correctly. */
+    private static String freedCoverage() {
+        synchronized (FREED_LABEL) {
+            if (freedCount == 0L) {
+                return "no buffer has been destroyed this session";
+            }
+            long entries = Math.min(freedCount, FREED_RING);
+            int oldest = (int) ((freedCount - entries) & (FREED_RING - 1));
+            long ageMs = (System.nanoTime() - FREED_NANOS[oldest]) / 1_000_000L;
+            return "searched the last " + entries + " of " + freedCount + " destroyed buffers, covering "
+                    + ageMs / 1000L + " s";
+        }
+    }
+
     /**
      * Whether {@code address} lies inside a buffer Caustica currently owns. Used to catch a TLAS instance
      * that still points at a destroyed bottom-level structure before the GPU ever traverses it.
@@ -331,6 +387,14 @@ public final class VulkanDiagnostics {
         VkQueue queue = lastCausticaQueue;
         if (queue != null) {
             logNvQueueCheckpoints(queue, lastCausticaQueueLabel);
+        }
+        try {
+            VkQueue graphics = device.graphicsQueue().vkQueue();
+            if (graphics != null && graphics != queue) {
+                logNvQueueCheckpoints(graphics, "graphics (Caustica passes)");
+            }
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Failed to query graphics queue checkpoints", t);
         }
         try {
             String checkpoints = VulkanUtils.formatCheckpoints(
@@ -511,9 +575,10 @@ public final class VulkanDiagnostics {
             for (int i = 0; i < Math.min(checkpointCount, count.get(0)); i++) {
                 VkCheckpointDataNV checkpoint = checkpoints.get(i);
                 long marker = checkpoint.pCheckpointMarker();
-                CausticaMod.LOGGER.error("  stage={} (0x{}), marker=0x{}",
+                String described = describeMarker(marker);
+                CausticaMod.LOGGER.error("  stage={} (0x{}), marker=0x{}{}",
                         pipelineStage(checkpoint.stage()), Integer.toUnsignedString(checkpoint.stage(), 16),
-                        Long.toUnsignedString(marker, 16));
+                        Long.toUnsignedString(marker, 16), described == null ? " (Minecraft)" : " = " + described);
             }
         } catch (Throwable t) {
             CausticaMod.LOGGER.error("Failed to retrieve NVIDIA checkpoints for " + label, t);
@@ -538,7 +603,8 @@ public final class VulkanDiagnostics {
         if (next != null) {
             nearest += ", next='" + next.getValue().label + "'@0x" + Long.toUnsignedString(next.getKey(), 16);
         }
-        return "unresolved, not a live or recently destroyed Caustica buffer (" + nearest + ")";
+        return "unresolved, not a live or recently destroyed Caustica buffer (" + nearest + "; "
+                + freedCoverage() + ")";
     }
 
     private static void writeVendorBinary(ByteBuffer binary, long reportedSize) {
