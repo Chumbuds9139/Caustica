@@ -60,6 +60,7 @@ public final class RtFrameStats {
                     "entity.capture.append.blas",
                     "entity.uploadFlush",
                     "entity.blockEntities",
+                    "entity.blockEntities.reuse",
                     "entity.particles",
                     "entity.blasRecord",
                     "entity.viewmodel",
@@ -110,7 +111,8 @@ public final class RtFrameStats {
                     "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements",
                     "entitySanitizedPositions", "entityTableRejected", "viewmodelInstances",
                     "viewmodelSubmissionsUnsupported", "viewmodelVertices", "weatherColumnsCaptured",
-                    "gpuWaitUs", "frameIntervalUs", "entityStaticReuse"},
+                    "gpuWaitUs", "frameIntervalUs", "entityStaticReuse",
+                    "blockEntityStaticReuse"},
             true);
 
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();

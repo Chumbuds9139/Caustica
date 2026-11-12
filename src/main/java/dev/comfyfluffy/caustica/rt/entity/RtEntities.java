@@ -329,6 +329,11 @@ public final class RtEntities {
         long meshHash;                           // hash of the captured mesh — rebuild only when it changes
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
         float[] prevVerts;                       // block-local verts at this build, for the per-vertex MV diff
+        int staticFrames;                        // consecutive full captures that matched meshHash
+        long lastEmitFrame = -1L;                // last frame this entry was emitted into the TLAS
+        long signature;                          // beSignature() at the last full capture
+        BlockEntity owner;                       // the block entity of the last full capture
+        int textureGeneration;                   // texture slot generation at the last full capture
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
     }
 
@@ -1295,12 +1300,148 @@ public final class RtEntities {
             candidates.sort(BE_CANDIDATE_ORDER);
         }
         int firstBlockEntity = build.count;
+        boolean reuseEnabled = CausticaConfig.Rt.Entities.STATIC_REUSE.value();
+        int textureGeneration = RtEntityTextures.INSTANCE.generation();
         for (BeCandidate candidate : candidates) {
             if (build.full() || build.count - firstBlockEntity >= maxBlockEntities()) {
                 break;
             }
+            if (reuseEnabled && reuseStaticBe(ctx, build, beDispatcher, level, candidate, partial, now,
+                    textureGeneration, rbx, rby, rbz)) {
+                continue;
+            }
             updateBlockEntity(ctx, build, beDispatcher, candidate.be, partial, now, rbx, rby, rbz);
         }
+    }
+
+    /** Signature for a block entity type this frame has no cheap, complete signature for. */
+    private static final long BE_NO_SIGNATURE = Long.MIN_VALUE;
+
+    /**
+     * Re-emit a still block entity's cached geometry without extracting, posing and capturing it again.
+     *
+     * <p>Only types whose renderer reads nothing but the block state and a few animation values qualify
+     * ({@link #beSignature}); the signature covers those values, so a chest lid, a bell or a skull's mouth
+     * starts moving on the same frame it would have without this. The entry must also have come out of
+     * {@value #STATIC_FRAMES_BEFORE_REUSE} identical captures in a row, have been emitted last frame, and
+     * reference texture slots that still describe the same textures. Like still entities, one frame in
+     * {@value #STATIC_REVALIDATE_FRAMES} captures it in full anyway.
+     */
+    private boolean reuseStaticBe(RtContext ctx, FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
+                                  ClientLevel level, BeCandidate candidate, float partial, long now,
+                                  int textureGeneration, int rbx, int rby, int rbz) {
+        BeEntry entry = beCache.get(candidate.posKey);
+        BlockEntity be = candidate.be;
+        if (entry == null || entry.owner != be || entry.staticFrames < STATIC_FRAMES_BEFORE_REUSE
+                || entry.lastEmitFrame != now - 1L || entry.textureGeneration != textureGeneration
+                || entry.signature == BE_NO_SIGNATURE) {
+            return false;
+        }
+        if (((now + (candidate.posKey ^ (candidate.posKey >>> 32))) % STATIC_REVALIDATE_FRAMES) == 0L) {
+            return false;
+        }
+        if (be.isRemoved() || !be.hasLevel()) {
+            return false;
+        }
+        try {
+            var renderer = beDispatcher.getRenderer(be);
+            if (renderer == null || !renderer.shouldRender(be, cameraState.pos)) {
+                return false; // let the full path decide (it returns before emitting)
+            }
+        } catch (RuntimeException e) {
+            return false;
+        }
+        if (beSignature(be, level, partial) != entry.signature) {
+            return false;
+        }
+        long reuseStart = RtFrameStats.FRAME.startStage();
+        try {
+            entry.lastSeen = now;
+            emitBe(ctx, build, entry, null, rbx, rby, rbz);
+            entry.lastEmitFrame = now;
+        } finally {
+            RtFrameStats.FRAME.endStage("entity.blockEntities.reuse", reuseStart);
+        }
+        RtFrameStats.FRAME.count("blockEntityStaticReuse", 1);
+        return true;
+    }
+
+    /**
+     * Everything the renderer of {@code be} reads that can change without the block state changing,
+     * folded into one value; {@link #BE_NO_SIGNATURE} for types where that set is not known to be small
+     * and complete (banners wave with game time, campfires and shelves show items whose models can
+     * animate, spawners spin, ...). The block state is compared by identity: states are interned.
+     */
+    static long beSignature(BlockEntity be, ClientLevel level, float partial) {
+        try {
+            var state = be.getBlockState();
+            long h = 0x9E3779B97F4A7C15L ^ System.identityHashCode(state);
+            if (be instanceof net.minecraft.world.level.block.entity.LidBlockEntity lid) {
+                // Chests, trapped/copper chests and ender chests. A double chest renders the larger openness
+                // of its two halves, so the other half's lid belongs in the signature too.
+                h = mix(h, Float.floatToRawIntBits(lid.getOpenNess(partial)));
+                if (state.hasProperty(net.minecraft.world.level.block.ChestBlock.TYPE)
+                        && state.getValue(net.minecraft.world.level.block.ChestBlock.TYPE)
+                        != net.minecraft.world.level.block.state.properties.ChestType.SINGLE) {
+                    BlockPos other = be.getBlockPos().relative(
+                            net.minecraft.world.level.block.ChestBlock.getConnectedDirection(state));
+                    if (level.getBlockEntity(other) instanceof net.minecraft.world.level.block.entity.LidBlockEntity o) {
+                        h = mix(h, Float.floatToRawIntBits(o.getOpenNess(partial)));
+                    } else {
+                        h = mix(h, -1L);
+                    }
+                }
+                return h;
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity box) {
+                return mix(h, Float.floatToRawIntBits(box.getProgress(partial)));
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.SkullBlockEntity skull) {
+                h = mix(h, Float.floatToRawIntBits(skull.getAnimation(partial)));
+                var profile = skull.getOwnerProfile();
+                if (profile != null) {
+                    // A player head shows the default skin until its owner's skin has downloaded.
+                    h = mix(h, System.identityHashCode(profile));
+                    h = mix(h, System.identityHashCode(
+                            Minecraft.getInstance().playerSkinRenderCache().getOrDefault(profile).renderType()));
+                }
+                return h;
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.BellBlockEntity bell) {
+                h = mix(h, bell.ticks);
+                h = mix(h, bell.shaking ? 1L : 0L);
+                return mix(h, bell.clickDirection == null ? -1L : bell.clickDirection.ordinal());
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.DecoratedPotBlockEntity pot) {
+                h = mix(h, pot.wobbleStartedAtTick);
+                h = mix(h, System.identityHashCode(pot.lastWobbleStyle));
+                return mix(h, System.identityHashCode(pot.getDecorations()));
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign) {
+                // Glowing text draws an outline only near the camera: leave those to the full path.
+                var front = sign.getText(net.minecraft.world.level.block.entity.SignTextSlot.FRONT);
+                var back = sign.getText(net.minecraft.world.level.block.entity.SignTextSlot.BACK);
+                if (front == null || back == null || front.hasGlowingText() || back.hasGlowingText()) {
+                    return BE_NO_SIGNATURE;
+                }
+                h = mix(h, System.identityHashCode(front));
+                h = mix(h, System.identityHashCode(back));
+                return mix(h, Minecraft.getInstance().isTextFilteringEnabled() ? 1L : 0L);
+            }
+            if (be instanceof net.minecraft.world.level.block.entity.LecternBlockEntity
+                    || be instanceof net.minecraft.world.level.block.entity.CopperGolemStatueBlockEntity) {
+                return h; // rendered from the block state alone
+            }
+            return BE_NO_SIGNATURE;
+        } catch (RuntimeException e) {
+            return BE_NO_SIGNATURE;
+        }
+    }
+
+    private static long mix(long h, long v) {
+        h ^= v;
+        h *= 0xBF58476D1CE4E5B9L;
+        return h ^ (h >>> 31);
     }
 
     /** Re-mesh one block entity; rebuild its cached BLAS only if the mesh changed (budgeted); then emit it. */
@@ -1338,7 +1479,9 @@ public final class RtEntities {
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
             if (beBuildsThisFrame >= beBuildsPerFrame()) {
                 if (entry != null) {
+                    entry.staticFrames = 0; // showing stale geometry: never re-use it
                     emitBe(ctx, build, entry, null, rbx, rby, rbz); // over budget: keep last geometry, no MV
+                    entry.lastEmitFrame = now;
                 }
                 return;
             }
@@ -1354,8 +1497,16 @@ public final class RtEntities {
             }
             beCache.put(key, rebuilt);
             entry = rebuilt;
+        } else if (entry.owner == be) {
+            entry.staticFrames++;
+        } else {
+            entry.staticFrames = 0;
         }
+        entry.owner = be;
+        entry.signature = beSignature(be, Minecraft.getInstance().level, partial);
+        entry.textureGeneration = RtEntityTextures.INSTANCE.generation();
         emitBe(ctx, build, entry, disp, rbx, rby, rbz);
+        entry.lastEmitFrame = now;
     }
 
     /** Upload the already-captured BE mesh to fresh buffers and build its BLAS (block-local). */

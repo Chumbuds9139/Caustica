@@ -99,6 +99,8 @@ public final class RtEntityTextures {
     // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
+    /** Bumped whenever a slot may stop describing the texture it was handed out for; see {@link #generation}. */
+    private int generation;
     /** Highest slot handed out before the last {@link #reset}; scrubbed by the next upload. */
     private int slotsBeforeReset;
     private boolean loggedFailure;
@@ -254,6 +256,7 @@ public final class RtEntityTextures {
         int retired = slots.retireDeadOwners(
                 owner -> owner instanceof GpuTextureView view && isDead(view), fallbackView);
         if (retired > 0) {
+            generation++;
             atlasViewCache.values().removeIf(RtEntityTextures::isDead);
             if (!loggedRetirement) {
                 loggedRetirement = true;
@@ -298,6 +301,16 @@ public final class RtEntityTextures {
         }
     }
 
+    /**
+     * Changes whenever a slot handed out earlier may no longer describe the same texture: on a registry
+     * reset and when destroyed textures are re-pointed at the fallback. Geometry that keeps slot numbers
+     * across frames without re-resolving them (re-used block-entity captures) is only valid while this
+     * stays the same.
+     */
+    public int generation() {
+        return generation;
+    }
+
     /** Drop the registry (call when the world pipeline / bindless set is recreated, or textures reload). */
     public void reset() {
         reset(maxTextures());
@@ -305,6 +318,7 @@ public final class RtEntityTextures {
 
     /** Drop the registry for a pipeline whose bindless descriptor arrays have this capacity. */
     public void reset(int descriptorCapacity) {
+        generation++;
         capacity = Math.max(1, descriptorCapacity);
         slotsBeforeReset = Math.max(slotsBeforeReset, slots.allocatedSlots());
         viewCache.clear();
