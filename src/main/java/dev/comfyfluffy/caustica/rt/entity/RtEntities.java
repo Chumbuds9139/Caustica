@@ -394,7 +394,8 @@ public final class RtEntities {
 
     /** This frame's terrain and dynamic instance segments, entity BLAS builds, and geometry-table address. */
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
-                                List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use) {
+                                List<RtAccel.PreparedBlas> blas, long geomTableAddr, int geomTableCount,
+                                FrameUse use) {
     }
 
     private record FrameUse(FrameLists lists, TableSlot table) {
@@ -669,12 +670,12 @@ public final class RtEntities {
     public FrameEntities beginFrame(RtContext ctx, List<RtAccel.Instance> base, int rbx, int rby, int rbz,
                                     double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
         if (!enabled()) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, 0, null);
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, 0, null);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
@@ -707,7 +708,7 @@ public final class RtEntities {
         RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
 
         if (build.instances == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, 0, null);
         }
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
             build.motion.flushWrites();
@@ -716,7 +717,7 @@ public final class RtEntities {
                 RtFrameStats.FRAME.count("entityTableFlushes", 1);
             }
         }
-        return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
+        return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr, build.count,
                 new FrameUse(build.lists, build.table));
     }
 
@@ -2301,9 +2302,11 @@ public final class RtEntities {
         MemoryUtil.memPutFloat(entry + 44, 0f);
         MemoryUtil.memPutInt(entry + 48, 0);
         MemoryUtil.memPutInt(entry + 52, bucketTris[RtAccel.ENTITY_BUCKET_OPAQUE]);
-        // +56 is EntityGeom.flags (the geometry kind lane; ENTITY_GEOM_VIEWMODEL today), +60 stays reserved.
+        // +56 is EntityGeom.flags (the geometry kind lane; ENTITY_GEOM_VIEWMODEL today), +60 is
+        // EntityGeom.triCount: the bound the hit shaders hold a triangle index to.
         MemoryUtil.memPutInt(entry + 56, geomFlags);
-        MemoryUtil.memPutInt(entry + 60, 0);
+        MemoryUtil.memPutInt(entry + 60, bucketTris[RtAccel.ENTITY_BUCKET_OPAQUE]
+                + bucketTris[RtAccel.ENTITY_BUCKET_ANY_HIT]);
     }
 
     /**

@@ -267,6 +267,12 @@ public final class RtDistantHorizonsTerrain {
         return proxy == null ? 0L : proxy.table.deviceAddress;
     }
 
+    /** Number of LOD-table entries the hit shaders may index (WorldPush.hitTableLimits.y). */
+    public int tableLimit() {
+        Proxy proxy = current;
+        return proxy == null ? 0 : proxy.entries.size();
+    }
+
     public long emissiveRevision() {
         Proxy proxy = current;
         return proxy == null ? 0L : proxy.revision;
@@ -1021,17 +1027,19 @@ public final class RtDistantHorizonsTerrain {
                 }
                 return;
             }
-            table = ctx.createBuffer(Math.multiplyExact(32L, count), VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true,
+            table = ctx.createBuffer(Math.multiplyExact(40L, count), VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true,
                     "Distant Horizons RT proxy table " + count + " batches");
             long p = table.mapped;
             for (int section = 0; section < count; section++) {
                 RtSectionTable.SectionGeom geom = entries.get(section).geom;
-                long entry = p + section * 32L;
+                long entry = p + section * 40L;
                 MemoryUtil.memPutLong(entry, geom.material.deviceAddress);
                 MemoryUtil.memPutLong(entry + 8, geom.uvs.deviceAddress);
                 for (int i = 0; i < 4; i++) {
                     MemoryUtil.memPutInt(entry + 16L + i * 4L, geom.triBase[i]);
                 }
+                MemoryUtil.memPutInt(entry + 32L, geom.primCount());
+                MemoryUtil.memPutInt(entry + 36L, 0);
             }
             table.flush();
             if (session.lastBuild != null) {

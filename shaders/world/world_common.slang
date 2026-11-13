@@ -246,7 +246,38 @@ public struct WorldPush {
     // it cannot hit the hand and skips the trace; -1 (or lower) means "no bound this frame, always trace".
     // Trailing lanes; the generated WorldPushData appends them, so nothing above shifts.
     public float4   viewmodelCull;
+    // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
+    // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. Trailing lane.
+    public uint4    hitTableLimits;
+    // Written BY the hit shaders, read back by RtComposite when this ring slot comes round again: the
+    // last index they refused. x = HIT_FAULT_* kind (0 = none this frame), y = the refused index,
+    // z = the limit it was checked against, w = the raw instance custom index. Trailing lane; it must
+    // stay the last member, because RtComposite locates it from the end of the record.
+    public uint4    hitFault;
 };
+
+// Which lookup refused its index (WorldPush.hitFault.x). Mirrored by RtComposite's hit-fault log.
+public static const uint HIT_FAULT_TERRAIN_INSTANCE = 1u;
+public static const uint HIT_FAULT_TERRAIN_PRIM = 2u;
+public static const uint HIT_FAULT_LOD_INSTANCE = 3u;
+public static const uint HIT_FAULT_LOD_PRIM = 4u;
+public static const uint HIT_FAULT_ENTITY_INSTANCE = 5u;
+public static const uint HIT_FAULT_ENTITY_PRIM = 6u;
+
+// Every address a hit shader dereferences is reached through an index the TRAVERSAL hands it (instance
+// custom index, geometry index, primitive index). Nothing in Vulkan bounds those against our buffers, and
+// one bad value is a read from unmapped memory, which is a lost device rather than a wrong pixel. So each
+// lookup checks its index against the count Java published for that table and, when it does not fit,
+// records what it saw and tells the caller to drop the hit. The record is a plain racy store: any one of
+// the refused values is as good a witness as another.
+public bool hitIndexInRange(uint64_t worldPushAddr, uint kind, uint value, uint limit, uint instanceId) {
+    if (value < limit) {
+        return true;
+    }
+    DevicePtr<WorldPush> frame = DevicePtr<WorldPush>(worldPushAddr);
+    frame[0].hitFault = uint4(kind, value, limit, instanceId);
+    return false;
+}
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
 // Rayleigh/Mie/ozone atmosphere with the sun/moon cycle; the other two dimensions have no celestial
@@ -586,6 +617,10 @@ public struct Section {
     public uint64_t primAddr;
     public uint64_t uvAddr;
     public uint triBase[4]; // fixed bucket order: solid/cutout/translucent/water
+    // Number of TerrainPrim records behind primAddr (and of UV triples behind uvAddr). The hit shaders
+    // refuse a triangle index at or past it — see hitIndexInRange.
+    public uint primCount;
+    public uint reserved;
 };
 
 // Entity geometry record: packed buffer addresses, motion, and per-geometry triangle bases. Entity BLAS
@@ -603,7 +638,9 @@ public struct EntityGeom {
     // unchanged, and an extra custom-index kind bit is not available — ENTITY_BIT|PARTICLE_BIT already means
     // Distant Horizons, and the hit shaders decode the table index as InstanceID() & ~ENTITY_BIT.
     public uint flags;
-    public uint reserved;
+    // Number of Prim records behind primAddr (and of index triples behind idxAddr), over both BLAS
+    // geometries. The hit shaders refuse a triangle index at or past it — see hitIndexInRange.
+    public uint triCount;
 };
 
 // ENTITY_GEOM_VIEWMODEL: this geometry is the first-person hand and whatever it holds. It forces the

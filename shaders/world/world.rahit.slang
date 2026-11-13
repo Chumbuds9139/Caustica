@@ -96,8 +96,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             return;
         }
 
+        uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_INSTANCE, InstanceID() & IDX_MASK,
+                             hitLimits.y, InstanceID())) {
+            IgnoreHit();
+            return;
+        }
         Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
-        uint tri = pid + sec.triBase[GeometryIndex()];
+        uint tri = pid + sec.triBase[GeometryIndex() & 3u];
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, tri, sec.primCount, InstanceID())) {
+            IgnoreHit();
+            return;
+        }
         TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
         bool shadowRay = (RayFlags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) != 0u;
         uint dhSurface = uint(pr.tint.w + 0.5);
@@ -119,8 +129,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 #endif
 #if defined(CAUSTICA_AHIT_ENTITY)
     if (instanceKind != 0u) {
+        uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, InstanceID() & IDX_MASK,
+                             hitLimits.z, InstanceID())) {
+            IgnoreHit();
+            return;
+        }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
-        pid += g.triBase[GeometryIndex()];
+        pid += g.triBase[GeometryIndex() & 1u];
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+            IgnoreHit();
+            return;
+        }
         ConstPtr<uint> indices = ConstPtr<uint>(g.idxAddr);
         ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
         uint i0 = indices[3u * pid + 0u];
@@ -259,9 +279,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     return;
 #else
 
+    uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, InstanceID())) {
+        IgnoreHit();
+        return;
+    }
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
-    uint bucket = GeometryIndex();
+    uint bucket = GeometryIndex() & 3u;
     uint tri = pid + sec.triBase[bucket];
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, tri, sec.primCount, InstanceID())) {
+        IgnoreHit();
+        return;
+    }
 
     // Water radiance rays use a closest-hit-only SBT record. Shadow rays run this record: tint sunlight by
     // the biome water color, then keep walking so submerged terrain is lit by colored transmission.

@@ -622,6 +622,38 @@ public final class RtComposite {
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
     private static final int PUSH_RING = 6;
+    /** WorldPush.hitFault is the record's last member (four 32-bit lanes). */
+    private static final int HIT_FAULT_OFFSET = WORLD_PUSH_SIZE - 4 * Integer.BYTES;
+    private static final String[] HIT_FAULT_KINDS = {"none", "terrain section", "terrain triangle",
+            "LOD batch", "LOD triangle", "entity geometry", "entity triangle"};
+    private long hitFaultFrames;
+    private long lastHitFaultLogNanos;
+
+    /**
+     * Read back what the hit shaders left in a push slot the GPU has finished with. A non-zero kind means
+     * a traversal-supplied index did not fit the table it indexes; the shader dropped that hit instead of
+     * reading through it, and this is the only trace it leaves.
+     */
+    private void reportHitFault(long mappedPush) {
+        int kind = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET);
+        if (kind == 0) {
+            return;
+        }
+        hitFaultFrames++;
+        long now = System.nanoTime();
+        if (now - lastHitFaultLogNanos < 1_000_000_000L) {
+            return;
+        }
+        lastHitFaultLogNanos = now;
+        int value = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 4);
+        int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
+        int instanceId = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
+        CausticaMod.LOGGER.warn("[HitGuard] a hit shader refused an out-of-range {} index: index={}, limit={}, "
+                        + "instanceCustomIndex=0x{}, frames affected so far={}",
+                kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind,
+                Integer.toUnsignedString(value), Integer.toUnsignedString(limit),
+                Integer.toHexString(instanceId), hitFaultFrames);
+    }
     private PushSlot[] pushRing;
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
@@ -1130,6 +1162,8 @@ public final class RtComposite {
                     PushSlot slot = new PushSlot(ctx.createBuffer(WORLD_PUSH_BUFFER_SIZE,
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
                     writeBlueNoise(slot.buffer);
+                    // Nothing has traced with this slot yet; fresh memory must not read as a refused hit.
+                    MemoryUtil.memPutInt(slot.buffer.mapped + HIT_FAULT_OFFSET, 0);
                     pushRing[i] = slot;
                 }
             }
@@ -1719,6 +1753,7 @@ public final class RtComposite {
             selectedPushSlot.graphicsUse.mark(graphicsUse);
             RtBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
+            reportHitFault(pushBuf.mapped);
             // Exact per-section vanilla-readiness hand-off mask for world.rahit's DH/Voxy suppression.
             ByteBuffer readyMask = MemoryUtil.memByteBuffer(
                     pushBuf.mapped + READY_MASK_OFFSET, READY_MASK_CAPACITY)
@@ -1954,7 +1989,14 @@ public final class RtComposite {
                     new Float4(RtViewmodel.INSTANCE.frameOverlayReach(), 0.0f, 0.0f, 0.0f),
                     // ...and the cone that decides which pixels are even candidates for it, so the re-trace
                     // stays off the majority of the screen instead of off "pixels where the world is far".
-                    RtViewmodel.INSTANCE.frameOverlayCull()
+                    RtViewmodel.INSTANCE.frameOverlayCull(),
+                    // Entry counts of the tables the hit shaders index with traversal-supplied values
+                    // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
+                    new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
+                            fe.geomTableCount(), 0),
+                    // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
+                    // when this ring slot is selected again.
+                    new Int4(0, 0, 0, 0)
             ).write(push);
             int flushBytes = Math.max(WORLD_PUSH_SIZE, READY_MASK_OFFSET + readyMaskBytes);
             if (cloudCellsAddress != 0L) {

@@ -111,7 +111,7 @@ public final class RtTerrain {
         return CausticaConfig.Rt.Terrain.MAX_INFLIGHT_SECTIONS.value();
     }
 
-    private static final int SECTION_ENTRY_BYTES = 32; // {u64 primAddr, u64 uvAddr, u32 triBase[4]}
+    private static final int SECTION_ENTRY_BYTES = 40; // {u64 primAddr, u64 uvAddr, u32 triBase[4], u32 primCount, u32 pad}
     private static final long NO_TESS_TOKEN = Long.MIN_VALUE;
     private static final int NO_MISSING_INDEX = -1;
     private static final long NO_DIRTY_GROUP = 0L;
@@ -247,6 +247,11 @@ public final class RtTerrain {
     /** Section table device address: {@code {u64 primAddr, u64 uvAddr, u32 triBase[4]}} per section, indexed by gl_InstanceCustomIndexEXT. */
     public long tableAddress() {
         return table.address();
+    }
+
+    /** Number of section-table entries the hit shaders may index (WorldPush.hitTableLimits.x). */
+    public int tableLimit() {
+        return table.buffer == null ? 0 : table.slotLimit();
     }
 
     /** RIS-sampled global light buffer device address, or 0 while no lights are published. */

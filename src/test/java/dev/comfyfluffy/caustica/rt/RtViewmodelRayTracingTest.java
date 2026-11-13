@@ -87,7 +87,7 @@ final class RtViewmodelRayTracingTest {
 
         // std430 order, so the CPU's byte lane has to match the field's position in the struct.
         String geometry = slice(common, "public struct EntityGeom {", "};");
-        assertInOrder(geometry, "public uint triBase[2];", "public uint flags;", "public uint reserved;");
+        assertInOrder(geometry, "public uint triBase[2];", "public uint flags;", "public uint triCount;");
         int entryBytes = decode(pattern(Files.readString(ENTITIES), "TABLE_ENTRY_BYTES = (\\d+);"));
         assertEquals(64, entryBytes, "the entity geometry table entry layout is pinned at 64 bytes");
         assertTrue(Files.readString(ENTITIES).contains("MemoryUtil.memPutInt(entry + 56, geomFlags);"),

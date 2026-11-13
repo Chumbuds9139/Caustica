@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * registry, and published static-instance list here while {@link RtTerrain} retains publication order.
  */
 final class RtSectionTable {
-    private static final int SECTION_ENTRY_BYTES = 32;
+    private static final int SECTION_ENTRY_BYTES = 40;
     RtBuffer buffer;
     int capacity;
     int nextSlot;
@@ -33,6 +33,11 @@ final class RtSectionTable {
 
     long address() {
         return buffer.deviceAddress;
+    }
+
+    /** Slots the hit shaders may index: every slot ever handed out lies below this and was written. */
+    int slotLimit() {
+        return Math.min(nextSlot, capacity);
     }
 
     int liveSlotCapacity(List<PreparedSection> prepared,
@@ -215,6 +220,8 @@ final class RtSectionTable {
         MemoryUtil.memPutInt(base + 20, geom.triBase[1]);
         MemoryUtil.memPutInt(base + 24, geom.triBase[2]);
         MemoryUtil.memPutInt(base + 28, geom.triBase[3]);
+        MemoryUtil.memPutInt(base + 32, geom.primCount());
+        MemoryUtil.memPutInt(base + 36, 0);
         markDirty(offset, SECTION_ENTRY_BYTES);
     }
 
@@ -253,6 +260,14 @@ final class RtSectionTable {
         final float[] lights;
         int slot = -1;
         int instanceIndex = -1;
+
+        /** Bytes of one TerrainPrim record (12 float lanes), as world_common.slang lays it out. */
+        static final int TERRAIN_PRIM_BYTES = 48;
+
+        /** Records behind {@link #material}: the bound the hit shaders hold a triangle index to. */
+        int primCount() {
+            return (int) Math.min(Integer.MAX_VALUE, material.size / TERRAIN_PRIM_BYTES);
+        }
 
         SectionGeom(long key, RtBuffer uvs, RtBuffer material,
                     RtAccel blas, int[] triBase, int sx, int sy, int sz, float[] lights) {

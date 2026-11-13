@@ -565,8 +565,16 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Native DH/Voxy LOD triangles participate in camera, GI, reflection and shadow rays through the
     // same TLAS. They carry no sprite: shading comes from vertex colour + the mini-material class.
     if ((InstanceID() & DH_INSTANCE_KIND) == DH_INSTANCE_KIND) {
+        uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_INSTANCE, InstanceID() & IDX_MASK,
+                             hitLimits.y, InstanceID())) {
+            return; // payload untouched: raygen reads the miss sentinel
+        }
         Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
-        uint dpid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
+        uint dpid = PrimitiveIndex() + sec.triBase[GeometryIndex() & 3u];
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, dpid, sec.primCount, InstanceID())) {
+            return;
+        }
         TerrainPrim dpr = ConstPtr<TerrainPrim>(sec.primAddr)[dpid];
         float3 sourceNormal = normalize(dpr.normal.xyz);
         float3 dn = sourceNormal;
@@ -647,8 +655,15 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // emission or specular response. Reached only by the primary ray (instance mask 0x02). Cutout: rahit.
     if ((InstanceID() & PARTICLE_BIT) != 0u) {
         uint idx = InstanceID() & IDX_MASK;
+        uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, idx, hitLimits.z, InstanceID())) {
+            return; // payload untouched: raygen reads the miss sentinel
+        }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[idx];
-        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
+        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex() & 1u];
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+            return;
+        }
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
         ConstPtr<uint> ib = ConstPtr<uint>(g.idxAddr);
         ConstPtr<float2> uvb = ConstPtr<float2>(g.uvAddr);
@@ -712,8 +727,15 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // geometry; the low bits index the entity geometry table, not the section table.
     if ((InstanceID() & ENTITY_BIT) != 0u) {
         uint eidx = InstanceID() & ~ENTITY_BIT;
+        uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, eidx, hitLimits.z, InstanceID())) {
+            return; // payload untouched: raygen reads the miss sentinel
+        }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[eidx];
-        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
+        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex() & 1u];
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+            return;
+        }
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
         // Rigid-reuse instances (still / spinning entities re-referencing a cached BLAS) carry a real
         // rotation in the instance transform; per-frame-built entities are identity. The cached prim
@@ -891,12 +913,19 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     return;
 #else
 
+    uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, InstanceID())) {
+        return; // payload untouched: raygen reads the miss sentinel
+    }
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
     // Any-hit/SBT opt: the section BLAS has one fixed geometry per material bucket (solid / cutout /
     // translucent / water). PrimitiveIndex() restarts at 0 per geometry, so re-add this geometry's
     // triangle base to land in the section's packed prim/uv arrays (concatenated in BUCKET order).
     // Water prims keep tint.w == 1, converted to the packed material enum below.
-    uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
+    uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex() & 3u];
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, pid, sec.primCount, InstanceID())) {
+        return;
+    }
     TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];
     MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[safeMaterialId(pr.materialId, pc.restirModePacked)];
     float3 n = normalize(pr.normal.xyz);
