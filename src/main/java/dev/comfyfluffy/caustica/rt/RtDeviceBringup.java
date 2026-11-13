@@ -263,6 +263,13 @@ public final class RtDeviceBringup {
         return serBackend != SerBackend.NONE;
     }
 
+    /** The reordering configuration in effect, for diagnostics that outlive the start-up log. */
+    public static String serSummary() {
+        return "backend=" + serBackend.label + ", bounces=" + CausticaConfig.Rt.Reorder.BOUNCES.value()
+                + ", key=" + CausticaConfig.Rt.Reorder.KEY.value()
+                + ", hitObjectOnly=" + CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value();
+    }
+
     /** True if {@code VK_EXT_opacity_micromap} was enabled on the device (gate on + device support). */
     public static boolean ommEnabled() {
         return ommEnabled;
