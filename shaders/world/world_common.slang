@@ -269,6 +269,11 @@ public static const uint FEATURE_VIEWZ = 128u;           // a renderer-side deno
 public static const uint FEATURE_SHARC = 256u;           // experimental spatial-hash radiance cache
 // Shader Execution Reordering diagnostics, read only by the SER build of the indirect raygen.
 public static const uint FEATURE_SER_NO_REORDER = 0x200u; // trace through hit objects, never ReorderThread
+public static const uint SER_KEY_SHIFT = 10u; // 2 bits: what ReorderThread sorts by (SER_KEY_*)
+public static const uint SER_KEY_MASK = 0x3u;
+public static const uint SER_KEY_HIT_AND_HINT = 0u; // hit object plus the coherence hint
+public static const uint SER_KEY_HIT = 1u;          // hit object alone
+public static const uint SER_KEY_HINT = 2u;         // coherence hint alone
 public static const uint SER_BOUNCES_SHIFT = 12u; // 4 bits: leading bounces on the hit-object path
 public static const uint SER_BOUNCES_MASK = 0xFu; // 15 = every bounce
 // Measurement probes, set only while the F8 performance test runs one of its "probe" rows. Each removes

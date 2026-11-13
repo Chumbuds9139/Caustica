@@ -121,6 +121,7 @@ public final class RtPerfSweep {
         int giBounces = CausticaConfig.Rt.Entities.GI_BOUNCES.value();
         int serBounces = CausticaConfig.Rt.Reorder.BOUNCES.value();
         boolean serHitObjectOnly = CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value();
+        int serKey = CausticaConfig.Rt.Reorder.KEY.value();
         restore = () -> {
             probeBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
@@ -135,6 +136,7 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Entities.GI_BOUNCES.set(giBounces);
             CausticaConfig.Rt.Reorder.BOUNCES.set(serBounces);
             CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(serHitObjectOnly);
+            CausticaConfig.Rt.Reorder.KEY.set(serKey);
         };
         List<Variant> tests = new ArrayList<>();
         // What reordering is worth here. Only narrower-than-current settings are tried: full reordering
@@ -142,6 +144,14 @@ public final class RtPerfSweep {
         if (RtDeviceBringup.serExtEnabled() && !serHitObjectOnly && serBounces > 0) {
             tests.add(new Variant("reordering off (hit objects only)", false,
                     () -> CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(true)));
+            if (serKey != 1) {
+                tests.add(new Variant("reordering by hit object alone", false,
+                        () -> CausticaConfig.Rt.Reorder.KEY.set(1)));
+            }
+            if (serKey != 2) {
+                tests.add(new Variant("reordering by coherence hint alone", false,
+                        () -> CausticaConfig.Rt.Reorder.KEY.set(2)));
+            }
             if (serBounces > 2) {
                 tests.add(new Variant("reordering on first 2 bounces only", false,
                         () -> CausticaConfig.Rt.Reorder.BOUNCES.set(2)));

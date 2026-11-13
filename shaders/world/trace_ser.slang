@@ -34,7 +34,16 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
     uint coherenceHint = (pathPhaseHint << 2u) | materialHint;
     // Diagnostic split: the same hit-object trace and invoke, without handing the thread to the scheduler.
     if ((worldPush.featureFlags & FEATURE_SER_NO_REORDER) == 0u) {
-        ReorderThread(hObj, coherenceHint, 4u);
+        // Diagnostic split of the sort key: the driver's hit-object grouping and the caller's hint
+        // reach the scheduler through different entry points.
+        uint key = (worldPush.featureFlags >> SER_KEY_SHIFT) & SER_KEY_MASK;
+        if (key == SER_KEY_HIT) {
+            ReorderThread(hObj);
+        } else if (key == SER_KEY_HINT) {
+            ReorderThread(coherenceHint, 4u);
+        } else {
+            ReorderThread(hObj, coherenceHint, 4u);
+        }
     }
     payload = makeRadiancePayload(flags, rayCone);
     HitObject::Invoke(topLevelAS, hObj, payload);

@@ -287,6 +287,7 @@ public final class RtComposite {
     private static final int FEATURE_VIEWZ = 128;
     private static final int FEATURE_SHARC = 256;
     private static final int FEATURE_SER_NO_REORDER = 0x200;
+    private static final int SER_KEY_SHIFT = 10;
     private static final int SER_BOUNCES_SHIFT = 12;
     // F8 performance-test probes (world_common.slang FEATURE_PROBE_*): never set in normal play.
     public static final int FEATURE_PROBE_RIS_UNSHADOWED = 0x10000000;
@@ -308,6 +309,7 @@ public final class RtComposite {
     private static int featureFlags() {
         int flags = RtPerfSweep.probeFeatureBits();
         flags |= CausticaConfig.Rt.Reorder.BOUNCES.value() << SER_BOUNCES_SHIFT;
+        flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;
         if (CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value()) {
             flags |= FEATURE_SER_NO_REORDER;
         }
