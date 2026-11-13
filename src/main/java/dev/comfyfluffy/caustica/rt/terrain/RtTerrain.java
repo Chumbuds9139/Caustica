@@ -1649,12 +1649,13 @@ public final class RtTerrain {
         retire(ctx, lastGraphicsUse, removed);
 
 
-        if (!prepared.isEmpty()) {
+        if (!prepared.isEmpty() || (table.buffer != null && table.hasPendingClears())) {
             Generation oldGeneration = table.beginWriteGeneration(ctx, table.liveSlotCapacity(prepared, resident));
             if (oldGeneration != null) {
                 retireGeneration(ctx, lastGraphicsUse, oldGeneration);
 
             }
+            table.clearFreedSlots();
         }
 
         for (PreparedSection ps : prepared) {

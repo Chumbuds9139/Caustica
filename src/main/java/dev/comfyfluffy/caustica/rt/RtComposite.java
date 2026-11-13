@@ -634,6 +634,41 @@ public final class RtComposite {
      * a traversal-supplied index did not fit the table it indexes; the shader dropped that hit instead of
      * reading through it, and this is the only trace it leaves.
      */
+    /**
+     * The hit-guard lanes of every push slot, for the device-loss report: the frames in flight when the
+     * device was lost never come round to {@link #reportHitFault}, and theirs are the ones that matter.
+     * Reads mapped memory only, so it is safe on a lost device and from any thread.
+     */
+    public String describeHitFaults() {
+        PushSlot[] ring = pushRing;
+        if (ring == null) {
+            return "no push ring";
+        }
+        StringBuilder out = new StringBuilder("frames refused so far=").append(hitFaultFrames);
+        for (int i = 0; i < ring.length; i++) {
+            PushSlot slot = ring[i];
+            if (slot == null) {
+                continue;
+            }
+            long base = slot.buffer.mapped + HIT_FAULT_OFFSET;
+            int kind = MemoryUtil.memGetInt(base);
+            out.append("; slot ").append(i).append(i == pushSlot ? " (latest)" : "").append(": ");
+            if (kind == 0) {
+                out.append("none");
+            } else {
+                out.append(kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind)
+                        .append(" index=").append(Integer.toUnsignedString(MemoryUtil.memGetInt(base + 4)))
+                        .append(" limit=").append(Integer.toUnsignedString(MemoryUtil.memGetInt(base + 8)))
+                        .append(" instanceCustomIndex=0x")
+                        .append(Integer.toHexString(MemoryUtil.memGetInt(base + 12)));
+            }
+            out.append(", limits=").append(MemoryUtil.memGetInt(base - 16)).append('/')
+                    .append(MemoryUtil.memGetInt(base - 12)).append('/')
+                    .append(MemoryUtil.memGetInt(base - 8));
+        }
+        return out.toString();
+    }
+
     private void reportHitFault(long mappedPush) {
         int kind = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET);
         if (kind == 0) {

@@ -24,6 +24,12 @@ final class RtSectionTable {
     int capacity;
     int nextSlot;
     final LongArrayList freeSlots = new LongArrayList();
+    /**
+     * Freed slots whose entries still hold the addresses of the section that left. Those buffers are
+     * destroyed once no frame uses them, so an entry left as it was would be a pointer to unmapped memory
+     * for any hit that ever names the slot again. They are zeroed in the next write generation.
+     */
+    private final LongArrayList pendingClears = new LongArrayList();
     final ArrayList<SectionGeom> slots = new ArrayList<>();
     final ArrayList<RtAccel.Instance> instanceList = new ArrayList<>();
     private final ConcurrentLinkedQueue<Generation> recycledGenerations = new ConcurrentLinkedQueue<>();
@@ -174,6 +180,7 @@ final class RtSectionTable {
         if (geom.slot >= 0) {
             slots.set(geom.slot, null);
             freeSlots.add(geom.slot);
+            pendingClears.add(geom.slot);
             geom.slot = -1;
         }
     }
@@ -209,6 +216,28 @@ final class RtSectionTable {
             }
         }
         return null;
+    }
+
+    boolean hasPendingClears() {
+        return !pendingClears.isEmpty();
+    }
+
+    /**
+     * Zero the entries of freed slots in the writable generation. A zero triangle count makes the hit
+     * shaders refuse every index into the slot, so a hit that names it is dropped and reported instead of
+     * reading through the departed section's addresses.
+     */
+    void clearFreedSlots() {
+        for (int i = 0; i < pendingClears.size(); i++) {
+            int slot = (int) pendingClears.getLong(i);
+            if (slot >= capacity || (slot < slots.size() && slots.get(slot) != null)) {
+                continue; // handed on already; its new owner's write stands
+            }
+            long offset = (long) slot * SECTION_ENTRY_BYTES;
+            MemoryUtil.memSet(buffer.mapped + offset, 0, SECTION_ENTRY_BYTES);
+            markDirty(offset, SECTION_ENTRY_BYTES);
+        }
+        pendingClears.clear();
     }
 
     void write(SectionGeom geom) {
