@@ -659,14 +659,20 @@ public final class RtComposite {
                 out.append(kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind)
                         .append(" index=").append(Integer.toUnsignedString(MemoryUtil.memGetInt(base + 4)))
                         .append(" limit=").append(Integer.toUnsignedString(MemoryUtil.memGetInt(base + 8)))
-                        .append(" instanceCustomIndex=0x")
-                        .append(Integer.toHexString(MemoryUtil.memGetInt(base + 12)));
+                        .append(' ').append(describeHitFaultTag(MemoryUtil.memGetInt(base + 12)));
             }
             out.append(", limits=").append(MemoryUtil.memGetInt(base - 16)).append('/')
                     .append(MemoryUtil.memGetInt(base - 12)).append('/')
                     .append(MemoryUtil.memGetInt(base - 8));
         }
         return out.toString();
+    }
+
+    /** Decode WorldPush.hitFault.w (world_common.slang hitFaultTag). */
+    private static String describeHitFaultTag(int tag) {
+        return "instanceCustomIndex=0x" + Integer.toHexString(tag & 0xFFFFFF)
+                + ", geometry=" + ((tag >>> 24) & 3)
+                + ", trace=" + (tag < 0 ? "REORDERED" : "ordinary");
     }
 
     private void reportHitFault(long mappedPush) {
@@ -682,12 +688,12 @@ public final class RtComposite {
         lastHitFaultLogNanos = now;
         int value = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 4);
         int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
-        int instanceId = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
+        int tag = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
         CausticaMod.LOGGER.warn("[HitGuard] a hit shader refused an out-of-range {} index: index={}, limit={}, "
-                        + "instanceCustomIndex=0x{}, frames affected so far={}",
+                        + "{}, frames affected so far={}",
                 kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind,
                 Integer.toUnsignedString(value), Integer.toUnsignedString(limit),
-                Integer.toHexString(instanceId), hitFaultFrames);
+                describeHitFaultTag(tag), hitFaultFrames);
     }
     private PushSlot[] pushRing;
     private int pushSlot;

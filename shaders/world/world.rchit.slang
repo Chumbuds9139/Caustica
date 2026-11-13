@@ -550,6 +550,8 @@ static const float3 GLINT_GRAYSCALE_TINT = float3(1.30, 0.42, 1.55);
 
 [shader("closesthit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+    // Captured before anything rewrites payload.flags: what a refused index reports about this hit.
+    uint guardTag = hitFaultTag(InstanceID(), GeometryIndex(), payload.flags);
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
     // Camera and mirror-chain rays carry PAYLOAD_SHOW_CELESTIAL; diffuse continuation rays do not. Read
@@ -567,12 +569,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if ((InstanceID() & DH_INSTANCE_KIND) == DH_INSTANCE_KIND) {
         uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
         if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_INSTANCE, InstanceID() & IDX_MASK,
-                             hitLimits.y, InstanceID())) {
+                             hitLimits.y, guardTag)) {
             return; // payload untouched: raygen reads the miss sentinel
         }
         Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
         uint dpid = PrimitiveIndex() + sec.triBase[GeometryIndex() & 3u];
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, dpid, sec.primCount, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, dpid, sec.primCount, guardTag)) {
             return;
         }
         TerrainPrim dpr = ConstPtr<TerrainPrim>(sec.primAddr)[dpid];
@@ -656,12 +658,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if ((InstanceID() & PARTICLE_BIT) != 0u) {
         uint idx = InstanceID() & IDX_MASK;
         uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, idx, hitLimits.z, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, idx, hitLimits.z, guardTag)) {
             return; // payload untouched: raygen reads the miss sentinel
         }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[idx];
         uint pid = PrimitiveIndex() + g.triBase[GeometryIndex() & 1u];
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, guardTag)) {
             return;
         }
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
@@ -728,12 +730,12 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if ((InstanceID() & ENTITY_BIT) != 0u) {
         uint eidx = InstanceID() & ~ENTITY_BIT;
         uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, eidx, hitLimits.z, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, eidx, hitLimits.z, guardTag)) {
             return; // payload untouched: raygen reads the miss sentinel
         }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[eidx];
         uint pid = PrimitiveIndex() + g.triBase[GeometryIndex() & 1u];
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, guardTag)) {
             return;
         }
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
@@ -914,7 +916,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 #else
 
     uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
-    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, InstanceID())) {
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, guardTag)) {
         return; // payload untouched: raygen reads the miss sentinel
     }
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
@@ -923,7 +925,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // triangle base to land in the section's packed prim/uv arrays (concatenated in BUCKET order).
     // Water prims keep tint.w == 1, converted to the packed material enum below.
     uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex() & 3u];
-    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, pid, sec.primCount, InstanceID())) {
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, pid, sec.primCount, guardTag)) {
         return;
     }
     TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];

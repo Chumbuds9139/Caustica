@@ -78,6 +78,8 @@ bool vanillaRtSectionReady(float3 hitPos) {
 
 [shader("anyhit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+    // Captured before anything rewrites payload.flags: what a refused index reports about this hit.
+    uint guardTag = hitFaultTag(InstanceID(), GeometryIndex(), payload.flags);
     uint pid = PrimitiveIndex();
     float2 attribs = attr.barycentrics;
     float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
@@ -98,13 +100,13 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
         uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
         if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_INSTANCE, InstanceID() & IDX_MASK,
-                             hitLimits.y, InstanceID())) {
+                             hitLimits.y, guardTag)) {
             IgnoreHit();
             return;
         }
         Section sec = ConstPtr<Section>(pc.dhTableAddr)[InstanceID() & IDX_MASK];
         uint tri = pid + sec.triBase[GeometryIndex() & 3u];
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, tri, sec.primCount, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_LOD_PRIM, tri, sec.primCount, guardTag)) {
             IgnoreHit();
             return;
         }
@@ -131,13 +133,13 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if (instanceKind != 0u) {
         uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
         if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_INSTANCE, InstanceID() & IDX_MASK,
-                             hitLimits.z, InstanceID())) {
+                             hitLimits.z, guardTag)) {
             IgnoreHit();
             return;
         }
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
         pid += g.triBase[GeometryIndex() & 1u];
-        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, InstanceID())) {
+        if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_ENTITY_PRIM, pid, g.triCount, guardTag)) {
             IgnoreHit();
             return;
         }
@@ -280,14 +282,14 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 #else
 
     uint4 hitLimits = ConstPtr<WorldPush>(pc.worldPushAddr)[0].hitTableLimits;
-    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, InstanceID())) {
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_INSTANCE, InstanceID(), hitLimits.x, guardTag)) {
         IgnoreHit();
         return;
     }
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
     uint bucket = GeometryIndex() & 3u;
     uint tri = pid + sec.triBase[bucket];
-    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, tri, sec.primCount, InstanceID())) {
+    if (!hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, tri, sec.primCount, guardTag)) {
         IgnoreHit();
         return;
     }

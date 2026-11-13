@@ -251,7 +251,7 @@ public struct WorldPush {
     public uint4    hitTableLimits;
     // Written BY the hit shaders, read back by RtComposite when this ring slot comes round again: the
     // last index they refused. x = HIT_FAULT_* kind (0 = none this frame), y = the refused index,
-    // z = the limit it was checked against, w = the raw instance custom index. Trailing lane; it must
+    // z = the limit it was checked against, w = hitFaultTag (instance, geometry, reordered). Trailing lane; it must
     // stay the last member, because RtComposite locates it from the end of the record.
     public uint4    hitFault;
 };
@@ -493,6 +493,17 @@ public static const uint PAYLOAD_WEATHER_SNOW = 8192u;
 // CULL_VIEWMODEL_SHADOW while a viewmodel surface is being shaded, so the first-person body, particles and
 // the hand's own geometry can never throw a shadow across the item held in it.
 public static const uint PAYLOAD_VIEWMODEL = 16384u;
+// Diagnostic only: set by traceRadianceReordered on the payloads of a hit-object trace, never read for
+// shading. The hit guards copy it into WorldPush.hitFault so a refused index says whether it came from a
+// reordered trace or from an ordinary TraceRay through the very same acceleration structures.
+public static const uint PAYLOAD_REORDERED = 32768u;
+// WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
+public static const uint HIT_FAULT_REORDERED = 0x80000000u;
+
+public uint hitFaultTag(uint instanceId, uint geometryIndex, uint payloadFlags) {
+    return (instanceId & 0xFFFFFFu) | ((geometryIndex & 3u) << 24u)
+            | ((payloadFlags & PAYLOAD_REORDERED) != 0u ? HIT_FAULT_REORDERED : 0u);
+}
 public static const uint PAYLOAD_END_PORTAL_UNLIT = 1024u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).

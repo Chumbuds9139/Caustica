@@ -20,7 +20,8 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
                             bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread,
                             uint pathPhaseHint) {
     uint flags = (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
-            | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u);
+            | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
+            | PAYLOAD_REORDERED;
     uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
     Payload tracePayload = makeRadiancePayload(flags, rayCone);
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
