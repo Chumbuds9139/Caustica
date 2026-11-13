@@ -162,6 +162,13 @@ public final class RtTerrain {
     private final Long2LongOpenHashMap inFlight = new Long2LongOpenHashMap();
     private final Long2LongOpenHashMap inFlightDirtyGroup = new Long2LongOpenHashMap();
     private final Long2ObjectOpenHashMap<DirtyGroup> dirtyGroups = new Long2ObjectOpenHashMap<>();
+    /**
+     * Token of the newest build result accepted for each section. A dirty group holds its members'
+     * results until the last one arrives, and nothing stops a member from being re-dirtied, rebuilt and
+     * published (or evicted) in the meantime; the group's copy is then history and must not be applied.
+     */
+    private final Long2LongOpenHashMap lastResultToken = newLastResultTokenMap();
+    private long integrityLogNanos;
     private final ConcurrentLinkedQueue<SectionResult> completedBuilds = new ConcurrentLinkedQueue<>();
     private final Object activeTaskLock = new Object();
     private int activeTasks;
@@ -667,6 +674,7 @@ public final class RtTerrain {
             clearQueuedWork(key, true);
             invalidateInFlight(key);
             empty.remove(key);
+            lastResultToken.remove(key); // voids any result a pending dirty group still holds for it
             SectionGeom g = resident.remove(key);
             if (g != null) {
                 removed.add(g);
@@ -683,6 +691,11 @@ public final class RtTerrain {
             }
         }
         removeKeysNotIn(empty, desired);
+        for (LongIterator it = lastResultToken.keySet().iterator(); it.hasNext(); ) {
+            if (!desired.contains(it.nextLong())) {
+                it.remove();
+            }
+        }
         removeInFlightNotIn(desired);
         removeQueuedGroupsNotIn(desired);
     }
@@ -769,6 +782,12 @@ public final class RtTerrain {
         }
         setQueuedGroup(key, dirtyGroup);
         return true;
+    }
+
+    private static Long2LongOpenHashMap newLastResultTokenMap() {
+        Long2LongOpenHashMap map = new Long2LongOpenHashMap();
+        map.defaultReturnValue(NO_TESS_TOKEN);
+        return map;
     }
 
     private void clearQueuedWork(long key, boolean cancelGroup) {
@@ -1384,6 +1403,7 @@ public final class RtTerrain {
             }
             inFlight.remove(task.key);
             long dirtyGroup = inFlightDirtyGroup.remove(task.key);
+            lastResultToken.put(task.key, task.token);
             distantReadyMaskDirty = true;
             if (result.failure() != null) {
                 if (result.prepared() != null) {
@@ -1420,9 +1440,11 @@ public final class RtTerrain {
                         group.restoreEmptyKeys.add(task.key);
                     }
                     group.emptyKeys.add(task.key);
+                    group.emptyTokens.add(task.token);
                 } else {
                     empty.remove(task.key);
                     group.prepared.add(built);
+                    group.preparedTokens.add(task.token);
                 }
                 completeDirtyGroupMember(group, prepared, removed);
                 remaining--;
@@ -1457,10 +1479,36 @@ public final class RtTerrain {
             return;
         }
         dirtyGroups.remove(group.id);
-        prepared.addAll(group.prepared);
-        removed.addAll(group.removed);
-        for (LongIterator it = group.emptyKeys.iterator(); it.hasNext(); ) {
-            empty.add(it.nextLong());
+        // Apply only the members that are still the newest word on their section. A member that was
+        // rebuilt or evicted while the group waited has already been dealt with by that later event:
+        // applying the group's stale copy on top used to delete the *new* section's TLAS instance and
+        // free its table slot (the retired geometry still carried both), after which two sections shared
+        // a slot and hits on one were shaded through the other's attribute buffers.
+        int stale = 0;
+        for (int i = 0; i < group.prepared.size(); i++) {
+            PreparedSection ps = group.prepared.get(i);
+            if (lastResultToken.get(ps.key()) == group.preparedTokens.getLong(i)) {
+                prepared.add(ps);
+            } else {
+                destroyPreparedSection(ps);
+                stale++;
+            }
+        }
+        for (int i = 0; i < group.emptyKeys.size(); i++) {
+            long key = group.emptyKeys.getLong(i);
+            if (lastResultToken.get(key) != group.emptyTokens.getLong(i)) {
+                stale++;
+                continue;
+            }
+            // Whatever is resident now is what this (still current) empty result replaces.
+            SectionGeom current = resident.get(key);
+            if (current != null) {
+                removed.add(current);
+            }
+            empty.add(key);
+        }
+        if (stale > 0) {
+            RtFrameStats.FRAME.count("terrainStaleGroupResults", stale);
         }
     }
 
@@ -1527,6 +1575,8 @@ public final class RtTerrain {
         final ArrayList<PreparedSection> prepared = new ArrayList<>();
         final ArrayList<SectionGeom> removed = new ArrayList<>();
         final LongArrayList emptyKeys = new LongArrayList();
+        final LongArrayList emptyTokens = new LongArrayList();     // parallel to emptyKeys
+        final LongArrayList preparedTokens = new LongArrayList();  // parallel to prepared
         final LongArrayList restoreEmptyKeys = new LongArrayList();
         int remaining;
 
@@ -1621,6 +1671,10 @@ public final class RtTerrain {
                 resident.put(ps.key(), g);
                 table.write(g);
                 table.instanceList.set(g.instanceIndex, table.instanceFor(g, baseX, baseY, baseZ));
+                // The slot and instance now belong to g. A retired section must never be able to take
+                // them down with it if some list still names it.
+                prev.slot = -1;
+                prev.instanceIndex = -1;
                 retire(ctx, lastGraphicsUse, List.of(prev));
             } else {
                 g.slot = table.allocateSlot();
@@ -1686,6 +1740,16 @@ public final class RtTerrain {
             markLightHierarchyDirty();
         }
         ready = true;
+        String broken = table.integrityFault(resident);
+        if (broken != null) {
+            RtFrameStats.FRAME.count("terrainTableIntegrityFaults", 1);
+            long now = System.nanoTime();
+            if (integrityLogNanos == 0L || now - integrityLogNanos >= 5_000_000_000L) {
+                integrityLogNanos = now;
+                CausticaMod.LOGGER.error("RT terrain table integrity fault: {}. A hit on this section would "
+                        + "be shaded through the wrong buffers; please report this line.", broken);
+            }
+        }
     }
 
     private static boolean hasLights(float[] lights) {
@@ -1802,6 +1866,7 @@ public final class RtTerrain {
         queuedDirtyGroup.clear();
         reextract.clear();
         queuedReextract.clear();
+        lastResultToken.clear();
         windowValid = false;
         lightGrid.destroyAfterDeviceIdle();
         lightSections.clear();
@@ -1903,6 +1968,7 @@ public final class RtTerrain {
         queuedDirtyGroup.clear();
         reextract.clear();
         queuedReextract.clear();
+        lastResultToken.clear();
         empty.clear();
         published.clear();
         windowValid = false;

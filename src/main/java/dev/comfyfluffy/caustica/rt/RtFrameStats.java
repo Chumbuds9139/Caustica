@@ -100,7 +100,8 @@ public final class RtFrameStats {
                     "gpu.display"
             },
             new String[] {"sectionsSnapshotted", "sectionCopies", "terrainBuildsCompleted",
-                    "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
+                    "terrainMaterialEpochRejects", "terrainStaleGroupResults",
+                    "terrainTableIntegrityFaults", "entitiesCaptured", "blockEntitiesCaptured",
                     "particlesCaptured", "refits", "entityReuse", "entityRigidFitSuccesses",
                     "entityRigidFitFailures", "vmaBufferCreates",
                     "entityModelSubmissions", "entityCuboids",

@@ -141,7 +141,20 @@ final class RtSectionTable {
         if (current == geom) {
             resident.remove(geom.key);
         }
-        published.remove(geom.key);
+        if (current == geom || current == null) {
+            published.remove(geom.key);
+        }
+        // Only the geometry that still owns a slot may release it or its instance. Anything else is a
+        // retired section whose slot has since been handed on; acting on its stale numbers would remove
+        // a live section's instance and put a slot that is in use back on the free list.
+        if (geom.slot >= 0 && (geom.slot >= slots.size() || slots.get(geom.slot) != geom)) {
+            geom.slot = -1;
+            geom.instanceIndex = -1;
+        }
+        if (geom.instanceIndex >= instanceList.size()
+                || (geom.instanceIndex >= 0 && instanceList.get(geom.instanceIndex).customIndex() != geom.slot)) {
+            geom.instanceIndex = -1;
+        }
         if (geom.instanceIndex >= 0) {
             int removeIndex = geom.instanceIndex;
             int lastIndex = instanceList.size() - 1;
@@ -158,6 +171,39 @@ final class RtSectionTable {
             freeSlots.add(geom.slot);
             geom.slot = -1;
         }
+    }
+
+    /**
+     * Check the invariant every hit depends on: instance {@code i} carries the slot of exactly one
+     * resident section, that section knows it is instance {@code i}, and the instance points at that
+     * section's own BLAS. Returns a description of the first violation, or null.
+     */
+    String integrityFault(Long2ObjectOpenHashMap<SectionGeom> resident) {
+        int count = instanceList.size();
+        if (count != resident.size()) {
+            return count + " instances for " + resident.size() + " resident sections";
+        }
+        for (int i = 0; i < count; i++) {
+            RtAccel.Instance instance = instanceList.get(i);
+            int slot = instance.customIndex();
+            SectionGeom geom = slot >= 0 && slot < slots.size() ? slots.get(slot) : null;
+            if (geom == null) {
+                return "instance " + i + " names empty slot " + slot;
+            }
+            if (geom.slot != slot || geom.instanceIndex != i) {
+                return "instance " + i + " / slot " + slot + " belong to section " + geom.sx + "," + geom.sy
+                        + "," + geom.sz + " which records instance " + geom.instanceIndex + " / slot " + geom.slot;
+            }
+            if (instance.blasDeviceAddress() != geom.blas.deviceAddress) {
+                return "instance " + i + " does not reference the BLAS of section " + geom.sx + "," + geom.sy
+                        + "," + geom.sz;
+            }
+            if (resident.get(geom.key) != geom) {
+                return "instance " + i + " references section " + geom.sx + "," + geom.sy + "," + geom.sz
+                        + " which is no longer resident";
+            }
+        }
+        return null;
     }
 
     void write(SectionGeom geom) {
