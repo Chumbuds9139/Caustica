@@ -50,6 +50,13 @@ public final class RtPerfSweep {
     private final List<Variant> variants = new ArrayList<>();
     private final List<Result> results = new ArrayList<>();
     private Runnable restore;
+    // Shader probe bits of the row being measured (RtComposite.FEATURE_PROBE_*); zero outside probe rows.
+    private static volatile int probeBits;
+
+    /** Probe bits for {@code WorldPush.featureFlags}: zero unless a probe row of the test is running. */
+    public static int probeFeatureBits() {
+        return probeBits;
+    }
     private int variantIndex = -1;
     private int frameInVariant;
     private long lastFrameNanos;
@@ -113,6 +120,7 @@ public final class RtPerfSweep {
         boolean sss = CausticaConfig.Rt.Composite.SSS.value();
         int giBounces = CausticaConfig.Rt.Entities.GI_BOUNCES.value();
         restore = () -> {
+            probeBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
             CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(ris);
@@ -141,6 +149,18 @@ public final class RtPerfSweep {
             }
             tests.add(new Variant("RIS light sampling off (block lights via bounces only)", false,
                     () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(0)));
+        }
+        if (ris > 0) {
+            // Probes: each removes one piece of emitter lighting to show where its time goes. They are
+            // measurements, not settings anyone could play with (the picture is wrong while they run).
+            tests.add(new Variant("probe: emitter shadow rays skipped", false,
+                    () -> probeBits = RtComposite.FEATURE_PROBE_RIS_UNSHADOWED));
+            tests.add(new Variant("probe: emitter lighting at first hit only", false,
+                    () -> probeBits = RtComposite.FEATURE_PROBE_RIS_FIRST_VERTEX));
+            if (fog) {
+                tests.add(new Variant("probe: emitter light in fog skipped", false,
+                        () -> probeBits = RtComposite.FEATURE_PROBE_NO_FOG_EMITTER));
+            }
         }
         if (restir) {
             tests.add(new Variant("ReSTIR off", false, () -> CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(false)));

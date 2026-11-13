@@ -267,6 +267,12 @@ public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial 
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_VIEWZ = 128u;           // a renderer-side denoiser needs gViewZ (reprojection validation + sky cutoff)
 public static const uint FEATURE_SHARC = 256u;           // experimental spatial-hash radiance cache
+// Measurement probes, set only while the F8 performance test runs one of its "probe" rows. Each removes
+// one piece of work from emitter lighting so the test can say where that pass spends its time. They
+// change the image and are never set in normal play.
+public static const uint FEATURE_PROBE_RIS_UNSHADOWED = 0x10000000u;   // skip the reservoir's shadow ray
+public static const uint FEATURE_PROBE_RIS_FIRST_VERTEX = 0x20000000u; // emitter lighting at the first hit only
+public static const uint FEATURE_PROBE_NO_FOG_EMITTER = 0x40000000u;   // skip emitter in-scatter into fog
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered

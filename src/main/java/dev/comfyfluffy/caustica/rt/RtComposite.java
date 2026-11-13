@@ -286,6 +286,10 @@ public final class RtComposite {
     // sky cutoff, NRD's IN_VIEWZ), so it is set for both denoisers.
     private static final int FEATURE_VIEWZ = 128;
     private static final int FEATURE_SHARC = 256;
+    // F8 performance-test probes (world_common.slang FEATURE_PROBE_*): never set in normal play.
+    public static final int FEATURE_PROBE_RIS_UNSHADOWED = 0x10000000;
+    public static final int FEATURE_PROBE_RIS_FIRST_VERTEX = 0x20000000;
+    public static final int FEATURE_PROBE_NO_FOG_EMITTER = 0x40000000;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -300,7 +304,7 @@ public final class RtComposite {
      * other runtime-tunable option in the renderer does.
      */
     private static int featureFlags() {
-        int flags = 0;
+        int flags = RtPerfSweep.probeFeatureBits();
         if (CausticaConfig.Rt.Composite.SSS.value()) {
             flags |= FEATURE_SSS;
         }

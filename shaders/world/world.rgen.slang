@@ -134,6 +134,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
     bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
+    bool probeRisFirstVertex = worldFeature(worldPush, FEATURE_PROBE_RIS_FIRST_VERTEX);
     // The explicit pc.restirMode uniform chooses the final-color estimator. On the first stable receiver
     // of leaf 0, sample 0 shades the ReSTIR reservoir and is scaled by SPP; sibling SPP paths skip ONLY
     // that receiver. Consequently frame averaging contains one full ReSTIR estimate rather than one
@@ -349,6 +350,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
         int hitDepth = indirectDepth++;
+        if (probeRisFirstVertex && hitDepth > 0) {
+            risOn = false; // F8 probe: what emitter lighting costs beyond the first hit of a path
+        }
 
         // ---- Dielectric interface: water, stained glass, ice. ONE handler and one behaviour — every
         // dielectric is a volume. Fresnel from the relative index across the face, then reflect or
@@ -872,7 +876,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the direct-hit emission convention above, and the pre-fog segment throughput
                 // keeps it from eating this segment's own darkening twice.
                 if (fogEnabled(worldPush) && fogAppliesHere(medium) && showCelestial
-                        && r.W > 0.0 && r.phat > 0.0) {
+                        && r.W > 0.0 && r.phat > 0.0
+                        && !worldFeature(worldPush, FEATURE_PROBE_NO_FOG_EMITTER)) {
                     float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
                             r.pos, r.lnrm, r.le, r.area) * estimatorScale;
                     fogE *= fogSegThroughput;
