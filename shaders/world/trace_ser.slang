@@ -32,7 +32,10 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
     // pre-roulette, roulette-active, or guaranteed terminal after this hit.
     uint materialHint = hObj.GetShaderTableIndex() & (TERRAIN_BUCKETS - 1u);
     uint coherenceHint = (pathPhaseHint << 2u) | materialHint;
-    ReorderThread(hObj, coherenceHint, 4u);
+    // Diagnostic split: the same hit-object trace and invoke, without handing the thread to the scheduler.
+    if ((worldPush.featureFlags & FEATURE_SER_NO_REORDER) == 0u) {
+        ReorderThread(hObj, coherenceHint, 4u);
+    }
     payload = makeRadiancePayload(flags, rayCone);
     HitObject::Invoke(topLevelAS, hObj, payload);
 }

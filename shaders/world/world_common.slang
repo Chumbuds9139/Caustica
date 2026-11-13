@@ -267,6 +267,10 @@ public static const uint FEATURE_RESTIR = 32u;            // temporal + spatial 
 public static const uint FEATURE_NRD = 64u;              // NRD denoiser signal capture (per-lobe radiance + hit distance)
 public static const uint FEATURE_VIEWZ = 128u;           // a renderer-side denoiser needs gViewZ (reprojection validation + sky cutoff)
 public static const uint FEATURE_SHARC = 256u;           // experimental spatial-hash radiance cache
+// Shader Execution Reordering diagnostics, read only by the SER build of the indirect raygen.
+public static const uint FEATURE_SER_NO_REORDER = 0x200u; // trace through hit objects, never ReorderThread
+public static const uint SER_BOUNCES_SHIFT = 12u; // 4 bits: leading bounces on the hit-object path
+public static const uint SER_BOUNCES_MASK = 0xFu; // 15 = every bounce
 // Measurement probes, set only while the F8 performance test runs one of its "probe" rows. Each removes
 // one piece of work from emitter lighting so the test can say where that pass spends its time. They
 // change the image and are never set in normal play.

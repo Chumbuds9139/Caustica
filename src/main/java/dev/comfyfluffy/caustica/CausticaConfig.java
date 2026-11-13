@@ -71,7 +71,7 @@ public final class CausticaConfig {
             Rt.Composite.LIGHTNING_STRIKES_PER_MINUTE, Rt.Composite.LIGHTNING_INTENSITY,
             Rt.Composite.LIGHTNING_SOUND_ENABLED, Rt.Composite.LIGHTNING_SOUND_VOLUME,
             Rt.Composite.PARALLAX_QUALITY,
-            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED, Rt.Reorder.ENABLED,
+            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED, Rt.Reorder.ENABLED, Rt.Reorder.BOUNCES, Rt.Reorder.HIT_OBJECT_ONLY,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES,
             Rt.DlssRr.ENABLED, Rt.DlssRr.PRESET, Rt.DlssRr.QUALITY, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
@@ -167,8 +167,13 @@ public final class CausticaConfig {
                         + " debug: log SHaRC state transitions and a periodic parameter summary to the console.");
         FILE.setComment("reorder",
                 " Shader Execution Reordering for the indirect ray pass (NVIDIA). Speed only: the image is\n"
-                        + " identical either way. Set enabled = false and restart the game to rule it out when\n"
-                        + " chasing a GPU device-loss crash.");
+                        + " identical either way. Off by default: on NVIDIA driver 621.24 every observed GPU\n"
+                        + " device-loss crash happened with it on and none with it off.\n"
+                        + " enabled: needs a restart. The two settings below apply live and only matter when it is on;\n"
+                        + " they exist to find which part of the feature is at fault.\n"
+                        + " bounces: how many leading bounces of each path use it (15 = all). Later bounces trace\n"
+                        + " the ordinary way. 1 or 2 keeps most of the speed.\n"
+                        + " hit-object-only: trace through hit objects but never ask the driver to reorder.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -1324,12 +1329,19 @@ public final class CausticaConfig {
         /**
          * Shader Execution Reordering (VK_EXT_ray_tracing_invocation_reorder) for the indirect trace. It
          * only regroups rays for speed and never changes the image. Read once at device creation, so a
-         * change needs a restart. Off is a diagnostic: the device-loss faults seen so far all sit inside
-         * the one dispatch that uses it, some of them writes into driver-owned memory.
+         * change needs a restart. Off by default: every device-loss fault seen so far sat inside the one
+         * dispatch that uses it (some of them writes into driver-owned memory), and sessions with it off
+         * did not crash.
          */
         public static final class Reorder {
             public static final BooleanSetting ENABLED =
-                    bool("caustica.rt.shaderReorder", "reorder.enabled", true);
+                    bool("caustica.rt.shaderReorder", "reorder.enabled", false);
+            /** Leading bounces per path that take the hit-object path; 15 means every bounce. Live. */
+            public static final IntSetting BOUNCES =
+                    clampedInt("caustica.rt.shaderReorderBounces", "reorder.bounces", 15, 0, 15);
+            /** Trace through hit objects but skip the ReorderThread call itself. Live. */
+            public static final BooleanSetting HIT_OBJECT_ONLY =
+                    bool("caustica.rt.shaderReorderHitObjectOnly", "reorder.hit-object-only", false);
 
             private Reorder() {
             }

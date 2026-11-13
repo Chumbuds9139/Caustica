@@ -193,9 +193,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
-        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
-                               showCelestial, medium.current.water, rayConeWidth, rayConeSpread,
-                               pathPhaseHint);
+        // Diagnostic split: only the first serBounces bounces take the hit-object path (15 = all of them).
+        uint serBounces = (worldPush.featureFlags >> SER_BOUNCES_SHIFT) & SER_BOUNCES_MASK;
+        if (serBounces == SER_BOUNCES_MASK || uint(bounce) < serBounces) {
+            traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
+                                   showCelestial, medium.current.water, rayConeWidth, rayConeSpread,
+                                   pathPhaseHint);
+        } else {
+            traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
+                          showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
+        }
 #else
         traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
