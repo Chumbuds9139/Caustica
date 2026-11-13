@@ -57,6 +57,18 @@ public RayDesc makeRay(float3 origin, float tmin, float3 dir, float tmax) {
     return r;
 }
 
+// Vulkan leaves a trace undefined when the origin or direction is not finite or the direction is zero.
+// A path tracer does produce such rays now and then (a degenerate sampled lobe, a zero-length reflect),
+// and "undefined" on a driver means anything up to a lost device, most of all where the ray's state is
+// handed to the scheduler (hit objects and ReorderThread). Every trace site asks this first.
+public bool rayTraceable(float3 origin, float3 dir) {
+    float len2 = dot(dir, dir);
+    // The sums fold all six finite tests into two: any NaN or infinity poisons them. The bounds reject an
+    // overflowing or vanishing direction without rejecting anything a renormalised sample can produce.
+    float originSum = abs(origin.x) + abs(origin.y) + abs(origin.z);
+    return originSum < 1.0e30 && len2 > 1.0e-12 && len2 < 1.0e12;
+}
+
 public float3 offsetSurfaceOrigin(float3 position, float3 surfaceNormal,
                            float3 outgoingDirection, float bias) {
     float3 sideNormal = dot(surfaceNormal, outgoingDirection) >= 0.0
@@ -104,6 +116,9 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
 public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                 float rayConeWidth, float rayConeSpread) {
     payload = makeRadiancePayload(0u, packHalf2(float2(rayConeWidth, rayConeSpread)));
+    if (!rayTraceable(ro, rd)) {
+        return; // hitT stays negative: the same "nothing there" the guide miss reports
+    }
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
 }
@@ -139,6 +154,9 @@ public void traceViewmodelOverlay(float3 ro, float3 rd) {
     // geometry around the eye), in which case every direction is a candidate. Scaled by |rd| so the test
     // compares angles rather than trusting the caller's normalisation.
     if (viewmodelCull.w > -1.0 && dot(rd, viewmodelCull.xyz) < viewmodelCull.w * length(rd)) {
+        return;
+    }
+    if (!rayTraceable(ro, rd)) {
         return;
     }
     Payload worldHit = payload;
@@ -183,6 +201,16 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
 public VisibilityResult visibilityCulled(float3 origin, float3 dir, float tmax, uint cullMask) {
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
     // path uses only albedo as accumulated transmittance and hitT as the nearest-water crossing.
+    // A light that cannot be aimed at contributes nothing. An interval that is merely empty (the light
+    // sits closer than tmin) has nothing in it to block the light, which is what the trace used to report;
+    // `!(tmax >= tmin)` is also how a NaN distance lands here, and that one stays dark.
+    if (!rayTraceable(origin, dir) || !(tmax >= RAY_TMIN)) {
+        VisibilityResult untraced;
+        bool emptyInterval = rayTraceable(origin, dir) && tmax < RAY_TMIN;
+        untraced.transmittance = emptyInterval ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
+        untraced.waterHitT = -1.0;
+        return untraced;
+    }
     Payload shadowPayload = makeShadowPayload();
     // Shadow SBT records run any-hit only for cutout/translucent/water. Cutout alpha-tests; translucent
     // and water tint shadowPayload.albedo and pass through. Solid blocks terminate traversal. There is no

@@ -183,6 +183,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
         // player. Bounce rays are secondary (CULL_SECONDARY): exclude particles, include the player.
+        // Never hand the tracer a ray it is not defined for (see rayTraceable): the path ends here with
+        // what it has gathered, which is all an undefined trace could have added at best.
+        if (!rayTraceable(ro, rd)) {
+            break;
+        }
 #ifdef CAUSTICA_ENABLE_EXT_SER
         // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
