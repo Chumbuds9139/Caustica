@@ -71,7 +71,7 @@ public final class CausticaConfig {
             Rt.Composite.LIGHTNING_STRIKES_PER_MINUTE, Rt.Composite.LIGHTNING_INTENSITY,
             Rt.Composite.LIGHTNING_SOUND_ENABLED, Rt.Composite.LIGHTNING_SOUND_VOLUME,
             Rt.Composite.PARALLAX_QUALITY,
-            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED, Rt.Reorder.ENABLED, Rt.Reorder.BOUNCES, Rt.Reorder.KEY, Rt.Reorder.HIT_OBJECT_ONLY,
+            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED, Rt.Reorder.ENABLED, Rt.Reorder.BOUNCES, Rt.Reorder.KEY, Rt.Reorder.USE_NV, Rt.Reorder.HIT_OBJECT_ONLY,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES,
             Rt.DlssRr.ENABLED, Rt.DlssRr.PRESET, Rt.DlssRr.QUALITY, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
@@ -1345,6 +1345,9 @@ public final class CausticaConfig {
             /** What the reorder sorts by: 0 hit object and hint, 1 hit object alone, 2 hint alone. Live. */
             public static final IntSetting KEY =
                     clampedInt("caustica.rt.shaderReorderKey", "reorder.key", 0, 0, 2);
+            /** Use VK_NV_ray_tracing_invocation_reorder instead of the EXT extension. Read at device creation. */
+            public static final BooleanSetting USE_NV =
+                    bool("caustica.rt.shaderReorderNv", "reorder.nv", false);
 
             private Reorder() {
             }

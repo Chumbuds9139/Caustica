@@ -141,7 +141,7 @@ public final class RtPerfSweep {
         List<Variant> tests = new ArrayList<>();
         // What reordering is worth here. Only narrower-than-current settings are tried: full reordering
         // is the configuration that loses the device on some drivers, so the test never switches it on.
-        if (RtDeviceBringup.serExtEnabled() && !serHitObjectOnly && serBounces > 0) {
+        if (RtDeviceBringup.serEnabled() && !serHitObjectOnly && serBounces > 0) {
             tests.add(new Variant("reordering off (hit objects only)", false,
                     () -> CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(true)));
             if (serKey != 1) {

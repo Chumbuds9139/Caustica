@@ -187,6 +187,8 @@ abstract class CompileShaders extends DefaultTask {
 					compileOneSlang(src, spv, [])
 					compileOneSlang(src, new File(scratchDir, "world_ser.rgen.spv"),
 							["-DCAUSTICA_ENABLE_EXT_SER", "-capability", "spvShaderInvocationReorderEXT"])
+					compileOneSlang(src, new File(scratchDir, "world_ser_nv.rgen.spv"),
+							["-DCAUSTICA_ENABLE_EXT_SER", "-capability", "spvShaderInvocationReorderNV"])
 				} else if (base == "world.rahit") {
 					// Split the same way as world.rchit: terrain/LOD records and entity records.
 					compileOneSlang(src, spv, [])
