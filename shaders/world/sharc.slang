@@ -318,6 +318,12 @@ public void sharcPropagate(WorldPush push, uint index, float3 value) {
     if (!sharcReady(push) || index == SHARC_INVALID_INDEX) {
         return;
     }
+    // The slot was in range when its vertex registered, but it has since been carried through the
+    // path loop, and with Shader Execution Reordering through a thread reorder. It addresses a raw
+    // device pointer, so it is range-checked again here rather than trusted.
+    if (index >= uint(push.sharcGridOrigin.w)) {
+        return;
+    }
     if (any(isnan(value)) || any(isinf(value))) {
         return;
     }

@@ -413,8 +413,16 @@ public float3 restirUnpackNormal(uint p) {
     return restirOctDecode(float2(p & 0xffffu, p >> 16u) / 65535.0);
 }
 
+// One record per dispatched pixel. Every write goes through a raw device pointer, so the index is
+// checked against the dispatch size here instead of trusting state carried through the path loop.
+bool restirRecordInRange(uint pixelIndex) {
+    uint2 dimensions = DispatchRaysDimensions().xy;
+    return pixelIndex < dimensions.x * dimensions.y;
+}
+
 public void restirInvalidate(uint pixelIndex) {
     if (pc.restirCurrentAddr == 0) return;
+    if (!restirRecordInRange(pixelIndex)) return;
     PackedRestirReservoir record = {};
     record.meta = 0u;
     DevicePtr<PackedRestirReservoir>(pc.restirCurrentAddr)[pixelIndex] = record;
@@ -594,6 +602,7 @@ public void restirStore(Reservoir r, uint pixelIndex, float3 surfacePos, float3 
             | (min(r.age, 0xffu) << 16u)
             | ((pc.lightGeneration & 0x7fu) << 24u)
             | (twoSided ? 0x80000000u : 0u);
+    if (!restirRecordInRange(pixelIndex)) return;
     DevicePtr<PackedRestirReservoir>(pc.restirCurrentAddr)[pixelIndex] = record;
 }
 

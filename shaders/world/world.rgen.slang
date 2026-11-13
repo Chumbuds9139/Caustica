@@ -1105,7 +1105,9 @@ void main() {
                 frameHitSpec = frameHitSpec > 0.0 ? min(frameHitSpec, sampleHitSpec) : sampleHitSpec;
             }
         }
-        if (packed.nextRecord == PATH_NO_NEXT) {
+        // The queue holds two records per pixel. nextRecord was loaded before this leaf's samples were
+        // traced, so it is range-checked before it addresses the queue.
+        if (packed.nextRecord == PATH_NO_NEXT || packed.nextRecord >= 2u * dimensions.x * dimensions.y) {
             break;
         }
         recordIndex = packed.nextRecord;
