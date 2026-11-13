@@ -71,7 +71,7 @@ public final class CausticaConfig {
             Rt.Composite.LIGHTNING_STRIKES_PER_MINUTE, Rt.Composite.LIGHTNING_INTENSITY,
             Rt.Composite.LIGHTNING_SOUND_ENABLED, Rt.Composite.LIGHTNING_SOUND_VOLUME,
             Rt.Composite.PARALLAX_QUALITY,
-            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
+            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED, Rt.Reorder.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES,
             Rt.DlssRr.ENABLED, Rt.DlssRr.PRESET, Rt.DlssRr.QUALITY, Rt.Fg.ENABLED,
             Rt.Fsr.ENABLED, Rt.Fsr.QUALITY, Rt.Xess.ENABLED, Rt.Xess.QUALITY,
@@ -165,6 +165,10 @@ public final class CausticaConfig {
                         + " stable-frames is how many frames a freshly written cell must age before the\n"
                         + " tracer may use it (guards against the new-cell brightness flash).\n"
                         + " debug: log SHaRC state transitions and a periodic parameter summary to the console.");
+        FILE.setComment("reorder",
+                " Shader Execution Reordering for the indirect ray pass (NVIDIA). Speed only: the image is\n"
+                        + " identical either way. Set enabled = false and restart the game to rule it out when\n"
+                        + " chasing a GPU device-loss crash.");
         FILE.setComment("reflex",
                 " NVIDIA Reflex (VK_NV_low_latency2). Default off; gated additionally by device support.\n"
                         + " minimum-interval-us: 0 = no framerate cap (Reflex just paces submission).");
@@ -1314,6 +1318,20 @@ public final class CausticaConfig {
                     intAtLeast("caustica.rt.lightDumpRadius", "lights.dump-radius", 12, 1);
 
             private Lights() {
+            }
+        }
+
+        /**
+         * Shader Execution Reordering (VK_EXT_ray_tracing_invocation_reorder) for the indirect trace. It
+         * only regroups rays for speed and never changes the image. Read once at device creation, so a
+         * change needs a restart. Off is a diagnostic: the device-loss faults seen so far all sit inside
+         * the one dispatch that uses it, some of them writes into driver-owned memory.
+         */
+        public static final class Reorder {
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.shaderReorder", "reorder.enabled", true);
+
+            private Reorder() {
             }
         }
 

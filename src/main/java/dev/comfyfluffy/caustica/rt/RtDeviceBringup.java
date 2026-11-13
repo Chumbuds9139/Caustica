@@ -518,8 +518,12 @@ public final class RtDeviceBringup {
                     missing.add(feature.name());
                 }
             }
-            SerBackend supportedSer = hasSerExt && SER_EXT_FEATURE.get(available) ? SerBackend.EXT
-                    : SerBackend.NONE;
+            boolean serAllowed = CausticaConfig.Rt.Reorder.ENABLED.value();
+            SerBackend supportedSer = serAllowed && hasSerExt && SER_EXT_FEATURE.get(available)
+                    ? SerBackend.EXT : SerBackend.NONE;
+            if (!serAllowed && hasSerExt) {
+                CausticaMod.LOGGER.info("Shader Execution Reordering disabled by config (reorder.enabled = false)");
+            }
             boolean xessRequired = queryXess
                     && SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE.get(available)
                     && MUTABLE_DESCRIPTOR_TYPE_FEATURE.get(available);
