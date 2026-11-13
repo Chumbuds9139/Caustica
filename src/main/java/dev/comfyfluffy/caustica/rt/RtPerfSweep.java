@@ -119,6 +119,8 @@ public final class RtPerfSweep {
         boolean parallax = CausticaConfig.Rt.Composite.PARALLAX_ENABLED.value();
         boolean sss = CausticaConfig.Rt.Composite.SSS.value();
         int giBounces = CausticaConfig.Rt.Entities.GI_BOUNCES.value();
+        int serBounces = CausticaConfig.Rt.Reorder.BOUNCES.value();
+        boolean serHitObjectOnly = CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value();
         restore = () -> {
             probeBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
@@ -131,8 +133,24 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.PARALLAX_ENABLED.set(parallax);
             CausticaConfig.Rt.Composite.SSS.set(sss);
             CausticaConfig.Rt.Entities.GI_BOUNCES.set(giBounces);
+            CausticaConfig.Rt.Reorder.BOUNCES.set(serBounces);
+            CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(serHitObjectOnly);
         };
         List<Variant> tests = new ArrayList<>();
+        // What reordering is worth here. Only narrower-than-current settings are tried: full reordering
+        // is the configuration that loses the device on some drivers, so the test never switches it on.
+        if (RtDeviceBringup.serExtEnabled() && !serHitObjectOnly && serBounces > 0) {
+            tests.add(new Variant("reordering off (hit objects only)", false,
+                    () -> CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(true)));
+            if (serBounces > 2) {
+                tests.add(new Variant("reordering on first 2 bounces only", false,
+                        () -> CausticaConfig.Rt.Reorder.BOUNCES.set(2)));
+            }
+            if (serBounces > 1) {
+                tests.add(new Variant("reordering on first bounce only", false,
+                        () -> CausticaConfig.Rt.Reorder.BOUNCES.set(1)));
+            }
+        }
         for (int b = bounces - 1; b >= 2; b--) {
             int target = b;
             tests.add(new Variant("max bounces " + bounces + " -> " + target, false,
