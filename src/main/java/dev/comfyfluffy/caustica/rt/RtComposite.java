@@ -4084,9 +4084,12 @@ public final class RtComposite {
      */
     private void noteDlssFgCuts() {
         ClientLevel level = Minecraft.getInstance().level;
-        ClientLevel previous = fgDlssLevel.get();
-        if (level != previous) {
-            if (previous != null && RtDlssFg.INSTANCE.isReady()) {
+        // Not "was there a previous level": the reference is weak, and a world left for the menu can be
+        // collected before the next one is entered (a server, then a single-player world), which would
+        // read as the session's first world and keep the old feature. A live feature is enough to know
+        // that frame generation ran somewhere before; the very first world has none yet.
+        if (level != fgDlssLevel.get()) {
+            if (RtDlssFg.INSTANCE.isReady()) {
                 RtDlssFg.INSTANCE.releaseFeature();
                 CausticaMod.LOGGER.info("DLSS-FG: the world changed; frame generation starts over with a fresh feature");
             }
