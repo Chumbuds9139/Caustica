@@ -329,10 +329,11 @@ public static const float MIRROR_MEDIA_MAX_ALPHA = 0.2; // GGX alpha above which
 public static const uint FEATURE_EARLY_ROULETTE = 131072u;
 // Full-tier volumetric cloud march with fewer samples: march cap 44 -> 24, light march 5 -> 3.
 public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
-// F8 performance-test experiment, set only while its "try:" row runs and never in normal play: Russian
-// roulette on the camera hit's diffuse continuation too (survival at least 1/2).
-public static const uint FEATURE_TRY_CAMERA_HIT_ROULETTE = 268435456u;
-// F8 experiment: a full-tier fog segment that ends on geometry traces one fog shadow ray instead of two,
+// F8 performance-test experiments, each set only while its "try:" row runs and never in normal play.
+// Cheap-tier sky misses (bounced light) read a flat gradient instead of marching the atmosphere and the
+// cloud deck: the most a cached sky for bounced light could save.
+public static const uint FEATURE_TRY_PLAIN_INDIRECT_SKY = 268435456u;
+// A full-tier fog segment that ends on geometry traces one fog shadow ray instead of two,
 // the sun-shaft sample or the emitter sample with equal odds, the one traced weighted 2x.
 public static const uint FEATURE_TRY_HALF_FOG_SHADOW_RAYS = 536870912u;
 

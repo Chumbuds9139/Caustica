@@ -42,7 +42,7 @@ public PathSegment tracePrimary(PathSegment seg,
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
                                                showCelestial);
-        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
+        tracePrimarySurface(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
         // The hand has to be layered over the world here, before the miss/guide branches below read the
         // hit: any primary ray may really be a viewmodel pixel — including one that hit a block nearer than

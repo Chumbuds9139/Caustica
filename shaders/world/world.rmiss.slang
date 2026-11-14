@@ -306,6 +306,11 @@ void main(inout Payload payload) {
     // Full-quality atmosphere and clouds: what showCelestial chose, unless raygen marked this ray for the
     // cheap tier (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). The sun/moon disc below keeps showCelestial.
     bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
+    if (!mediaFull && worldFeature(worldPush, FEATURE_TRY_PLAIN_INDIRECT_SKY)) {
+        float3 plain = lerp(SKY_HORIZON_VIVID, SKY_ZENITH_VIVID, saturate(dir.y));
+        writeSkyMiss(payload, plain * (0.05 + 0.95 * sunUp));
+        return;
+    }
 
     float3 mdir = dir;
     float downFade = 1.0;

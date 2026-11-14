@@ -1008,7 +1008,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         float ps = exactSpecular && luminance(diffAlb) <= 1.0e-6
                        ? 1.0
                        : clamp(luminance(F0) / (luminance(F0) + luminance(diffAlb) + 1.0e-4), 0.1, 0.9);
-        bool diffuseContinuation = false;
         if (rndf(seed) < ps) {
             float3 l;
             if (exactSpecular) {
@@ -1051,7 +1050,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
             scatteredRough = true;
-            diffuseContinuation = true;
             if (channel == 0) {
                 channel = 1;
                 pendingHitChannel = 1;
@@ -1060,14 +1058,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.
         // Standard path tracing - no forced boost, let natural indirect do the work.
-        // The F8 experiment FEATURE_TRY_CAMERA_HIT_ROULETTE also rolls for the camera hit's diffuse
-        // continuation, surviving at least half the time so a survivor never weighs more than 2x.
-        // Specular continuations (reflections) and SHaRC update paths (cache training) are exempt.
-        bool cameraHitRoulette = bounce == 0 && diffuseContinuation && !sharcUpdatePath
-                && worldFeature(worldPush, FEATURE_TRY_CAMERA_HIT_ROULETTE);
-        if (bounce >= rrStart || cameraHitRoulette) {
-            float q = clamp(max(throughput.r, max(throughput.g, throughput.b)),
-                            cameraHitRoulette ? 0.5 : 0.02, 1.0);
+        if (bounce >= rrStart) {
+            float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
             if (rndf(seed) > q) {
                 break;
             }

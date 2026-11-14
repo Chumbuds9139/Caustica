@@ -134,7 +134,6 @@ public final class RtPerfSweep {
                 sharc ? "on from bounce " + sharcStart : "off");
         restore = () -> {
             experimentBits = 0;
-            CausticaConfig.Rt.Sharc.START_BOUNCE.set(sharcStart);
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
@@ -144,22 +143,10 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
         };
         List<Variant> tests = new ArrayList<>();
-        // Experiments, in the order of what they are expected to save. Both cut the path after the camera
-        // hit: SHaRC by reading its cache at the first bounce's hit instead of shading it and tracing on,
-        // the roulette by ending some of the camera hit's diffuse continuations before they are traced.
-        boolean sharcEarlier = sharc && sharcStart > 1;
-        if (sharcEarlier) {
-            tests.add(new Variant("try: SHaRC from the first bounce", false,
-                    () -> CausticaConfig.Rt.Sharc.START_BOUNCE.set(1)));
-        }
-        tests.add(new Variant("try: roulette at the camera hit (diffuse)", false,
-                () -> experimentBits = RtComposite.FEATURE_TRY_CAMERA_HIT_ROULETTE));
-        if (sharcEarlier) {
-            tests.add(new Variant("try: both", false, () -> {
-                CausticaConfig.Rt.Sharc.START_BOUNCE.set(1);
-                experimentBits = RtComposite.FEATURE_TRY_CAMERA_HIT_ROULETTE;
-            }));
-        }
+        // Experiments. Bounced light that reaches the sky marches the atmosphere and the cloud deck at the
+        // cheap tier; this row reads a flat gradient instead, the most a cached sky could save there.
+        tests.add(new Variant("try: plain sky in bounced light (cache bound)", false,
+                () -> experimentBits = RtComposite.FEATURE_TRY_PLAIN_INDIRECT_SKY));
         // Fog's camera segment traces two shadow rays, one for the sun shafts and one for the torch the
         // surface was lit by; this traces one of the two per pixel, the other's light carried at 2x.
         if (fog) {

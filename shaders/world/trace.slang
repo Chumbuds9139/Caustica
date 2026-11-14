@@ -102,6 +102,22 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 // shaders directly and therefore requires no invocation-reorder capability.
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                     bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread) {
+    traceRadianceMiss(MISS_RADIANCE, cullMask, ro, tmin, rd, tmax, showCelestial, rayInWater,
+                      rayConeWidth, rayConeSpread);
+}
+
+// Pass A's trace: the hit shaders run exactly as in traceRadiance, but a miss takes the guide miss
+// record. Pass A reads only hit-vs-miss from a miss and hands the segment to Pass B, which re-traces it
+// and shades the sky there; the radiance miss's atmosphere and cloud march was paid for every sky pixel
+// a second time and thrown away.
+public void tracePrimarySurface(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
+                    bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread) {
+    traceRadianceMiss(MISS_GUIDE, cullMask, ro, tmin, rd, tmax, showCelestial, rayInWater,
+                      rayConeWidth, rayConeSpread);
+}
+
+void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
+                    bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread) {
     // `rayInWater` is the CURRENT medium's water state: the miss shader uses it to keep the above-water
     // cloud deck and the lightning bolt out of rays that have not left the water column yet.
     uint flags = (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
@@ -109,7 +125,7 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
             | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u);
     payload = makeRadiancePayload(flags, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
-            SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
+            SBT_RADIANCE, SBT_STRIDE_BUCKET, missIndex,
             makeRay(ro, tmin, rd, tmax), payload);
 }
 

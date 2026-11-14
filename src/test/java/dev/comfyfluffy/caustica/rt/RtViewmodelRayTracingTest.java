@@ -164,7 +164,7 @@ final class RtViewmodelRayTracingTest {
         assertTrue(overlay.contains("makeRay(ro, 0.0, rd, reach)"), "tmax must be the reach, not 10000");
 
         String primary = Files.readString(WORLD_PRIMARY);
-        assertInOrder(primary, "traceRadiance(CULL_PRIMARY, ro, 0.0, rd, 10000.0,",
+        assertInOrder(primary, "tracePrimarySurface(CULL_PRIMARY, ro, 0.0, rd, 10000.0,",
                 "traceViewmodelOverlay(ro, rd);", "if (payload.hitT < 0.0) {");
         String path = slice(Files.readString(WORLD_RGEN), "for (int bounce = seg.bounce; bounce <= maxBounces; bounce++)",
                 "// First-bounce hit distance capture");
