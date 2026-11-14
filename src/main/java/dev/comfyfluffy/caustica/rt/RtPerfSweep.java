@@ -132,6 +132,7 @@ public final class RtPerfSweep {
         restore = () -> {
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
+            CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(ris);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
             CausticaConfig.Rt.Composite.FOG_ENABLED.set(fog);
             CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(simpleSky);
@@ -157,6 +158,16 @@ public final class RtPerfSweep {
         if (fastClouds && clouds && volumetric) {
             tests.add(new Variant("fast volumetric clouds off", false,
                     () -> CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(false)));
+        }
+        // What one step down on the two path-tracing knobs would buy: the next candidates for a cheaper
+        // default or a smarter scheme, alongside the features below.
+        if (bounces > 2) {
+            tests.add(new Variant("bounces " + bounces + " -> " + (bounces - 1), false,
+                    () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces - 1)));
+        }
+        if (ris >= 2) {
+            tests.add(new Variant("RIS candidates " + ris + " -> " + ris / 2, false,
+                    () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(ris / 2)));
         }
         // The most anything further could win: the expensive features switched off outright.
         if (clouds) {
