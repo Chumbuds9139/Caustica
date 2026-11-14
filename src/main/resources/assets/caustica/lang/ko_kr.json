@@ -57,6 +57,8 @@
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "하늘, 구름, 안개를 카메라가 직접 보는 부분과 물이나 유리 같은 선명한 반사에서만 최고 품질로 그립니다. 무광이나 거친 표면에서 이미 반사된 빛에는 반사광이 늘 쓰는 가벼운 버전을 사용합니다. 그 표면이 어차피 디테일을 흐리게 하기 때문입니다. 구름과 안개 비용의 상당 부분을 절약하며, 차이는 거의 보이지 않습니다.",
 	"caustica.options.rt.skyCache": "반사광용 하늘 캐시",
 	"caustica.options.rt.skyCache.tooltip": "반사광이 보는 하늘을 프레임마다 한 번만 카메라 주변의 작은 맵으로 계산합니다. 하늘에 닿는 픽셀과 반사마다 대기와 구름을 다시 계산하지 않습니다. 무광 표면에서 반사된 빛만 이를 사용하며, 직접 보는 하늘과 선명한 반사는 그대로입니다. 반사된 하늘빛에서 구름 디테일이 조금 줄어들 수 있습니다. 프레임 시간을 최대 약 6분의 1 절약합니다.",
+	"caustica.options.rt.cloudReuse": "하늘 구름 재사용",
+	"caustica.options.rt.cloudReuse.tooltip": "하늘에 직접 보이는 볼류메트릭 구름을 프레임마다 픽셀의 절반만 계산하고 매 프레임 번갈아 바꿉니다. 나머지 절반은 이전 프레임의 결과를 카메라 움직임에 맞춰 재사용합니다. 반사, 반사광, 지형 앞의 구름은 그대로입니다. 빠르게 움직이는 구름은 약간 부드러워 보일 수 있습니다.",
 	"caustica.options.rt.sunSize": "태양 크기",
 	"caustica.options.rt.sunSize.tooltip": "태양과 달 원반의 각반경입니다. 원반이 클수록 그림자의 반그림자가 더 부드러워집니다.",
 	"caustica.options.rt.entities": "레이 트레이싱 엔티티",

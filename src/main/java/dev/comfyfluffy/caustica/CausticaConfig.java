@@ -724,6 +724,14 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting SKY_CACHE =
                     bool("caustica.rt.skyCache", "composite.sky-cache", true);
+            /**
+             * The volumetric clouds the camera sees directly in the sky are marched on half the pixels each
+             * frame, in a checkerboard that flips every frame; the other half reuse last frame's march,
+             * reprojected through the camera's motion. Clouds in reflections, on bounced light and in front
+             * of terrain are unchanged.
+             */
+            public static final BooleanSetting CLOUD_REUSE =
+                    bool("caustica.rt.cloudReuse", "composite.cloud-reuse", true);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
             /**

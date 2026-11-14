@@ -81,6 +81,7 @@ public final class RtVideoOptions {
         options.add(bool("caustica.options.rt.simpleRoughReflectionSky",
                 CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY));
         options.add(bool("caustica.options.rt.skyCache", CausticaConfig.Rt.Composite.SKY_CACHE));
+        options.add(bool("caustica.options.rt.cloudReuse", CausticaConfig.Rt.Composite.CLOUD_REUSE));
         options.add(upscaler(upscalerChanged));
         String mode = RtUpscalerSupport.currentUpscalerMode();
         if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {

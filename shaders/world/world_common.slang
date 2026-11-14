@@ -249,6 +249,10 @@ public struct WorldPush {
     // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and
     // read by pass B's misses. 0 = no buffer, and both sides then run the sky as before.
     public uint64_t skyCacheAddr;
+    // Camera-sky cloud reuse (FEATURE_CLOUD_REUSE): two render-resolution halves of uint4 entries
+    // {packHalf2(scatter.rg), packHalf2(scatter.b, transmittance), frameIndex + 1, 0}; frame f writes
+    // half f & 1 and reads the other. 0 = no buffer, and every camera ray marches its clouds.
+    public uint64_t cloudReuseAddr;
     // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
     // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. It must stay right
     // before hitFault: RtComposite's hit-guard report reads it from there.
@@ -338,6 +342,10 @@ public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
 // pass B's cheap-tier misses (bounced light, rough reflections) read it instead of marching the atmosphere
 // and the cloud deck again for every pixel and bounce. See skyCacheSample.
 public static const uint FEATURE_SKY_CACHE = 524288u;
+// Camera-sky cloud reuse (a video option). A camera ray that reaches the sky marches the full-tier cloud
+// deck on half the pixels each frame, in a checkerboard that alternates every frame; the other half
+// reprojects last frame's march from the pixels that ran it. See world.rmiss's cameraCloudDeck.
+public static const uint FEATURE_CLOUD_REUSE = 1048576u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -569,6 +577,9 @@ public static const uint PAYLOAD_CHEAP_MEDIA = 65536u;
 // world.rmiss: this miss fills a sky-cache texel (world_primary.rgen), so it computes the sky instead of
 // reading the cache it is filling, and leaves out the lightning, which every reader adds live.
 public static const uint PAYLOAD_SKY_CACHE_BUILD = 131072u;
+// world.rmiss: this miss is pass B's first trace of a camera ray (sample 0), so DispatchRaysIndex() is its
+// pixel and the cloud deck may come from the camera-sky reuse buffer (FEATURE_CLOUD_REUSE).
+public static const uint PAYLOAD_CAMERA_SKY = 262144u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect

@@ -189,6 +189,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // Quality tier of the sky, clouds and fog this ray sees (see simpleRoughSky above).
         bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough);
         gv_cheapMedia = showCelestial && !mediaFull;
+        // Only this pixel's own camera ray (sample 0) may read or write its slot of the camera-sky cloud
+        // reuse buffer; cleared straight after the trace so no other ray of this bounce carries it.
+        gv_cameraSky = bounce == 0 && seg.bounce == 0 && sampleIndex == 0u;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -216,6 +219,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
 #endif
+        gv_cameraSky = false;
         // The point this ray reaches is shaded with the same view of the scene it was found with.
         gv_secondaryCull = secondaryCull;
 

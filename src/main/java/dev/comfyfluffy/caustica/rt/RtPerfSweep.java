@@ -123,6 +123,7 @@ public final class RtPerfSweep {
         boolean earlyRoulette = CausticaConfig.Rt.Composite.EARLY_ROULETTE.value();
         boolean fastClouds = CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value();
         boolean skyCache = CausticaConfig.Rt.Composite.SKY_CACHE.value();
+        boolean cloudReuse = CausticaConfig.Rt.Composite.CLOUD_REUSE.value();
         boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
@@ -139,6 +140,7 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(earlyRoulette);
             CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
             CausticaConfig.Rt.Composite.SKY_CACHE.set(skyCache);
+            CausticaConfig.Rt.Composite.CLOUD_REUSE.set(cloudReuse);
         };
         List<Variant> tests = new ArrayList<>();
         // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
@@ -146,6 +148,10 @@ public final class RtPerfSweep {
         if (skyCache) {
             tests.add(new Variant("sky cache for bounced light off", false,
                     () -> CausticaConfig.Rt.Composite.SKY_CACHE.set(false)));
+        }
+        if (cloudReuse && clouds && volumetric) {
+            tests.add(new Variant("camera sky cloud reuse off", false,
+                    () -> CausticaConfig.Rt.Composite.CLOUD_REUSE.set(false)));
         }
         if (simpleSky) {
             tests.add(new Variant("simplified sky in rough reflections off", false,
