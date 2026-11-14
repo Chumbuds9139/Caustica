@@ -130,11 +130,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     int maxBounces = int(worldPush.maxBounces & 0xFFu);
     // Bits 8-15: the last diffuse bounce that still sees entities and block entities (entities.gi-bounces).
     int entityGiBounces = int((worldPush.maxBounces >> 8u) & 0xFFu);
-    int rrStart = maxBounces <= 3 ? 1 : 2;
+    // F8 experiment FEATURE_TRY_EARLY_ROULETTE starts roulette at the first bounce at any bounce count.
+    int rrStart = (maxBounces <= 3 || worldFeature(worldPush, FEATURE_TRY_EARLY_ROULETTE)) ? 1 : 2;
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Off => emitters are gathered only on path hits (legacy behaviour).
     bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
-    bool probeRisFirstVertex = worldFeature(worldPush, FEATURE_PROBE_RIS_FIRST_VERTEX);
+    // Whether the vertex that spawned the current ray ran emitter RIS, which is what the direct-hit
+    // emission gate below must agree with. Without the F8 experiment FEATURE_TRY_HALF_DEEP_RIS every
+    // vertex runs it and this simply equals risOn.
+    bool risPrevVertex = risOn;
+    bool tryHalfDeepRis = worldFeature(worldPush, FEATURE_TRY_HALF_DEEP_RIS);
     // The explicit pc.restirMode uniform chooses the final-color estimator. On the first stable receiver
     // of leaf 0, sample 0 shades the ReSTIR reservoir and is scaled by SPP; sibling SPP paths skip ONLY
     // that receiver. Consequently frame averaging contains one full ReSTIR estimate rather than one
@@ -168,6 +173,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
+    // F8 experiment FEATURE_TRY_MIRROR_MEDIA: once the path has scattered off a diffuse or rough lobe, its
+    // later specular rays take the cheap sky/cloud/fog tier. Without the experiment mediaFull below is
+    // exactly showCelestial.
+    bool tryMirrorMedia = worldFeature(worldPush, FEATURE_TRY_MIRROR_MEDIA);
+    bool scatteredRough = !seg.showCelestial;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -180,6 +190,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // diffuse bounces skip entities and block entities (CULL_SECONDARY_FAR, see trace.slang).
         uint secondaryCull = (showCelestial || bounce <= entityGiBounces)
                 ? CULL_SECONDARY : CULL_SECONDARY_FAR;
+        // Quality tier of the sky, clouds and fog this ray sees (see tryMirrorMedia above).
+        bool mediaFull = showCelestial && !(tryMirrorMedia && scatteredRough);
+        gv_cheapMedia = showCelestial && !mediaFull;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -259,7 +272,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // in-scatter. The integration-distance clamp lives inside fogSegment; the SHaRC
             // propagation below sees the SAME dimmed sky the eye does, never the raw one.
             if (fogEnabled(worldPush) && fogAppliesHere(medium)) {
-                FogVolume skyFog = fogSegment(worldPush, ro, rd, 1.0e9, seed, showCelestial);
+                FogVolume skyFog = fogSegment(worldPush, ro, rd, 1.0e9, seed, mediaFull);
                 sky = sky * skyFog.transmittance + skyFog.scatter;
             }
             L += throughput * sky;
@@ -316,7 +329,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // light sample only exists then) and must not silently pick up this segment's fog T.
         float3 fogSegThroughput = throughput;
         if (fogEnabled(worldPush) && fogAppliesHere(medium)) {
-            FogVolume segFog = fogSegment(worldPush, ro, rd, payload.hitT, seed, showCelestial);
+            FogVolume segFog = fogSegment(worldPush, ro, rd, payload.hitT, seed, mediaFull);
             L += throughput * segFog.scatter;
             if (channel == 2) {
                 Lspec += throughput * segFog.scatter;
@@ -342,7 +355,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
             CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
                                                 payload.hitT, cloudSkyAmbient(worldPush),
-                                                showCelestial);
+                                                mediaFull);
             L += throughput * segCloud.scatter;
             if (channel == 2) {
                 Lspec += throughput * segCloud.scatter;
@@ -357,9 +370,12 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
         int hitDepth = indirectDepth++;
-        if (probeRisFirstVertex && hitDepth > 0) {
-            risOn = false; // F8 probe: what emitter lighting costs beyond the first hit of a path
-        }
+        // This hit's emission gate follows the vertex that spawned the ray; this vertex then decides
+        // its own RIS (the F8 experiment skips it at random past the first hit, outside ReSTIR's receiver).
+        bool risGate = risPrevVertex;
+        bool risHere = risOn && !(tryHalfDeepRis && hitDepth > 0 && !restirReceiverPending
+                                  && rndf(seed) >= 0.5);
+        risPrevVertex = risHere;
 
         // ---- Dielectric interface: water, stained glass, ice. ONE handler and one behaviour — every
         // dielectric is a volume. Fresnel from the relative index across the face, then reflect or
@@ -587,7 +603,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // RIS direct lighting from block emitters (lava, glowstone, torches, ...) — same reservoir
             // sampler as terrain/entities, but two-sided: a billboard has no back face, so light
             // striking either side of the quad should still land (matches the sun/moon NEE above).
-            if (risOn) {
+            if (risHere) {
                 bool shadeWithRestir = restirReceiverPending && restirOwner;
                 bool skipSiblingRis = restirReceiverPending && !restirOwner;
                 restirReceiverPending = false;
@@ -624,6 +640,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse receiver: direct sun/moon was handled by NEE above
+            scatteredRough = true;
             continue;
         }
 
@@ -669,7 +686,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // samples as a light source is not double-counted on diffuse continuations.
         if ((payload.flags & PAYLOAD_END_PORTAL_UNLIT) != 0u) {
             float emission = payloadEmission();
-            bool gateEmitter = risOn && payloadEmitterInList();
+            bool gateEmitter = risGate && payloadEmitterInList();
             if (emission > 0.0 && (!gateEmitter || showCelestial)) {
                 float emissionScale = isDynamicEntityEarly ? worldPush.lightScales.y : worldPush.lightScales.x;
                 float3 emissive = throughput * albedo * emission * max(emissionScale, 0.0);
@@ -737,7 +754,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // One gate drives both the RIS call below and the direct-hit emission suppression here. They must
         // agree: gateEmitter exists only because RIS already accounted for this emitter, so a bounce where
         // RIS is skipped must also gather emission directly or that light is lost outright.
-        bool gateEmitter = risOn && payloadEmitterInList();
+        bool gateEmitter = risGate && payloadEmitterInList();
         if (emission > 0.0 && (!gateEmitter || showCelestial)) {
             float emissionScale = isDynamicEntityEarly ? worldPush.lightScales.y : worldPush.lightScales.x;
             float3 emissive = throughput * albedo * emission * max(emissionScale, 0.0);
@@ -856,7 +873,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // sibling SPP samples omit this one receiver, so frame averaging contains the ReSTIR result rather
         // than silently blending it back toward RIS. OFF and deeper vertices execute the original RIS path.
         // Front lobe + SSS backlighting still share one shadow ray.
-        if (risOn) {
+        if (risHere) {
             bool shadeWithRestir = restirReceiverPending && restirOwner;
             bool skipSiblingRis = restirReceiverPending && !restirOwner;
             restirReceiverPending = false;
@@ -882,9 +899,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the cone (fog.slang). Emission-family light rides the diffuse bucket, matching
                 // the direct-hit emission convention above, and the pre-fog segment throughput
                 // keeps it from eating this segment's own darkening twice.
-                if (fogEnabled(worldPush) && fogAppliesHere(medium) && showCelestial
-                        && r.W > 0.0 && r.phat > 0.0
-                        && !worldFeature(worldPush, FEATURE_PROBE_NO_FOG_EMITTER)) {
+                if (fogEnabled(worldPush) && fogAppliesHere(medium) && mediaFull
+                        && r.W > 0.0 && r.phat > 0.0) {
                     float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
                             r.pos, r.lnrm, r.le, r.area) * estimatorScale;
                     fogE *= fogSegThroughput;
@@ -1018,6 +1034,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
+            if (rough > MIRROR_MEDIA_MAX_ALPHA) {
+                scatteredRough = true; // a lobe this wide blurs cloud detail away (F8 experiment only)
+            }
             // First-bounce decomposition: the lobe chosen at the unclassified primary hit decides the
             // channel everything from here on belongs to, and the next trace's hit distance is that
             // lobe's hit distance for REBLUR. Deeper bounces keep the channel they inherited.
@@ -1032,6 +1051,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                              : cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
+            scatteredRough = true;
             if (channel == 0) {
                 channel = 1;
                 pendingHitChannel = 1;

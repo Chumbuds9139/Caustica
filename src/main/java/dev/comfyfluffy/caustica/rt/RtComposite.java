@@ -289,10 +289,12 @@ public final class RtComposite {
     private static final int FEATURE_SER_NO_REORDER = 0x200;
     private static final int SER_KEY_SHIFT = 10;
     private static final int SER_BOUNCES_SHIFT = 12;
-    // F8 performance-test probes (world_common.slang FEATURE_PROBE_*): never set in normal play.
-    public static final int FEATURE_PROBE_RIS_UNSHADOWED = 0x10000000;
-    public static final int FEATURE_PROBE_RIS_FIRST_VERTEX = 0x20000000;
-    public static final int FEATURE_PROBE_NO_FOG_EMITTER = 0x40000000;
+    // F8 performance-test experiments (world_common.slang FEATURE_TRY_*): never set in normal play.
+    public static final int FEATURE_TRY_MIRROR_MEDIA = 0x10000000;
+    public static final int FEATURE_TRY_FLAT_INDIRECT_CLOUDS = 0x20000000;
+    public static final int FEATURE_TRY_EARLY_ROULETTE = 0x40000000;
+    public static final int FEATURE_TRY_HALF_DEEP_RIS = 0x08000000;
+    public static final int FEATURE_TRY_LIGHT_CLOUD_MARCH = 0x04000000;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no

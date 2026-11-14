@@ -20,14 +20,18 @@ import net.minecraft.network.chat.Component;
  * One-key GPU cost breakdown of the ray tracing passes.
  *
  * <p>GPU timestamps can time a whole dispatch but not the pieces of one shader. This measures the pieces
- * by subtraction instead: it runs the scene with the player's own settings, then with one feature at a
- * time switched off or reduced, and reports how much GPU time each change removed. A laptop GPU's clock
- * drifts by more than most single features cost while it heats up, so the player's settings are measured
- * again between every two variants and each variant is compared with the mean of the two baselines on
- * either side of it, which cancels any drift that is close to linear over that span. Every step runs
- * {@value #WARMUP_FRAMES} frames to settle (the GPU timer reads results four frames late, and the TDR
- * guard steps bounces up over a few frames) and is then measured over {@value #MEASURE_FRAMES} frames,
- * reported as medians. Settings are changed in memory only, are restored after every variant and when
+ * by subtraction instead: it runs the scene with the player's own settings, then with one change at a
+ * time, and reports how much GPU time each change removed. The changes are kept few so the test stays
+ * short: first the "try:" experiments, cheaper ways to render something that a setting could adopt
+ * (shader bits that exist only while their row runs), in the order of what they are expected to save;
+ * then the expensive features switched off, as the most any experiment on them could win.
+ *
+ * <p>A laptop GPU's clock drifts by more than most single features cost while it heats up, so the
+ * player's settings are measured again between every two variants and each variant is compared with the
+ * mean of the two baselines on either side of it, which cancels any drift that is close to linear over
+ * that span. Every step runs {@value #WARMUP_FRAMES} frames to settle (the GPU timer reads results four
+ * frames late, and the TDR guard steps bounces up over a few frames) and is then measured over
+ * {@value #MEASURE_FRAMES} frames, reported as medians. Settings are changed in memory only, are restored after every variant and when
  * the sweep ends or is cancelled, and are never written to the config file.
  *
  * <p>The player should stand still: a moving camera changes the scene between variants. Movement of
@@ -50,12 +54,12 @@ public final class RtPerfSweep {
     private final List<Variant> variants = new ArrayList<>();
     private final List<Result> results = new ArrayList<>();
     private Runnable restore;
-    /** Set when the reordering rows were left out because the SER guard has reordering off. */
-    private String serRowsSkipped;
-    // Shader probe bits of the row being measured (RtComposite.FEATURE_PROBE_*); zero outside probe rows.
+    /** The settings the test started from, printed at the top of the report. */
+    private String context;
+    // Experiment bits of the row being measured (RtComposite.FEATURE_TRY_*); zero outside "try:" rows.
     private static volatile int probeBits;
 
-    /** Probe bits for {@code WorldPush.featureFlags}: zero unless a probe row of the test is running. */
+    /** Experiment bits for {@code WorldPush.featureFlags}: zero unless a "try:" row of the test is running. */
     public static int probeFeatureBits() {
         return probeBits;
     }
@@ -114,109 +118,54 @@ public final class RtPerfSweep {
         int bounces = CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
         int spp = CausticaConfig.Rt.Composite.SPP.value();
         int ris = CausticaConfig.Rt.Lights.RIS_CANDIDATES.value();
-        boolean restir = CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value();
-        boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         boolean clouds = CausticaConfig.Rt.Composite.CLOUDS.value();
         boolean fog = CausticaConfig.Rt.Composite.FOG_ENABLED.value();
-        boolean parallax = CausticaConfig.Rt.Composite.PARALLAX_ENABLED.value();
-        boolean sss = CausticaConfig.Rt.Composite.SSS.value();
-        int giBounces = CausticaConfig.Rt.Entities.GI_BOUNCES.value();
-        int serBounces = CausticaConfig.Rt.Reorder.BOUNCES.value();
-        boolean serHitObjectOnly = CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value();
-        int serKey = CausticaConfig.Rt.Reorder.KEY.value();
+        boolean volumetric = CausticaConfig.Rt.Composite.cloudStyleIndex() == 1;
+        String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
+        context = String.format(Locale.ROOT, "bounces %d, samples per pixel %d, RIS candidates %d, "
+                + "clouds %s, fog %s", bounces, spp, ris, cloudText, fog ? "on" : "off");
         restore = () -> {
             probeBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
-            CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(ris);
-            CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(restir);
-            CausticaConfig.Rt.Sharc.ENABLED.set(sharc);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
             CausticaConfig.Rt.Composite.FOG_ENABLED.set(fog);
-            CausticaConfig.Rt.Composite.PARALLAX_ENABLED.set(parallax);
-            CausticaConfig.Rt.Composite.SSS.set(sss);
-            CausticaConfig.Rt.Entities.GI_BOUNCES.set(giBounces);
-            CausticaConfig.Rt.Reorder.BOUNCES.set(serBounces);
-            CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(serHitObjectOnly);
-            CausticaConfig.Rt.Reorder.KEY.set(serKey);
         };
         List<Variant> tests = new ArrayList<>();
-        // What reordering is worth here. Only narrower-than-current settings are tried: full reordering
-        // is the configuration that loses the device on some drivers, so the test never switches it on.
-        // While the guard holds reordering off, every one of these rows would measure the same ordinary
-        // trace as the baseline, so they are left out and the report says why.
-        String serHeldBack = RtDeviceBringup.serEnabled() ? RtSerGuard.heldBackReason() : null;
-        serRowsSkipped = serHeldBack != null && !serHitObjectOnly && serBounces > 0 ? serHeldBack : null;
-        if (RtDeviceBringup.serEnabled() && serHeldBack == null && !serHitObjectOnly && serBounces > 0) {
-            tests.add(new Variant("reordering off (hit objects only)", false,
-                    () -> CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(true)));
-            if (serKey != 1) {
-                tests.add(new Variant("reordering by hit object alone", false,
-                        () -> CausticaConfig.Rt.Reorder.KEY.set(1)));
-            }
-            if (serKey != 2) {
-                tests.add(new Variant("reordering by coherence hint alone", false,
-                        () -> CausticaConfig.Rt.Reorder.KEY.set(2)));
-            }
-            if (serBounces > 2) {
-                tests.add(new Variant("reordering on first 2 bounces only", false,
-                        () -> CausticaConfig.Rt.Reorder.BOUNCES.set(2)));
-            }
-            if (serBounces > 1) {
-                tests.add(new Variant("reordering on first bounce only", false,
-                        () -> CausticaConfig.Rt.Reorder.BOUNCES.set(1)));
-            }
+        // Experiments, the one expected to save the most first. Each row is shown on its own; the last
+        // one runs every experiment above it at once.
+        int all = 0;
+        all |= addExperiment(tests, "try: full-quality sky/clouds/fog in mirrors only",
+                RtComposite.FEATURE_TRY_MIRROR_MEDIA);
+        if (clouds) {
+            all |= addExperiment(tests, "try: flat clouds in indirect light",
+                    RtComposite.FEATURE_TRY_FLAT_INDIRECT_CLOUDS);
         }
-        for (int b = bounces - 1; b >= 2; b--) {
-            int target = b;
-            tests.add(new Variant("max bounces " + bounces + " -> " + target, false,
-                    () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(target)));
-        }
-        if (spp > 1) {
-            tests.add(new Variant("samples per pixel " + spp + " -> 1", false,
-                    () -> CausticaConfig.Rt.Composite.SPP.set(1)));
+        if (bounces >= 4) {
+            all |= addExperiment(tests, "try: roulette from the first bounce",
+                    RtComposite.FEATURE_TRY_EARLY_ROULETTE);
         }
         if (ris > 0) {
-            if (ris > 4) {
-                tests.add(new Variant("RIS light candidates " + ris + " -> 4", false,
-                        () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(4)));
-            }
-            tests.add(new Variant("RIS light sampling off (block lights via bounces only)", false,
-                    () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(0)));
+            all |= addExperiment(tests, "try: block-light sampling at half the deep hits",
+                    RtComposite.FEATURE_TRY_HALF_DEEP_RIS);
         }
-        if (ris > 0) {
-            // Probes: each removes one piece of emitter lighting to show where its time goes. They are
-            // measurements, not settings anyone could play with (the picture is wrong while they run).
-            tests.add(new Variant("probe: emitter shadow rays skipped", false,
-                    () -> probeBits = RtComposite.FEATURE_PROBE_RIS_UNSHADOWED));
-            tests.add(new Variant("probe: emitter lighting at first hit only", false,
-                    () -> probeBits = RtComposite.FEATURE_PROBE_RIS_FIRST_VERTEX));
-            if (fog) {
-                tests.add(new Variant("probe: emitter light in fog skipped", false,
-                        () -> probeBits = RtComposite.FEATURE_PROBE_NO_FOG_EMITTER));
-            }
+        if (clouds && volumetric) {
+            all |= addExperiment(tests, "try: lighter cloud march for camera rays",
+                    RtComposite.FEATURE_TRY_LIGHT_CLOUD_MARCH);
         }
-        if (restir) {
-            tests.add(new Variant("ReSTIR off", false, () -> CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(false)));
+        if (Integer.bitCount(all) > 1) {
+            addExperiment(tests, "try: all of the above", all);
         }
-        if (sharc) {
-            tests.add(new Variant("SHaRC radiance cache off", false, () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
-        }
+        // The most anything could win: the expensive features switched off outright.
         if (clouds) {
             tests.add(new Variant("clouds off", false, () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));
         }
         if (fog) {
             tests.add(new Variant("fog off", false, () -> CausticaConfig.Rt.Composite.FOG_ENABLED.set(false)));
         }
-        if (parallax) {
-            tests.add(new Variant("parallax off", false, () -> CausticaConfig.Rt.Composite.PARALLAX_ENABLED.set(false)));
-        }
-        if (sss) {
-            tests.add(new Variant("subsurface scattering off", false, () -> CausticaConfig.Rt.Composite.SSS.set(false)));
-        }
-        if (giBounces > 0) {
-            tests.add(new Variant("entities out of indirect light (gi-bounces 0)", false,
-                    () -> CausticaConfig.Rt.Entities.GI_BOUNCES.set(0)));
+        if (spp > 1) {
+            tests.add(new Variant("samples per pixel " + spp + " -> 1", false,
+                    () -> CausticaConfig.Rt.Composite.SPP.set(1)));
         }
         // Baseline, test, baseline, test, ..., baseline: every test sits between two baselines.
         variants.add(baselineVariant());
@@ -224,6 +173,11 @@ public final class RtPerfSweep {
             variants.add(test);
             variants.add(baselineVariant());
         }
+    }
+
+    private static int addExperiment(List<Variant> tests, String name, int bits) {
+        tests.add(new Variant(name, false, () -> probeBits = bits));
+        return bits;
     }
 
     private static Variant baselineVariant() {
@@ -314,7 +268,7 @@ public final class RtPerfSweep {
             say(Component.translatable("caustica.options.perfTest.cancelled"), false);
             return;
         }
-        String report = report(results, moved, serRowsSkipped);
+        String report = report(results, moved, context);
         CausticaMod.LOGGER.info("\n{}", report);
         Path file = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats").resolve("perf-test-"
                 + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH.mm.ss")) + ".txt");
@@ -328,7 +282,7 @@ public final class RtPerfSweep {
     }
 
     String report() {
-        return report(results, moved, serRowsSkipped);
+        return report(results, moved, context);
     }
 
     /**
@@ -340,10 +294,13 @@ public final class RtPerfSweep {
         return report(results, moved, null);
     }
 
-    static String report(List<Result> results, boolean moved, String serRowsSkipped) {
+    static String report(List<Result> results, boolean moved, String context) {
         StringBuilder sb = new StringBuilder("Caustica performance test (GPU medians, ms)\n");
-        sb.append(String.format(Locale.ROOT, "%-52s %9s %9s %9s %9s %8s%n", "setting", "indirect", "saved",
-                "primary", "RT frame", "FPS"));
+        if (context != null) {
+            sb.append("settings: ").append(context).append('\n');
+        }
+        sb.append(String.format(Locale.ROOT, "%-52s %9s %9s %9s %9s %9s %8s%n", "setting", "indirect", "saved",
+                "primary", "RT frame", "saved", "FPS"));
         double minBase = Double.MAX_VALUE;
         double maxBase = -Double.MAX_VALUE;
         for (int i = 0; i < results.size(); i++) {
@@ -352,26 +309,21 @@ public final class RtPerfSweep {
             if (r.baseline) {
                 minBase = Math.min(minBase, r.indirectMs);
                 maxBase = Math.max(maxBase, r.indirectMs);
-                sb.append(String.format(Locale.ROOT, "%-52s %9.2f %9s %9.2f %9.2f %8.1f%s%n", r.name,
-                        r.indirectMs, "", r.primaryMs, r.gpuFrameMs, fps(r), note));
+                sb.append(String.format(Locale.ROOT, "%-52s %9.2f %9s %9.2f %9.2f %9s %8.1f%s%n", r.name,
+                        r.indirectMs, "", r.primaryMs, r.gpuFrameMs, "", fps(r), note));
                 continue;
             }
             Result before = i > 0 && results.get(i - 1).baseline ? results.get(i - 1) : null;
             Result after = i + 1 < results.size() && results.get(i + 1).baseline ? results.get(i + 1) : null;
-            double base = Double.NaN;
-            double spread = Double.NaN;
-            if (before != null && after != null) {
-                base = (before.indirectMs + after.indirectMs) * 0.5;
-                spread = Math.abs(before.indirectMs - after.indirectMs);
-            } else if (before != null || after != null) {
-                base = (before != null ? before : after).indirectMs;
-            }
-            double saved = base - r.indirectMs;
+            double saved = aroundBaselines(before, after, Result::indirectMs) - r.indirectMs;
+            double frameSaved = aroundBaselines(before, after, Result::gpuFrameMs) - r.gpuFrameMs;
+            double spread = before != null && after != null
+                    ? Math.abs(before.indirectMs - after.indirectMs) : Double.NaN;
             if (!Double.isNaN(spread) && spread > Math.abs(saved)) {
                 note += String.format(Locale.ROOT, "  (noisy: baselines around it differ by %.2f)", spread);
             }
-            sb.append(String.format(Locale.ROOT, "  %-50s %9.2f %+9.2f %9.2f %9.2f %8.1f%s%n", r.name,
-                    r.indirectMs, -saved, r.primaryMs, r.gpuFrameMs, fps(r), note));
+            sb.append(String.format(Locale.ROOT, "  %-50s %9.2f %+9.2f %9.2f %9.2f %+9.2f %8.1f%s%n", r.name,
+                    r.indirectMs, -saved, r.primaryMs, r.gpuFrameMs, -frameSaved, fps(r), note));
         }
         if (maxBase >= minBase) {
             sb.append(String.format(Locale.ROOT, "baseline range over the test: %.2f - %.2f ms (drift %.2f ms)%n",
@@ -380,13 +332,22 @@ public final class RtPerfSweep {
         if (moved) {
             sb.append("WARNING: the player moved during the test; differences mix setting cost with scene change.\n");
         }
-        if (serRowsSkipped != null) {
-            sb.append("Reordering rows left out: Shader Execution Reordering was ").append(serRowsSkipped)
-                    .append(" when the test started, so the baseline traced without it.\n");
-        }
-        sb.append("'saved' is the indirect-pass time a change removes relative to the mean of the baselines "
-                + "measured just before and after it (negative = cheaper). FPS includes CPU time.\n");
+        sb.append("'saved' is the time a change removes from the indirect pass and from the whole RT frame, "
+                + "relative to the mean of the baselines measured just before and after it (negative = cheaper). "
+                + "'try:' rows are experiments that change the picture only while they run. FPS includes CPU time.\n");
         return sb.toString();
+    }
+
+    /** Mean of the baselines on either side of a variant, or the one that exists; NaN with neither. */
+    private static double aroundBaselines(Result before, Result after,
+                                          java.util.function.ToDoubleFunction<Result> value) {
+        if (before != null && after != null) {
+            return (value.applyAsDouble(before) + value.applyAsDouble(after)) * 0.5;
+        }
+        if (before != null || after != null) {
+            return value.applyAsDouble(before != null ? before : after);
+        }
+        return Double.NaN;
     }
 
     private static double fps(Result r) {

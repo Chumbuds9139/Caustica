@@ -701,10 +701,8 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     float3 toL = s.pos - origin;
     float dist = length(toL);
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
-    float3 vis = float3(1.0, 1.0, 1.0);
-    if (!worldFeature(worldPush, FEATURE_PROBE_RIS_UNSHADOWED)) {
-        vis = visibility(origin, toL / dist, dist * 0.999).transmittance;
-    }
+    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    float3 vis = shadow.transmittance;
     float appliedW = s.restir != 0u ? min(s.W, RESTIR_MAX_W) : s.W;
     float3 shaded = contrib * vis * appliedW;
     if (s.restir != 0u) {
@@ -745,10 +743,8 @@ public void shadeReservoirSplit(Reservoir s, float3 hitPos, float3 n, float3 v, 
     float3 origin = hitPos + side * n * SURF_BIAS;
     float3 toL = s.pos - origin;
     float dist = length(toL);
-    float3 vis = float3(1.0, 1.0, 1.0);
-    if (!worldFeature(worldPush, FEATURE_PROBE_RIS_UNSHADOWED)) {
-        vis = visibility(origin, toL / dist, dist * 0.999).transmittance;
-    }
+    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    float3 vis = shadow.transmittance;
     float appliedW = s.restir != 0u ? min(s.W, RESTIR_MAX_W) : s.W;
     outDiff = diffPart * vis * appliedW;
     outSpec = specPart * vis * appliedW;

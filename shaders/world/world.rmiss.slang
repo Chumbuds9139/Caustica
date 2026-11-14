@@ -303,6 +303,9 @@ void main(inout Payload payload) {
     float starBrightness = worldPush.lightRadiance.w;
     bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
     bool rayInWater = (payload.flags & PAYLOAD_RAY_IN_WATER) != 0u;
+    // Full-quality atmosphere and clouds: what showCelestial chose, unless raygen marked this ray for the
+    // cheap tier (F8 experiment FEATURE_TRY_MIRROR_MEDIA). The sun/moon disc below keeps showCelestial.
+    bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
 
     float3 mdir = dir;
     float downFade = 1.0;
@@ -312,7 +315,7 @@ void main(inout Payload payload) {
         mdir = fl > 1.0e-4 ? float3(flat2.x / fl, 0.0, flat2.y / fl) : float3(1.0, 0.0, 0.0);
         downFade = exp(dir.y * 3.0);
     }
-    float3 col = showCelestial
+    float3 col = mediaFull
             ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
             : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
 
@@ -397,7 +400,7 @@ void main(inout Payload payload) {
     // ordinary cloud layer is restored.
     if (!rayInWater) {
         col = cloudLayer(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9, col, skyAmbient,
-                         showCelestial);
+                         mediaFull);
     }
 
     // A short lightning event is authored in world space. The bolt itself is a narrow jagged polyline

@@ -1104,6 +1104,11 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
                               float3 skyBehind, bool highQuality) {
     int marchSteps = highQuality ? CLOUD_MARCH_STEPS : CLOUD_MARCH_STEPS_CHEAP;
     int lightSteps = highQuality ? CLOUD_LIGHT_STEPS : CLOUD_LIGHT_STEPS_CHEAP;
+    // F8 experiment: a lighter full tier (see FEATURE_TRY_LIGHT_CLOUD_MARCH).
+    bool lighterFull = highQuality && worldFeature(push, FEATURE_TRY_LIGHT_CLOUD_MARCH);
+    if (lighterFull) {
+        lightSteps = 3;
+    }
     CloudVolume result;
     result.scatter = float3(0.0, 0.0, 0.0);
     result.transmittance = 1.0;
@@ -1172,7 +1177,7 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     // Scale the step count to the distance actually being marched, so a grazing ray through several
     // slab depths is sampled as finely as a vertical one instead of simply taking longer strides.
     // Clamped both ways: never coarser than the base count, never more expensive than the cap.
-    int stepCap = highQuality ? CLOUD_MARCH_STEPS_MAX : CLOUD_MARCH_STEPS_CHEAP_MAX;
+    int stepCap = highQuality ? (lighterFull ? 24 : CLOUD_MARCH_STEPS_MAX) : CLOUD_MARCH_STEPS_CHEAP_MAX;
     marchSteps = clamp(int((t1 - t0) / CLOUD_TARGET_STEP_BLOCKS), marchSteps, stepCap);
     float stepLen = (t1 - t0) / float(marchSteps);
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
@@ -1309,7 +1314,9 @@ public CloudVolume cloudSegment(WorldPush push, float3 originRel, float3 dir, fl
     //   * a (near) zero thickness collapses to the flat sheet, which is what that slider setting asks
     //     for. It shades like the classic deck of whichever style is active.
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
-    if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON) {
+    // F8 experiment: the cheap tier draws the deck as the flat sheet below instead of the slab.
+    bool flatCheap = !highQuality && worldFeature(push, FEATURE_TRY_FLAT_INDIRECT_CLOUDS);
+    if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON && !flatCheap) {
         if (classic && push.cloudCellsAddr != 0u) {
             return cloudClassicBoxes(push, originRel, dir, maxDistance, ambient);
         }

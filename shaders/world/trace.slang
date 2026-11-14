@@ -24,6 +24,9 @@ public static const uint CULL_SECONDARY_FAR = 0x20u;
 // The mask the current shading point's shadow rays use: CULL_SECONDARY, or CULL_SECONDARY_FAR when the
 // point was reached by a deep diffuse bounce. Set by world.rgen per bounce; per-invocation state.
 public static uint gv_secondaryCull = CULL_SECONDARY;
+// Raygen sets this on a show-celestial ray that should still take the cheap sky/cloud tier (F8 experiment
+// FEATURE_TRY_MIRROR_MEDIA); it travels to world.rmiss as PAYLOAD_CHEAP_MEDIA. False in normal play.
+public static bool gv_cheapMedia = false;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither
@@ -102,7 +105,8 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
     // `rayInWater` is the CURRENT medium's water state: the miss shader uses it to keep the above-water
     // cloud deck and the lightning bolt out of rays that have not left the water column yet.
     uint flags = (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
-            | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u);
+            | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
+            | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u);
     payload = makeRadiancePayload(flags, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
