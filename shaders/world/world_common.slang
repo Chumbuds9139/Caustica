@@ -275,6 +275,12 @@ public bool hitIndexInRange(uint64_t worldPushAddr, uint kind, uint value, uint 
         return true;
     }
     DevicePtr<WorldPush> frame = DevicePtr<WorldPush>(worldPushAddr);
+    // One record per frame. An ordinary-trace record is the rarer and more telling one, so a reordered
+    // trace does not replace it.
+    uint4 recorded = frame[0].hitFault;
+    if (recorded.x != 0u && (recorded.w & 0x80000000u) == 0u && (instanceId & 0x80000000u) != 0u) {
+        return false;
+    }
     frame[0].hitFault = uint4(kind, value, limit, instanceId);
     return false;
 }
@@ -499,6 +505,10 @@ public static const uint PAYLOAD_VIEWMODEL = 16384u;
 public static const uint PAYLOAD_REORDERED = 32768u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
+// Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect
+// raygen's own checks of the hit object, straight after traversal and again after the thread reorder.
+public static const uint HIT_FAULT_STAGE_TRAVERSAL = 0x04000000u;
+public static const uint HIT_FAULT_STAGE_REORDER = 0x08000000u;
 
 public uint hitFaultTag(uint instanceId, uint geometryIndex, uint payloadFlags) {
     return (instanceId & 0xFFFFFFu) | ((geometryIndex & 3u) << 24u)

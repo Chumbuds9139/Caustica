@@ -672,7 +672,12 @@ public final class RtComposite {
     private static String describeHitFaultTag(int tag) {
         return "instanceCustomIndex=0x" + Integer.toHexString(tag & 0xFFFFFF)
                 + ", geometry=" + ((tag >>> 24) & 3)
-                + ", trace=" + (tag < 0 ? "REORDERED" : "ordinary");
+                + ", trace=" + (tag < 0 ? "REORDERED" : "ordinary")
+                + ", refused by=" + switch ((tag >>> 26) & 3) {
+                    case 1 -> "raygen straight after traversal";
+                    case 2 -> "raygen after the thread reorder";
+                    default -> "hit shader";
+                };
     }
 
     private void reportHitFault(long mappedPush) {
