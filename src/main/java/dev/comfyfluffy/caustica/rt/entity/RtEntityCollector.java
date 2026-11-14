@@ -273,6 +273,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // 26.3 passes the sprite's UV mapping instead of the sprite itself; the mapping still IS the
         // atlas sprite for block-entity models (TextureAtlasSprite implements UvMapping).
         TextureAtlasSprite sprite = uvMapping instanceof TextureAtlasSprite tas ? tas : null;
+        boolean packedLayer = false;
         try {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
             if (sprite != null) {
@@ -295,7 +296,22 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 // pages during resource-pack load, so capture stores only the stable material ID.
                 capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
                 capture.currentMaterialId = RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
-                capture.clearUvRemap();
+                // A full-texture model normally carries the identity mapping, but not always: armour trims
+                // are packed into a shared paletted texture (PalettedTextureManager) and arrive with the
+                // rectangle of their own slot. Ignoring it stretched the whole trim page over the armour
+                // piece. Every UvMapping is a linear map of the 0..1 square, so its corners describe it.
+                if (uvMapping != null) {
+                    float u0 = uvMapping.getU(0f), v0 = uvMapping.getV(0f);
+                    float u1 = uvMapping.getU(1f), v1 = uvMapping.getV(1f);
+                    packedLayer = u0 != 0f || v0 != 0f || u1 != 1f || v1 != 1f;
+                    if (packedLayer) {
+                        capture.setUvRemap(u0, v0, u1, v1);
+                    } else {
+                        capture.clearUvRemap();
+                    }
+                } else {
+                    capture.clearUvRemap();
+                }
             }
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
@@ -303,7 +319,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // Remember this submission's texture for the next glint submission (the armour layer is always
         // followed by its glint in vanilla's EquipmentLayerRenderer). Glint submissions themselves are
         // skipped so lastArmorTexSlot keeps pointing at the armour texture beneath them.
-        if (!glint) {
+        // A trim layer sits between the armour and its glint, in a packed texture the glint's own UVs do
+        // not address, so it must not replace the armour texture as the gate.
+        if (!glint && !packedLayer) {
             lastArmorTexSlot = capture.currentTexSlot;
         }
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
