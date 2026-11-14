@@ -56,7 +56,7 @@ public final class CausticaConfig {
     public static void ensureRegistered() {
         @SuppressWarnings("unused")
         Object[] touch = {
-            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
+            Rt.ENABLED, Rt.PAUSE_WHEN_UNFOCUSED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Composite.SSS,
             Rt.Composite.WEATHER_LIGHTING, Rt.Composite.DENOISER, Rt.Composite.METALLIC_SHININESS,
             Rt.Composite.WATER_WAVE_STRENGTH, Rt.Composite.WATER_WAVE_SPEED, Rt.Composite.WATER_WAVE_DETAIL,
             Rt.Composite.WETNESS_ENABLED, Rt.Composite.WETNESS_WET_SECONDS, Rt.Composite.WETNESS_DRY_SECONDS,
@@ -680,6 +680,12 @@ public final class CausticaConfig {
 
     public static final class Rt {
         public static final BooleanSetting ENABLED = bool("caustica.rt", "enabled", true);
+        /**
+         * Stop rendering frames, and with them all ray-tracing work, while the game window has been out of
+         * focus for a moment. The game keeps ticking; the window keeps its last frame until focus returns.
+         */
+        public static final BooleanSetting PAUSE_WHEN_UNFOCUSED =
+                bool("caustica.rt.pauseWhenUnfocused", "pause-when-unfocused", true);
         public static final IntSetting WORKER_THREADS =
                 intAtLeast("caustica.rt.workerThreads", "worker-threads", defaultWorkerThreads(), 1);
 

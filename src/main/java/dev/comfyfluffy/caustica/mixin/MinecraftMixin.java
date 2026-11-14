@@ -1,8 +1,10 @@
 package dev.comfyfluffy.caustica.mixin;
 
+import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 
+import dev.comfyfluffy.caustica.client.RtBackgroundPause;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 
@@ -35,6 +37,12 @@ public abstract class MinecraftMixin {
 
 	@Inject(method = "runTick", at = @At("HEAD"))
 	private void caustica$reflexSleepAndSimStart(boolean advanceGameTime, CallbackInfo ci) {
+		// Decided first, so the Reflex sleep and markers below are skipped together with the frame: a
+		// latency sleep waits on present pacing, and no frame is presented while paused.
+		RtBackgroundPause.update((Minecraft) (Object) this);
+		if (RtBackgroundPause.paused()) {
+			return;
+		}
 		VulkanDevice device = caustica$reflexDevice();
 		long swapchain = RtReflex.INSTANCE.appliedSwapchain();
 		if (device == null || swapchain == 0L) {
@@ -48,6 +56,9 @@ public abstract class MinecraftMixin {
 	@Inject(method = "runTick",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
 	private void caustica$reflexSimEnd(boolean advanceGameTime, CallbackInfo ci) {
+		if (RtBackgroundPause.paused()) {
+			return;
+		}
 		VulkanDevice device = caustica$reflexDevice();
 		long swapchain = RtReflex.INSTANCE.appliedSwapchain();
 		if (device == null || swapchain == 0L) {
@@ -55,6 +66,21 @@ public abstract class MinecraftMixin {
 		}
 		RtReflex.INSTANCE.marker(device.vkDevice(), swapchain, RtReflex.MARKER_SIMULATION_END,
 				RtReflex.INSTANCE.currentSimFrameId());
+	}
+
+	/**
+	 * While the window has been out of focus for a moment, leave the frame out entirely: no world render,
+	 * no ray tracing, no present. Everything before this call in the loop (events, packets, ticks, sound)
+	 * still runs. See {@link RtBackgroundPause}.
+	 */
+	@WrapWithCondition(method = "runTick",
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
+	private boolean caustica$skipFrameWhileUnfocused(Minecraft self, boolean advanceGameTime) {
+		if (!RtBackgroundPause.paused()) {
+			return true;
+		}
+		RtBackgroundPause.idle();
+		return false;
 	}
 
 	private static VulkanDevice caustica$reflexDevice() {
