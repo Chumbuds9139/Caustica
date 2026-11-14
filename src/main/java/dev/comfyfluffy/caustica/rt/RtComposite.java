@@ -698,7 +698,7 @@ public final class RtComposite {
         int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
         int tag = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
         if (tag < 0) {
-            RtSerGuard.trip(kind == HIT_FAULT_HIT_OBJECT_CHANGED
+            RtSerGuard.refused(kind == HIT_FAULT_HIT_OBJECT_CHANGED
                     ? "a hit object changed across the thread reorder"
                     : "a reordered trace hit an out-of-range "
                             + (kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind));

@@ -382,7 +382,7 @@ public final class RtPerfSweep {
         }
         if (serRowsSkipped != null) {
             sb.append("Reordering rows left out: Shader Execution Reordering was ").append(serRowsSkipped)
-                    .append(", so the baseline already traces without it.\n");
+                    .append(" when the test started, so the baseline traced without it.\n");
         }
         sb.append("'saved' is the indirect-pass time a change removes relative to the mean of the baselines "
                 + "measured just before and after it (negative = cheaper). FPS includes CPU time.\n");
