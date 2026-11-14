@@ -295,6 +295,7 @@ public final class RtComposite {
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
     // F8 performance-test experiment (world_common.slang FEATURE_TRY_*): set only while its row runs.
     public static final int FEATURE_TRY_CAMERA_HIT_ROULETTE = 268435456;
+    public static final int FEATURE_TRY_HALF_FOG_SHADOW_RAYS = 536870912;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no

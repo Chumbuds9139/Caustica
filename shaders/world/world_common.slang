@@ -332,6 +332,9 @@ public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
 // F8 performance-test experiment, set only while its "try:" row runs and never in normal play: Russian
 // roulette on the camera hit's diffuse continuation too (survival at least 1/2).
 public static const uint FEATURE_TRY_CAMERA_HIT_ROULETTE = 268435456u;
+// F8 experiment: a full-tier fog segment that ends on geometry traces one fog shadow ray instead of two,
+// the sun-shaft sample or the emitter sample with equal odds, the one traced weighted 2x.
+public static const uint FEATURE_TRY_HALF_FOG_SHADOW_RAYS = 536870912u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered

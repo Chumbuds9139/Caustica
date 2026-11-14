@@ -160,6 +160,12 @@ public final class RtPerfSweep {
                 experimentBits = RtComposite.FEATURE_TRY_CAMERA_HIT_ROULETTE;
             }));
         }
+        // Fog's camera segment traces two shadow rays, one for the sun shafts and one for the torch the
+        // surface was lit by; this traces one of the two per pixel, the other's light carried at 2x.
+        if (fog) {
+            tests.add(new Variant("try: one fog shadow ray instead of two", false,
+                    () -> experimentBits = RtComposite.FEATURE_TRY_HALF_FOG_SHADOW_RAYS));
+        }
         // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
         // worth. Rows for options that change nothing in this scene are left out.
         if (simpleSky) {
