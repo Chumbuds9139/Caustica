@@ -50,6 +50,8 @@ public final class RtPerfSweep {
     private final List<Variant> variants = new ArrayList<>();
     private final List<Result> results = new ArrayList<>();
     private Runnable restore;
+    /** Set when the reordering rows were left out because the SER guard has reordering off. */
+    private String serRowsSkipped;
     // Shader probe bits of the row being measured (RtComposite.FEATURE_PROBE_*); zero outside probe rows.
     private static volatile int probeBits;
 
@@ -141,7 +143,11 @@ public final class RtPerfSweep {
         List<Variant> tests = new ArrayList<>();
         // What reordering is worth here. Only narrower-than-current settings are tried: full reordering
         // is the configuration that loses the device on some drivers, so the test never switches it on.
-        if (RtDeviceBringup.serEnabled() && !serHitObjectOnly && serBounces > 0) {
+        // While the guard holds reordering off, every one of these rows would measure the same ordinary
+        // trace as the baseline, so they are left out and the report says why.
+        String serHeldBack = RtDeviceBringup.serEnabled() ? RtSerGuard.heldBackReason() : null;
+        serRowsSkipped = serHeldBack != null && !serHitObjectOnly && serBounces > 0 ? serHeldBack : null;
+        if (RtDeviceBringup.serEnabled() && serHeldBack == null && !serHitObjectOnly && serBounces > 0) {
             tests.add(new Variant("reordering off (hit objects only)", false,
                     () -> CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.set(true)));
             if (serKey != 1) {
@@ -308,7 +314,7 @@ public final class RtPerfSweep {
             say(Component.translatable("caustica.options.perfTest.cancelled"), false);
             return;
         }
-        String report = report(results, moved);
+        String report = report(results, moved, serRowsSkipped);
         CausticaMod.LOGGER.info("\n{}", report);
         Path file = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats").resolve("perf-test-"
                 + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH.mm.ss")) + ".txt");
@@ -322,7 +328,7 @@ public final class RtPerfSweep {
     }
 
     String report() {
-        return report(results, moved);
+        return report(results, moved, serRowsSkipped);
     }
 
     /**
@@ -331,6 +337,10 @@ public final class RtPerfSweep {
      * more than its own difference is flagged, because that difference is then within the noise.
      */
     static String report(List<Result> results, boolean moved) {
+        return report(results, moved, null);
+    }
+
+    static String report(List<Result> results, boolean moved, String serRowsSkipped) {
         StringBuilder sb = new StringBuilder("Caustica performance test (GPU medians, ms)\n");
         sb.append(String.format(Locale.ROOT, "%-52s %9s %9s %9s %9s %8s%n", "setting", "indirect", "saved",
                 "primary", "RT frame", "FPS"));
@@ -369,6 +379,10 @@ public final class RtPerfSweep {
         }
         if (moved) {
             sb.append("WARNING: the player moved during the test; differences mix setting cost with scene change.\n");
+        }
+        if (serRowsSkipped != null) {
+            sb.append("Reordering rows left out: Shader Execution Reordering was ").append(serRowsSkipped)
+                    .append(", so the baseline already traces without it.\n");
         }
         sb.append("'saved' is the indirect-pass time a change removes relative to the mean of the baselines "
                 + "measured just before and after it (negative = cheaper). FPS includes CPU time.\n");

@@ -74,6 +74,14 @@ public final class RtSerGuard {
                 + "Every bounce now traces the ordinary way, which draws the same image.", what);
     }
 
+    /** Why the hit-object path is off right now, or null while the configured setting applies. */
+    static String heldBackReason() {
+        if (trippedBy != null) {
+            return "switched off for this session (" + trippedBy + ")";
+        }
+        return settling ? "held back after a world change" : null;
+    }
+
     /** The guard's state, for the device-loss report. */
     static String summary() {
         if (trippedBy != null) {
