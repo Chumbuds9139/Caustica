@@ -123,6 +123,15 @@ public final class RtEntities {
         return CausticaConfig.Rt.Entities.MAX_ORDINARY_ENTITIES.value();
     }
 
+    // Capture order for a frame with more entities than the ordinary-entity cap: nearest first, so the
+    // entities that fall off the end are the farthest ones rather than whichever the level happens to list
+    // last. The level lists recently spawned entities (dropped items, arrows) after long-lived ones, so
+    // in a crowded base it was exactly the fresh drops that went missing. Reused every frame.
+    private final ArrayList<Entity> entityOrder = new ArrayList<>();
+    private final ArrayList<Entity> entityOrderSorted = new ArrayList<>();
+    private long[] entityOrderKeys = new long[0];
+    private boolean loggedEntityCap;
+
     private static int maxBlockEntities() {
         return CausticaConfig.Rt.Entities.MAX_BLOCK_ENTITIES.value();
     }
@@ -755,7 +764,7 @@ public final class RtEntities {
         glowCamOffsetZ = (float) (cameraState.pos.z - rbz);
         resetPoseStack(entityPoseStack);
         int capturedThisFrame = 0;
-        for (Entity entity : level.entitiesForRendering()) {
+        for (Entity entity : entitiesNearestFirst(level)) {
             if (build.full() || capturedThisFrame >= maxOrdinaryEntities()) {
                 break;
             }
@@ -887,9 +896,54 @@ public final class RtEntities {
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
             capturedThisFrame++;
         }
+        // Drop the references so an unloaded level's entities are not kept alive between frames.
+        entityOrder.clear();
+        entityOrderSorted.clear();
         Int2ObjectOpenHashMap<EntityPrev> oldPrev = prevVerts;
         prevVerts = curVerts;
         curVerts = oldPrev;
+    }
+
+    /**
+     * The level's visible entities, in the level's own order while they all fit under the cap, otherwise
+     * sorted by distance from the camera so the cap drops the farthest ones.
+     */
+    private Iterable<Entity> entitiesNearestFirst(ClientLevel level) {
+        entityOrder.clear();
+        for (Entity entity : level.entitiesForRendering()) {
+            if (!entity.isInvisible()) {
+                entityOrder.add(entity);
+            }
+        }
+        int count = entityOrder.size();
+        int cap = maxOrdinaryEntities();
+        if (count <= cap) {
+            return entityOrder;
+        }
+        if (!loggedEntityCap) {
+            loggedEntityCap = true;
+            dev.comfyfluffy.caustica.CausticaMod.LOGGER.info("RT entities: {} entities are loaded, more than the "
+                    + "{} ray traced per frame (entities.max-ordinary-entities); the farthest are left out "
+                    + "(logged once)", count, cap);
+        }
+        if (entityOrderKeys.length < count) {
+            entityOrderKeys = new long[Math.max(count, entityOrderKeys.length * 2)];
+        }
+        double cx = cameraState.pos.x, cy = cameraState.pos.y, cz = cameraState.pos.z;
+        for (int i = 0; i < count; i++) {
+            Entity entity = entityOrder.get(i);
+            double dx = entity.getX() - cx, dy = entity.getY() - cy, dz = entity.getZ() - cz;
+            // A non-negative float orders the same as its bit pattern, so distance and index pack into
+            // one sortable long with no per-frame allocation.
+            float distSq = (float) Math.min(dx * dx + dy * dy + dz * dz, Float.MAX_VALUE);
+            entityOrderKeys[i] = ((long) Float.floatToRawIntBits(distSq) << 32) | i;
+        }
+        java.util.Arrays.sort(entityOrderKeys, 0, count);
+        entityOrderSorted.clear();
+        for (int i = 0; i < count; i++) {
+            entityOrderSorted.add(entityOrder.get((int) entityOrderKeys[i]));
+        }
+        return entityOrderSorted;
     }
 
     private static void resetPoseStack(PoseStack poseStack) {
