@@ -246,12 +246,13 @@ public struct WorldPush {
     // it cannot hit the hand and skips the trace; -1 (or lower) means "no bound this frame, always trace".
     // Trailing lanes; the generated WorldPushData appends them, so nothing above shifts.
     public float4   viewmodelCull;
-    // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
-    // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. Trailing lane.
-    public uint4    hitTableLimits;
     // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and
     // read by pass B's misses. 0 = no buffer, and both sides then run the sky as before.
     public uint64_t skyCacheAddr;
+    // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
+    // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. It must stay right
+    // before hitFault: RtComposite's hit-guard report reads it from there.
+    public uint4    hitTableLimits;
     // Written BY the hit shaders, read back by RtComposite when this ring slot comes round again: the
     // last index they refused. x = HIT_FAULT_* kind (0 = none this frame), y = the refused index,
     // z = the limit it was checked against, w = hitFaultTag (instance, geometry, reordered). Trailing lane; it must
@@ -332,10 +333,10 @@ public static const float MIRROR_MEDIA_MAX_ALPHA = 0.2; // GGX alpha above which
 public static const uint FEATURE_EARLY_ROULETTE = 131072u;
 // Full-tier volumetric cloud march with fewer samples: march cap 44 -> 24, light march 5 -> 3.
 public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
-// Sky cache for bounced light (a video option). Pass A fills a small direction map of the sky as bounced
-// light sees it (the cheap tier: no sun/moon disc, the lighter atmosphere and cloud march), once per frame
-// from the camera; pass B's misses that do not show the celestials read it instead of marching the
-// atmosphere and the cloud deck again for every pixel and bounce. See skyCacheSample.
+// Sky cache for bounced light (a video option). Pass A fills a small direction map of the sky as the cheap
+// tier sees it (no sun/moon disc, the lighter atmosphere and cloud march), once per frame from the camera;
+// pass B's cheap-tier misses (bounced light, rough reflections) read it instead of marching the atmosphere
+// and the cloud deck again for every pixel and bounce. See skyCacheSample.
 public static const uint FEATURE_SKY_CACHE = 524288u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
@@ -388,7 +389,8 @@ public float3 skyCacheTexelDir(uint texel) {
 }
 
 // Bilinear read of the cache along `dir`: azimuth wraps, the polar angle clamps at the poles.
-public float3 skyCacheSample(uint64_t addr, float3 dir) {
+// rgb = sky radiance without the discs, a = the cloud deck's transmittance.
+public float4 skyCacheSample(uint64_t addr, float3 dir) {
     float u = atan2(dir.z, dir.x) * (1.0 / 6.28318530718) + 0.5;
     float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / 3.14159265359);
     float fx = u * float(SKY_CACHE_W) - 0.5;
@@ -402,8 +404,8 @@ public float3 skyCacheSample(uint64_t addr, float3 dir) {
     uint ya = min(uint(y0), SKY_CACHE_H - 1u);
     uint yb = min(ya + 1u, SKY_CACHE_H - 1u);
     ConstPtr<float4> cache = ConstPtr<float4>(addr);
-    float3 top = lerp(cache[ya * SKY_CACHE_W + xa].rgb, cache[ya * SKY_CACHE_W + xb].rgb, wx);
-    float3 bottom = lerp(cache[yb * SKY_CACHE_W + xa].rgb, cache[yb * SKY_CACHE_W + xb].rgb, wx);
+    float4 top = lerp(cache[ya * SKY_CACHE_W + xa], cache[ya * SKY_CACHE_W + xb], wx);
+    float4 bottom = lerp(cache[yb * SKY_CACHE_W + xa], cache[yb * SKY_CACHE_W + xb], wx);
     return lerp(top, bottom, wy);
 }
 public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }

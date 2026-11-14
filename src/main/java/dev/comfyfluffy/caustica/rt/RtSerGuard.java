@@ -24,6 +24,9 @@ import net.minecraft.client.multiplayer.ClientLevel;
  *     rebuild ends, but never past {@link #WORLD_CHANGE_MAX_HOLD_NANOS} after the change: a later loss
  *     came 8 s after a 30 s hold ended, in a new dimension whose LOD proxy was 263 of 305 batches into
  *     its first full rebuild.</li>
+ * <li>While a large distant-terrain refresh streams in (most of the proxy rebuilt, without a world
+ *     change), and {@link #LOD_SETTLE_NANOS} after, at most {@link #WORLD_CHANGE_MAX_HOLD_NANOS}: a loss
+ *     came 29 of 529 batches into such a refresh, after Voxy restarted its idle world on refocus.</li>
  * <li>For {@link #REFUSAL_HOLD_NANOS} after a reordered trace has had a hit refused: an index out of
  *     range, or a hit object that described a different hit after the reorder than before it. Three of
  *     the four losses that followed such a refusal came within 4 to 21 s of it. The hold is not for the
@@ -39,6 +42,7 @@ public final class RtSerGuard {
     private static final long LOD_SETTLE_NANOS = 5_000_000_000L;
     private static final long WORLD_CHANGE_MAX_HOLD_NANOS = 120_000_000_000L;
     private static final String WORLD_CHANGED = "the world changed";
+    private static final String LOD_REFRESH = "the distant terrain is being rebuilt";
 
     private static ClientLevel lastLevel;
     private static int lastDimension;
@@ -46,8 +50,10 @@ public final class RtSerGuard {
     private static long holdUntil;
     private static String holdReason;
     private static int refusalHolds;
-    private static long worldChangedAt;
+    // When the running world-change or LOD-refresh hold started; the LOD extension is capped from here.
+    private static long lodHoldStartedAt;
     private static boolean lodExtensionLogged;
+    private static long seenLargeRefreshes;
 
     private RtSerGuard() {
     }
@@ -67,20 +73,31 @@ public final class RtSerGuard {
         } else if (level != lastLevel || dimension != lastDimension) {
             lastLevel = level;
             lastDimension = dimension;
-            worldChangedAt = now;
+            lodHoldStartedAt = now;
             lodExtensionLogged = false;
             hold(now, WORLD_CHANGE_HOLD_NANOS, WORLD_CHANGED);
         }
-        if (holding && WORLD_CHANGED.equals(holdReason) && holdUntil - now < LOD_SETTLE_NANOS
-                && now - worldChangedAt < WORLD_CHANGE_MAX_HOLD_NANOS
+        long largeRefreshes = RtDistantHorizonsTerrain.INSTANCE.largeRefreshesStarted();
+        if (largeRefreshes != seenLargeRefreshes) {
+            seenLargeRefreshes = largeRefreshes;
+            if (!holding || !WORLD_CHANGED.equals(holdReason)) {
+                // Held only while it streams in (the extension below), not for a fixed time.
+                lodHoldStartedAt = now;
+                lodExtensionLogged = false;
+                hold(now, LOD_SETTLE_NANOS, LOD_REFRESH);
+            }
+        }
+        boolean lodHold = WORLD_CHANGED.equals(holdReason) || LOD_REFRESH.equals(holdReason);
+        if (holding && lodHold && holdUntil - now < LOD_SETTLE_NANOS
+                && now - lodHoldStartedAt < WORLD_CHANGE_MAX_HOLD_NANOS
                 && RtDistantHorizonsTerrain.INSTANCE.rebuilding()) {
-            // Still rebuilding the distant terrain of the world just entered: keep the hold running a
-            // little past the end of it (re-checked every frame, so it ends LOD_SETTLE_NANOS after).
-            holdUntil = Math.min(now + LOD_SETTLE_NANOS, worldChangedAt + WORLD_CHANGE_MAX_HOLD_NANOS);
+            // Still rebuilding the distant terrain: keep the hold running a little past the end of it
+            // (re-checked every frame, so it ends LOD_SETTLE_NANOS after).
+            holdUntil = Math.min(now + LOD_SETTLE_NANOS, lodHoldStartedAt + WORLD_CHANGE_MAX_HOLD_NANOS);
             if (!lodExtensionLogged) {
                 lodExtensionLogged = true;
                 CausticaMod.LOGGER.info("Shader Execution Reordering stays held back until the distant "
-                        + "terrain finishes rebuilding (at most {} s after the world changed)",
+                        + "terrain finishes rebuilding (at most {} s)",
                         WORLD_CHANGE_MAX_HOLD_NANOS / 1_000_000_000L);
             }
         }

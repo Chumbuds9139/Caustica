@@ -259,7 +259,7 @@ void main() {
     if (skyCacheActive(worldPush)) {
         DevicePtr<float4> skyCache = DevicePtr<float4>(worldPush.skyCacheAddr);
         for (uint texel = pixelIndex; texel < SKY_CACHE_W * SKY_CACHE_H; texel += baseRecordCount) {
-            skyCache[texel] = float4(traceSkyCacheTexel(worldPush.camOffset, skyCacheTexelDir(texel)), 0.0);
+            skyCache[texel] = traceSkyCacheTexel(worldPush.camOffset, skyCacheTexelDir(texel));
         }
     }
     uint splitRecord = baseRecordCount + pixelIndex;

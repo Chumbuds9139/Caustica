@@ -2098,10 +2098,10 @@ public final class RtComposite {
                     RtViewmodel.INSTANCE.frameOverlayCull(),
                     // Entry counts of the tables the hit shaders index with traversal-supplied values
                     // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
+                    // WorldPush.skyCacheAddr: pass A fills it, pass B's cheap-tier misses read it.
+                    skyCache != null ? skyCache.deviceAddress : 0L,
                     new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
                             fe.geomTableCount(), 0),
-                    // WorldPush.skyCacheAddr: pass A fills it, pass B's bounced-light misses read it.
-                    skyCache != null ? skyCache.deviceAddress : 0L,
                     // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
                     // when this ring slot is selected again.
                     new Int4(0, 0, 0, 0)

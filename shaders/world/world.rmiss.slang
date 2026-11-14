@@ -283,6 +283,28 @@ float2 lightningBoltCoverage(float3 rayOrigin, float3 rayDirection, float3 strik
     return float2(core, halo);
 }
 
+// The sun and moon discs along `dir`, before any cloud in front of them.
+float3 celestialDiscs(WorldPush worldPush, float3 dir, float sunUp, float day, float discVisible) {
+    float3 col = float3(0.0, 0.0, 0.0);
+    float2 local;
+    squareBody(dir, worldPush.sunDir.xyz, SUN_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
+    if (all(abs(local) < float2(1.0, 1.0))) {
+        float2 uv = lerp(worldPush.sunUv.xy, worldPush.sunUv.zw, local * 0.5 + 0.5);
+        float3 t = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
+        float core = pow(clamp(dot(t, t) * 0.45, 0.0, 1.0), 6.0);
+        col += SUN_DISC_RADIANCE * transmittanceToSpace(dir) * core * sunUp * discVisible;
+    }
+    float moonUp = clamp((worldPush.moonDir.y + 0.0625) / 0.125, 0.0, 1.0);
+    squareBody(dir, worldPush.moonDir.xyz, MOON_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
+    if (all(abs(local) < float2(1.0, 1.0)) && moonUp > 0.0) {
+        float2 uv = lerp(worldPush.moonUv.xy, worldPush.moonUv.zw, local * 0.5 + 0.5);
+        float3 t = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
+        float m = smoothstep(0.0, 1.0, min(length(t), 1.0)) * 1.3;
+        col += MOON_DISC_RADIANCE * transmittanceToSpace(dir) * t * m * pow2(1.0 - day) * moonUp * discVisible;
+    }
+    return col;
+}
+
 float3 addLightning(WorldPush worldPush, float3 col, float3 dir, bool rayInWater) {
     float flash = clamp(worldPush.lightning.w, 0.0, 5.0);
     if (!rayInWater && flash > 1.0e-4) {
@@ -317,11 +339,18 @@ void main(inout Payload payload) {
     // cheap tier (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). The sun/moon disc below keeps showCelestial.
     bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
     bool skyCacheBuild = (payload.flags & PAYLOAD_SKY_CACHE_BUILD) != 0u;
-    // Bounced light (no celestials, out of the water) reads the sky pass A cached this frame from the
-    // camera with this same code; only the lightning, which pass A leaves out, is added live.
-    if (!showCelestial && !rayInWater && !skyCacheBuild && skyCacheActive(worldPush)) {
-        writeSkyMiss(payload, addLightning(worldPush, skyCacheSample(worldPush.skyCacheAddr, dir), dir,
-                rayInWater));
+    // Cheap-tier misses out of the water (bounced light, and rough reflections) read the sky pass A
+    // cached this frame from the camera with this same code. What pass A leaves out is added live: the
+    // lightning, and for a rough reflection the sun/moon disc, behind the cached cloud transmittance.
+    if (!mediaFull && !rayInWater && !skyCacheBuild && skyCacheActive(worldPush)) {
+        float4 cached = skyCacheSample(worldPush.skyCacheAddr, dir);
+        float3 sky = cached.rgb;
+        float rain = worldFeature(worldPush, FEATURE_WEATHER_LIGHTING)
+                ? clamp(worldPush.weather.x, 0.0, 1.0) : 0.0;
+        if (showCelestial && rain < 1.0) {
+            sky += celestialDiscs(worldPush, dir, sunUp, day, 1.0 - rain) * cached.a;
+        }
+        writeSkyMiss(payload, addLightning(worldPush, sky, dir, rayInWater));
         return;
     }
 
@@ -394,31 +423,19 @@ void main(inout Payload payload) {
     // geometrically via the cloudLayer composite below, as before.
     float discVisible = 1.0 - rainStrength;
     if (showCelestial && discVisible > 0.0) {
-        float2 local;
-        squareBody(dir, sd, SUN_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
-        if (all(abs(local) < float2(1.0, 1.0))) {
-            float2 uv = lerp(worldPush.sunUv.xy, worldPush.sunUv.zw, local * 0.5 + 0.5);
-            float3 t = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
-            float core = pow(clamp(dot(t, t) * 0.45, 0.0, 1.0), 6.0);
-            col += SUN_DISC_RADIANCE * transmittanceToSpace(dir) * core * sunUp * discVisible;
-        }
-        float moonUp = clamp((worldPush.moonDir.y + 0.0625) / 0.125, 0.0, 1.0);
-        squareBody(dir, worldPush.moonDir.xyz, MOON_DISC_HALF_ANGLE, worldPush.celestial.xyz, local);
-        if (all(abs(local) < float2(1.0, 1.0)) && moonUp > 0.0) {
-            float2 uv = lerp(worldPush.moonUv.xy, worldPush.moonUv.zw, local * 0.5 + 0.5);
-            float3 t = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
-            float m = smoothstep(0.0, 1.0, min(length(t), 1.0)) * 1.3;
-            col += MOON_DISC_RADIANCE * transmittanceToSpace(dir) * t * m * pow2(1.0 - day) * moonUp * discVisible;
-        }
+        col += celestialDiscs(worldPush, dir, sunUp, day, discVisible);
     }
 
     // Clouds live in the air column. A ray segment still inside water must not march the cloud deck
     // before world.rgen applies water absorption; doing so creates a hard black/cloud tile on a few
     // underwater sky misses. Once refraction has left the medium, raygen clears this flag and the
     // ordinary cloud layer is restored.
+    float cloudTransmittance = 1.0;
     if (!rayInWater) {
-        col = cloudLayer(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9, col, skyAmbient,
-                         mediaFull);
+        CloudVolume deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
+                                        skyAmbient, mediaFull);
+        col = col * deck.transmittance + deck.scatter;
+        cloudTransmittance = deck.transmittance;
     }
 
     // A short lightning event is authored in world space. The bolt itself is a narrow jagged polyline
@@ -430,4 +447,8 @@ void main(inout Payload payload) {
     }
 
     writeSkyMiss(payload, col);
+    if (skyCacheBuild) {
+        // The cloud deck's transmittance along this texel, for the readers that add a disc behind it.
+        payload.normal = half3(half(cloudTransmittance), 0.0h, 0.0h);
+    }
 }

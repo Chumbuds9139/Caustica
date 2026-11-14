@@ -287,8 +287,25 @@ public final class RtDistantHorizonsTerrain {
      * True while a replacement proxy is being planned or built: BLAS for changed LOD meshes are still
      * being created and swapped in. Render thread only, like {@link #frame}.
      */
+    /**
+     * A refresh that rebuilds at least this many batches, and most of the plan, counts as large. Two
+     * device losses with reordering on came while one streamed in: 263 of 305 batches into a new
+     * dimension's first rebuild, and 29 of 529 into a rebuild of every batch after Voxy restarted its idle
+     * world on refocus, with no world change to start the usual hold.
+     */
+    private static final int LARGE_REFRESH_BATCHES = 256;
+    private long largeRefreshesStarted;
+
     public boolean rebuilding() {
         return buildSession != null || cpuPending || packPending;
+    }
+
+    /**
+     * Refreshes started so far that replace most of the LOD proxy (see {@link #LARGE_REFRESH_BATCHES}):
+     * RtSerGuard holds reordering back while one streams in. Render thread only.
+     */
+    public long largeRefreshesStarted() {
+        return largeRefreshesStarted;
     }
 
     private void startCpuBuild(int originX, int originZ, int proxyRadius, long taskEpoch,
@@ -764,6 +781,10 @@ public final class RtDistantHorizonsTerrain {
             return;
         }
         buildSession = new BuildSession(taskEpoch, revision, new ArrayDeque<>(plan), materials, current);
+        long rebuilt = plan.stream().filter(batch -> batch.reused == null).count();
+        if (rebuilt >= LARGE_REFRESH_BATCHES && rebuilt * 2 > plan.size()) {
+            largeRefreshesStarted++;
+        }
         CausticaMod.LOGGER.info(
                 "DH progressive refresh started: current RT proxy remains active while {} planned batches stream in",
                 plan.size());

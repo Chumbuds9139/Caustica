@@ -117,13 +117,14 @@ public void tracePrimarySurface(uint cullMask, float3 ro, float tmin, float3 rd,
 }
 
 // One sky-cache texel (world_primary.rgen): a ray nothing can stop (cull mask 0) through the radiance
-// miss record, from the camera, flagged like bounced light (no celestials) plus the build flag.
-public float3 traceSkyCacheTexel(float3 origin, float3 dir) {
+// miss record, from the camera, flagged like bounced light (no celestials) plus the build flag. Returns
+// the sky radiance and, in w, the cloud transmittance world.rmiss hands back in payload.normal.x.
+public float4 traceSkyCacheTexel(float3 origin, float3 dir) {
     payload = makeRadiancePayload(PAYLOAD_SKY_CACHE_BUILD, 0u);
     TraceRay(topLevelAS, RAY_FLAG_NONE, 0u,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
             makeRay(origin, 0.0, dir, 1.0e9), payload);
-    return float3(payload.albedo);
+    return float4(float3(payload.albedo), float(payload.normal.x));
 }
 
 void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
