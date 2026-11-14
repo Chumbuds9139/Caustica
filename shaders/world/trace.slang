@@ -29,6 +29,9 @@ public static uint gv_secondaryCull = CULL_SECONDARY;
 public static bool gv_cheapMedia = false;
 // Raygen sets this for pass B's first trace of a camera ray only; it travels as PAYLOAD_CAMERA_SKY.
 public static bool gv_cameraSky = false;
+// ...and, of those, the rays on this frame's reuse half (FEATURE_CLOUD_REUSE). Only the reordered trace
+// carries it on, as PAYLOAD_CLOUD_REUSE_STALE: without the reorder it would split warps, not save work.
+public static bool gv_cameraSkyStale = false;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither

@@ -28,6 +28,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
@@ -37,6 +38,14 @@ import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.VK_OPERATION_DEFERRED_KHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.VK_OPERATION_NOT_DEFERRED_KHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.VK_THREAD_IDLE_KHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.vkCreateDeferredOperationKHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.vkDeferredOperationJoinKHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.vkDestroyDeferredOperationKHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.vkGetDeferredOperationMaxConcurrencyKHR;
+import static org.lwjgl.vulkan.KHRDeferredHostOperations.vkGetDeferredOperationResultKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
@@ -372,8 +381,7 @@ public final class RtPipeline {
                 rtpci.get(0).flags(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
             }
             LongBuffer pPipeline = stack.mallocLong(1);
-            check(vkCreateRayTracingPipelinesKHR(vk, VK10.VK_NULL_HANDLE, VK10.VK_NULL_HANDLE, rtpci, null, pPipeline),
-                    "vkCreateRayTracingPipelinesKHR");
+            createRayTracingPipeline(vk, rtpci, pPipeline, label);
             long pipeline = pPipeline.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
 
@@ -647,6 +655,88 @@ public final class RtPipeline {
             return pModule.get(0);
         } finally {
             MemoryUtil.memFree(code);
+        }
+    }
+    /**
+     * Compile a ray tracing pipeline on every core the driver can use. The driver turns the SPIR-V into GPU
+     * code here, and with the path tracer's raygen shaders that is most of the time a world takes to load
+     * after an update (the driver's own cache serves later loads of the same build). Handed a deferred
+     * operation (VK_KHR_deferred_host_operations, enabled with ray tracing), the driver splits the work
+     * into jobs that any thread joining the operation picks up, so the shaders compile side by side
+     * instead of one after another on the render thread. Without the extension's entry points, or when
+     * the driver declines to defer, it is the plain blocking call it always was.
+     */
+    private static void createRayTracingPipeline(VkDevice vk, VkRayTracingPipelineCreateInfoKHR.Buffer rtpci,
+                                                 LongBuffer pPipeline, String label) {
+        long start = System.nanoTime();
+        long operation = VK10.VK_NULL_HANDLE;
+        if (vk.getCapabilities().vkCreateDeferredOperationKHR != 0L) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                LongBuffer pOperation = stack.mallocLong(1);
+                if (vkCreateDeferredOperationKHR(vk, null, pOperation) == VK10.VK_SUCCESS) {
+                    operation = pOperation.get(0);
+                }
+            }
+        }
+        int threads = 1;
+        int result;
+        try {
+            result = vkCreateRayTracingPipelinesKHR(vk, operation, VK10.VK_NULL_HANDLE, rtpci, null, pPipeline);
+            if (result == VK_OPERATION_NOT_DEFERRED_KHR) {
+                result = VK10.VK_SUCCESS;
+            } else if (result == VK_OPERATION_DEFERRED_KHR) {
+                int concurrency = Math.max(1, vkGetDeferredOperationMaxConcurrencyKHR(vk, operation));
+                int helpers = Math.max(0, Math.min(concurrency, Runtime.getRuntime().availableProcessors()) - 1);
+                threads = helpers + 1;
+                long deferred = operation;
+                Thread[] pool = new Thread[helpers];
+                for (int i = 0; i < helpers; i++) {
+                    pool[i] = new Thread(() -> joinDeferred(vk, deferred), "Caustica RT pipeline compile " + (i + 1));
+                    pool[i].setDaemon(true);
+                    pool[i].start();
+                }
+                joinDeferred(vk, deferred);
+                for (Thread helper : pool) {
+                    joinUninterruptibly(helper);
+                }
+                // Every joiner has returned, so the operation is complete; join again rather than trust that
+                // if the driver still reports it pending.
+                result = vkGetDeferredOperationResultKHR(vk, deferred);
+                while (result == VK10.VK_NOT_READY) {
+                    joinDeferred(vk, deferred);
+                    result = vkGetDeferredOperationResultKHR(vk, deferred);
+                }
+            }
+        } finally {
+            if (operation != VK10.VK_NULL_HANDLE) {
+                vkDestroyDeferredOperationKHR(vk, operation, null);
+            }
+        }
+        check(result, "vkCreateRayTracingPipelinesKHR");
+        CausticaMod.LOGGER.info("RT pipeline '{}' compiled in {} ms on {} thread(s)", label,
+                (System.nanoTime() - start) / 1_000_000L, threads);
+    }
+
+    private static void joinDeferred(VkDevice vk, long operation) {
+        // VK_THREAD_IDLE_KHR: no job for this thread right now, but more may come; anything else (success,
+        // done, or an error the result query reports) means this thread is finished with the operation.
+        while (vkDeferredOperationJoinKHR(vk, operation) == VK_THREAD_IDLE_KHR) {
+            Thread.yield();
+        }
+    }
+
+    private static void joinUninterruptibly(Thread thread) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                thread.join();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 }

@@ -580,6 +580,11 @@ public static const uint PAYLOAD_SKY_CACHE_BUILD = 131072u;
 // world.rmiss: this miss is pass B's first trace of a camera ray (sample 0), so DispatchRaysIndex() is its
 // pixel and the cloud deck may come from the camera-sky reuse buffer (FEATURE_CLOUD_REUSE).
 public static const uint PAYLOAD_CAMERA_SKY = 262144u;
+// world.rmiss: a camera-sky ray (PAYLOAD_CAMERA_SKY) on this frame's reuse half of the checkerboard, so it
+// takes last frame's cloud march when there is one. Set only on SER's reordered trace, whose coherence hint
+// keeps these rays apart from the ones that march: mixed in one warp, a march that only half the threads
+// run costs the whole warp the full march, and the reuse saved nothing.
+public static const uint PAYLOAD_CLOUD_REUSE_STALE = 524288u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect

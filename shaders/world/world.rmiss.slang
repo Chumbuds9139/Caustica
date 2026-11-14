@@ -318,7 +318,8 @@ float3 addLightning(WorldPush worldPush, float3 col, float3 dir, bool rayInWater
 // Camera-sky cloud reuse (FEATURE_CLOUD_REUSE). The full-tier cloud march is the most expensive thing a
 // camera ray that reaches the sky does, and between two frames that march barely changes. So each frame
 // only half the camera's sky pixels march, in a checkerboard that flips every frame, and the other half
-// take last frame's march from the pixels that ran it.
+// take last frame's march from the pixels that ran it. The reuse half exists only on SER's reordered trace,
+// which sorts it into warps of its own; on the plain trace every camera-sky ray marches (and still writes).
 //
 // The reprojection follows the point on the deck's mid-plane the ray looks through, moved by the camera's
 // own motion (camDelta), so walking or flying under the deck keeps the reused cloud where it was rather than
@@ -328,7 +329,8 @@ float3 addLightning(WorldPush worldPush, float3 col, float3 dir, bool rayInWater
 // looking away from the deck, a teleport), simply marches like the fresh half.
 static const float CLOUD_REUSE_MAX_CAMERA_STEP = 8.0;
 
-CloudVolume cameraCloudDeck(WorldPush worldPush, float3 originRel, float3 dir, float3 skyAmbient) {
+CloudVolume cameraCloudDeck(WorldPush worldPush, float3 originRel, float3 dir, float3 skyAmbient,
+                            bool reuseHalf) {
     uint2 pix = DispatchRaysIndex().xy;
     uint2 dims = DispatchRaysDimensions().xy;
     uint frame = worldPush.frameIndex;
@@ -336,7 +338,8 @@ CloudVolume cameraCloudDeck(WorldPush worldPush, float3 originRel, float3 dir, f
     DevicePtr<uint4> current = DevicePtr<uint4>(worldPush.cloudReuseAddr + (frame & 1u) * halfBytes);
     ConstPtr<uint4> previous = ConstPtr<uint4>(worldPush.cloudReuseAddr + ((frame & 1u) ^ 1u) * halfBytes);
 
-    bool fresh = ((pix.x + pix.y + frame) & 1u) == 0u || frame == 0u
+    // reuseHalf: world.rgen's checkerboard ((x + y + frame) odd), carried as PAYLOAD_CLOUD_REUSE_STALE.
+    bool fresh = !reuseHalf || frame == 0u
             || dot(worldPush.camDelta, worldPush.camDelta)
                     > CLOUD_REUSE_MAX_CAMERA_STEP * CLOUD_REUSE_MAX_CAMERA_STEP;
     if (!fresh) {
@@ -508,7 +511,8 @@ void main(inout Payload payload) {
         bool reuse = mediaFull && (payload.flags & PAYLOAD_CAMERA_SKY) != 0u && !skyCacheBuild
                 && worldFeature(worldPush, FEATURE_CLOUD_REUSE) && worldPush.cloudReuseAddr != 0u;
         CloudVolume deck = reuse
-                ? cameraCloudDeck(worldPush, originRel, dir, skyAmbient)
+                ? cameraCloudDeck(worldPush, originRel, dir, skyAmbient,
+                                  (payload.flags & PAYLOAD_CLOUD_REUSE_STALE) != 0u)
                 : cloudSegment(worldPush, originRel, dir, 1.0e9, skyAmbient, mediaFull);
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;
