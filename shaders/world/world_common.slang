@@ -263,6 +263,9 @@ public static const uint HIT_FAULT_LOD_INSTANCE = 3u;
 public static const uint HIT_FAULT_LOD_PRIM = 4u;
 public static const uint HIT_FAULT_ENTITY_INSTANCE = 5u;
 public static const uint HIT_FAULT_ENTITY_PRIM = 6u;
+// Not an index: the indirect raygen's hit object described a different hit after the thread reorder than
+// it did before it (y = fingerprint after, z = fingerprint before). The hit was dropped uninvoked.
+public static const uint HIT_FAULT_HIT_OBJECT_CHANGED = 7u;
 
 // Every address a hit shader dereferences is reached through an index the TRAVERSAL hands it (instance
 // custom index, geometry index, primitive index). Nothing in Vulkan bounds those against our buffers, and
@@ -274,15 +277,19 @@ public bool hitIndexInRange(uint64_t worldPushAddr, uint kind, uint value, uint 
     if (value < limit) {
         return true;
     }
+    recordHitFault(worldPushAddr, kind, value, limit, instanceId);
+    return false;
+}
+
+public void recordHitFault(uint64_t worldPushAddr, uint kind, uint value, uint limit, uint instanceId) {
     DevicePtr<WorldPush> frame = DevicePtr<WorldPush>(worldPushAddr);
     // One record per frame. An ordinary-trace record is the rarer and more telling one, so a reordered
     // trace does not replace it.
     uint4 recorded = frame[0].hitFault;
     if (recorded.x != 0u && (recorded.w & 0x80000000u) == 0u && (instanceId & 0x80000000u) != 0u) {
-        return false;
+        return;
     }
     frame[0].hitFault = uint4(kind, value, limit, instanceId);
-    return false;
 }
 
 // worldPush.dimension: the sky/lighting model this frame renders with. The Overworld runs the full
@@ -506,7 +513,8 @@ public static const uint PAYLOAD_REORDERED = 32768u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect
-// raygen's own checks of the hit object, straight after traversal and again after the thread reorder.
+// raygen's own checks of the hit object, straight after traversal and after the thread reorder (the
+// latter compares the hit object with what it said before the reorder, HIT_FAULT_HIT_OBJECT_CHANGED).
 public static const uint HIT_FAULT_STAGE_TRAVERSAL = 0x04000000u;
 public static const uint HIT_FAULT_STAGE_REORDER = 0x08000000u;
 

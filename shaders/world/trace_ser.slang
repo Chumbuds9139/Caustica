@@ -5,10 +5,9 @@ import world_common;
 import world_core;
 import trace;
 
-// Check a terrain hit object against the section table before any shader is invoked on it. `stage` says
-// where the check ran (HIT_FAULT_STAGE_*), so a refused hit tells apart "traversal itself returned an
-// index the section does not have" from "the hit object changed while its thread was being reordered".
-// Entity and LOD hits are left to the hit-shader guards: only terrain has ever been refused.
+// Check a terrain hit object against the section table before any shader is invoked on it, straight
+// after traversal. Entity and LOD hits are left to the hit-shader guards: only terrain has ever been
+// refused.
 bool hitObjectInRange(HitObject hObj, uint stage) {
     if (!hObj.IsHit()) { return true; }
     uint instanceId = hObj.GetInstanceID();
@@ -24,6 +23,26 @@ bool hitObjectInRange(HitObject hObj, uint stage) {
     return hitIndexInRange(pc.worldPushAddr, HIT_FAULT_TERRAIN_PRIM, pid, sec.primCount, tag);
 }
 
+// Everything the hit object reports about what it hit, folded into one word. Nothing may change it
+// between traversal and Invoke: the reorder moves the thread, not the hit. It is taken on both sides of
+// ReorderThread because once it did change: a terrain hit that passed the range check straight after
+// traversal failed the very same check after the reorder, against a section table that cannot change
+// during the dispatch. Comparing the fingerprint catches that whether or not the changed hit still fits
+// the tables, and the hit is dropped before Invoke can hand a hit shader whatever it now describes.
+// One word is all that spans the reorder for it.
+uint hitObjectFingerprint(HitObject hObj) {
+    if (hObj.IsMiss()) { return 0x4D495353u; }
+    if (!hObj.IsHit()) { return 0x4E4F5020u; }
+    uint h = hObj.GetInstanceID();
+    h = (h ^ hObj.GetInstanceIndex()) * 0x9E3779B1u;
+    h = (h ^ hObj.GetPrimitiveIndex()) * 0x85EBCA77u;
+    h = (h ^ hObj.GetGeometryIndex()) * 0xC2B2AE3Du;
+    h = (h ^ hObj.GetShaderTableIndex()) * 0x27D4EB2Fu;
+    h = (h ^ hObj.GetHitKind()) * 0x165667B1u;
+    h ^= asuint(hObj.GetRayDesc().TMax);
+    return h ^ (h >> 15u);
+}
+
 // Trace into a hit object, reorder threads by hit coherence, THEN invoke the hit/miss shader. This is
 // where the divergent Section/Prim shading work (world.rchit/world.rahit) actually happens, so
 // reordering before it is what pays for the reorder's own cost.
@@ -34,7 +53,7 @@ bool hitObjectInRange(HitObject hObj, uint stage) {
 // gated on RAY_FLAG_SKIP_CLOSEST_HIT_SHADER. So whatever TraceRay leaves in the payload holds no
 // information. Reading it back and carrying it over would pin all ten members — 72 bytes — in registers
 // across the one point where SER must spill every live value. Rebuilding costs a few constant moves and
-// leaves only these two words spanning the reorder.
+// leaves only three words spanning the reorder: the two payload words and the hit fingerprint.
 public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                             bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread,
                             uint pathPhaseHint) {
@@ -56,6 +75,7 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
         payload = makeRadiancePayload(flags, rayCone);
         return;
     }
+    uint fingerprint = hitObjectFingerprint(hObj);
     uint materialHint = hObj.GetShaderTableIndex() & (TERRAIN_BUCKETS - 1u);
     uint coherenceHint = (pathPhaseHint << 2u) | materialHint;
     // Diagnostic split: the same hit-object trace and invoke, without handing the thread to the scheduler.
@@ -72,6 +92,14 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
         }
     }
     payload = makeRadiancePayload(flags, rayCone);
-    if (!hitObjectInRange(hObj, HIT_FAULT_STAGE_REORDER)) { return; }
+    // Same fingerprint, same hit: the traversal-stage range check above already holds for it.
+    uint after = hitObjectFingerprint(hObj);
+    if (after != fingerprint) {
+        uint instanceId = hObj.IsHit() ? hObj.GetInstanceID() : 0u;
+        uint geometry = hObj.IsHit() ? hObj.GetGeometryIndex() : 0u;
+        recordHitFault(pc.worldPushAddr, HIT_FAULT_HIT_OBJECT_CHANGED, after, fingerprint,
+                       hitFaultTag(instanceId, geometry, PAYLOAD_REORDERED) | HIT_FAULT_STAGE_REORDER);
+        return;
+    }
     HitObject::Invoke(topLevelAS, hObj, payload);
 }

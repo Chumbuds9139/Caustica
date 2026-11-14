@@ -308,7 +308,8 @@ public final class RtComposite {
      */
     private static int featureFlags() {
         int flags = RtPerfSweep.probeFeatureBits();
-        flags |= CausticaConfig.Rt.Reorder.BOUNCES.value() << SER_BOUNCES_SHIFT;
+        ClientLevel level = Minecraft.getInstance().level;
+        flags |= RtSerGuard.bounces(level, dimensionId(level)) << SER_BOUNCES_SHIFT;
         flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;
         if (CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value()) {
             flags |= FEATURE_SER_NO_REORDER;
@@ -626,6 +627,8 @@ public final class RtComposite {
     private static final int HIT_FAULT_OFFSET = WORLD_PUSH_SIZE - 4 * Integer.BYTES;
     private static final String[] HIT_FAULT_KINDS = {"none", "terrain section", "terrain triangle",
             "LOD batch", "LOD triangle", "entity geometry", "entity triangle"};
+    /** world_common.slang HIT_FAULT_HIT_OBJECT_CHANGED: y/z hold fingerprints, not an index and a limit. */
+    private static final int HIT_FAULT_HIT_OBJECT_CHANGED = 7;
     private long hitFaultFrames;
     private long lastHitFaultLogNanos;
 
@@ -655,6 +658,11 @@ public final class RtComposite {
             out.append("; slot ").append(i).append(i == pushSlot ? " (latest)" : "").append(": ");
             if (kind == 0) {
                 out.append("none");
+            } else if (kind == HIT_FAULT_HIT_OBJECT_CHANGED) {
+                out.append("hit object changed across the reorder, fingerprint before=0x")
+                        .append(Integer.toHexString(MemoryUtil.memGetInt(base + 8)))
+                        .append(" after=0x").append(Integer.toHexString(MemoryUtil.memGetInt(base + 4)))
+                        .append(' ').append(describeHitFaultTag(MemoryUtil.memGetInt(base + 12)));
             } else {
                 out.append(kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind)
                         .append(" index=").append(Integer.toUnsignedString(MemoryUtil.memGetInt(base + 4)))
@@ -686,14 +694,28 @@ public final class RtComposite {
             return;
         }
         hitFaultFrames++;
+        int value = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 4);
+        int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
+        int tag = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
+        if (tag < 0) {
+            RtSerGuard.trip(kind == HIT_FAULT_HIT_OBJECT_CHANGED
+                    ? "a hit object changed across the thread reorder"
+                    : "a reordered trace hit an out-of-range "
+                            + (kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind));
+        }
         long now = System.nanoTime();
         if (now - lastHitFaultLogNanos < 1_000_000_000L) {
             return;
         }
         lastHitFaultLogNanos = now;
-        int value = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 4);
-        int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
-        int tag = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
+        if (kind == HIT_FAULT_HIT_OBJECT_CHANGED) {
+            CausticaMod.LOGGER.warn("[HitGuard] a hit object described a different hit after the thread reorder "
+                            + "than before it and was dropped uninvoked: fingerprint before=0x{}, after=0x{}, "
+                            + "now {}, frames affected so far={}",
+                    Integer.toHexString(limit), Integer.toHexString(value), describeHitFaultTag(tag),
+                    hitFaultFrames);
+            return;
+        }
         CausticaMod.LOGGER.warn("[HitGuard] a hit shader refused an out-of-range {} index: index={}, limit={}, "
                         + "{}, frames affected so far={}",
                 kind > 0 && kind < HIT_FAULT_KINDS.length ? HIT_FAULT_KINDS[kind] : "kind " + kind,

@@ -267,7 +267,8 @@ public final class RtDeviceBringup {
     public static String serSummary() {
         return "backend=" + serBackend.label + ", bounces=" + CausticaConfig.Rt.Reorder.BOUNCES.value()
                 + ", key=" + CausticaConfig.Rt.Reorder.KEY.value()
-                + ", hitObjectOnly=" + CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value();
+                + ", hitObjectOnly=" + CausticaConfig.Rt.Reorder.HIT_OBJECT_ONLY.value()
+                + (serEnabled() ? ", guard=" + RtSerGuard.summary() : "");
     }
 
     /** True if {@code VK_EXT_opacity_micromap} was enabled on the device (gate on + device support). */

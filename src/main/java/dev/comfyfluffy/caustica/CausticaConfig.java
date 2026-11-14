@@ -169,6 +169,8 @@ public final class CausticaConfig {
                 " Shader Execution Reordering for the indirect ray pass (NVIDIA). Speed only: the image is\n"
                         + " identical either way. Off by default: on NVIDIA driver 621.24 every observed GPU\n"
                         + " device-loss crash happened with it on and none with it off.\n"
+                        + " When on, it is held back for 30 s after every world change (join, server hop, dimension)\n"
+                        + " and switched off until restart once a reordered ray has a hit refused; the log says when.\n"
                         + " enabled: needs a restart. The two settings below apply live and only matter when it is on;\n"
                         + " they exist to find which part of the feature is at fault.\n"
                         + " bounces: how many leading bounces of each path use it (15 = all). Later bounces trace\n"
@@ -1339,6 +1341,8 @@ public final class CausticaConfig {
          * dispatch that uses it, and sessions with it off have not crashed. Range-checking every terrain hit
          * object before and after the reorder did not stop it: the device was later lost with reordering on
          * and not one hit refused, so out-of-range hits were a symptom some losses showed, not the cause.
+         * When it is on, {@code RtSerGuard} holds it back after world changes and drops it for the session
+         * after a refused reordered hit.
          */
         public static final class Reorder {
             public static final BooleanSetting ENABLED =
