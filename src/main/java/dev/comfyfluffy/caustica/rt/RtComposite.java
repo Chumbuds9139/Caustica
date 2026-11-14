@@ -792,6 +792,14 @@ public final class RtComposite {
     private int fgBackbufferCopyW = -1;
     private int fgBackbufferCopyH = -1;
     private boolean fgReset = true;
+    // DLSS-G cut bookkeeping (see noteDlssFgCuts). The feature carries a temporal history of its own,
+    // which has to be told about a cut the way the upscalers' histories are.
+    private java.lang.ref.WeakReference<ClientLevel> fgDlssLevel = new java.lang.ref.WeakReference<>(null);
+    private double prevDlssFgCamX;
+    private double prevDlssFgCamY;
+    private double prevDlssFgCamZ;
+    private boolean dlssFgCamValid;
+    private long fgDlssLastUseFrame = -1;
     // Caustica native frame generation: the motion-vector interpolation pipeline plus the previous
     // presented frame it interpolates from. fgPrevFrame holds last tick's final image (same
     // format/size as fgBackbufferCopy / the HDR backbuffer); the current frame is copied into it
@@ -3269,6 +3277,9 @@ public final class RtComposite {
         nativeFgCamValid = false;
         fgNativeLastUseFrame = -1;
         fgNativeSeededTick = false;
+        fgDlssLevel = new java.lang.ref.WeakReference<>(null);
+        dlssFgCamValid = false;
+        fgDlssLastUseFrame = -1;
         if (worldPipeline != null) {
             worldPipeline.destroy();
             worldPipeline = null;
@@ -3749,6 +3760,7 @@ public final class RtComposite {
             return fgInterpolateFsr(ctx, enc, backbufferImage, swapW, swapH, index, count, hdrBackbuffer, fmt);
         }
         if (index == 1) {
+            noteDlssFgCuts();
             if (!ensureFgFeature(ctx, swapW, swapH, renderW, renderH, fmt)) {
                 throw new IllegalStateException("DLSSG feature not ready (ensureFgFeature failed)");
             }
@@ -4060,6 +4072,44 @@ public final class RtComposite {
         dst[0] = (float) x;
         dst[1] = (float) y;
         dst[2] = (float) z;
+    }
+
+    /**
+     * Tell DLSS-G about cuts before this frame's evaluate. A camera jump of more than 32 blocks (teleport,
+     * respawn; the rule the upscaler resets use) or a gap of more than two frames without frame generation
+     * (loading screen, menu) resets its history; it never did before. A new world also gets a new feature
+     * outright: every generated frame has been seen to come out black, alternating with the real frames,
+     * from one world change on and through every later one, leaving the server and coming back included,
+     * which is what a history stuck on a bad input looks like. A fresh feature has no history to be stuck in.
+     */
+    private void noteDlssFgCuts() {
+        ClientLevel level = Minecraft.getInstance().level;
+        ClientLevel previous = fgDlssLevel.get();
+        if (level != previous) {
+            if (previous != null && RtDlssFg.INSTANCE.isReady()) {
+                RtDlssFg.INSTANCE.releaseFeature();
+                CausticaMod.LOGGER.info("DLSS-FG: the world changed; frame generation starts over with a fresh feature");
+            }
+            fgDlssLevel = new java.lang.ref.WeakReference<>(level);
+            dlssFgCamValid = false;
+            fgReset = true;
+        }
+        if (fgDlssLastUseFrame >= 0 && frameCounter - fgDlssLastUseFrame > 2) {
+            fgReset = true;
+        }
+        fgDlssLastUseFrame = frameCounter;
+        if (dlssFgCamValid) {
+            double dx = camX - prevDlssFgCamX;
+            double dy = camY - prevDlssFgCamY;
+            double dz = camZ - prevDlssFgCamZ;
+            if (dx * dx + dy * dy + dz * dz > 32.0 * 32.0) {
+                fgReset = true;
+            }
+        }
+        prevDlssFgCamX = camX;
+        prevDlssFgCamY = camY;
+        prevDlssFgCamZ = camZ;
+        dlssFgCamValid = true;
     }
 
     private boolean ensureFgFeature(RtContext ctx, int w, int h, int rw, int rh, int fmt) {

@@ -225,6 +225,16 @@ public final class RtDlssFg {
         return seg;
     }
 
+    /**
+     * Drop the live feature so the next {@link #ensureFeature} creates a fresh one, with no temporal history
+     * at all. Waits for the device to go idle, so only for rare events such as a new world.
+     */
+    public void releaseFeature() {
+        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
+            releaseFeature(device);
+        }
+    }
+
     /** Release the FG feature. NGX itself is shut down by {@link NgxRuntime} at device teardown. */
     public void destroy() {
         if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {

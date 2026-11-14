@@ -265,6 +265,21 @@ public void resolveTransmissionGuide(float3 origin, float3 transmittedDir,
     }
 }
 
+// The motion guides are stored as rg16f, whose largest finite value is 65504. A guide point that lands
+// just in front of the previous camera's plane divides by a tiny w, which a camera jump (teleport, world
+// change) makes likely somewhere on screen: the vector overflows to infinity in the store, and DLSS-RR
+// and frame generation are handed it. Anything past this bound is many screens away, which they treat
+// the same as any other off-screen previous position, so clamping changes no valid vector; a non-finite
+// one (isnan/isinf, since clamp() passes NaN through) means no usable previous position: report none.
+static const float MOTION_GUIDE_LIMIT = 16384.0;
+
+float2 storableMotion(float2 motion) {
+    if (any(isnan(motion)) || any(isinf(motion))) {
+        return float2(0.0, 0.0);
+    }
+    return clamp(motion, -MOTION_GUIDE_LIMIT, MOTION_GUIDE_LIMIT);
+}
+
 // Resolve the captured gv_* guide state into the DLSS-RR guide images after Pass A queues continuations.
 public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, float primaryConeSpread) {
     // Reflection remains owned by the foreground interface even when a dielectric replaced the ordinary
@@ -330,9 +345,9 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gNormal[pix] = float4(gv_normal, gv_rough);
     gAlbedo[pix] = float4(gv_albedo, 1.0);
     gDepth[pix] = depth;
-    gMotion[pix] = motion;
+    gMotion[pix] = storableMotion(motion);
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
-    gSpecMotion[pix] = specMotion;
+    gSpecMotion[pix] = storableMotion(specMotion);
 }
 
 // 48-byte queue record. float3 + uint intentionally share the first 16-byte lane; every remaining
