@@ -301,6 +301,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "Compact terrain acceleration structures after building them: roughly halves BLAS memory at a slightly longer build time. The terrain fully rebuilds when you change this, so no section is left in the old state.",
 	"caustica.options.rt.ommSubdivision": "OMM Subdivision",
 	"caustica.options.rt.ommSubdivision.tooltip": "Micro-triangle subdivision level for opacity micromaps (0 = coarser/cheaper, up to 6 = tightest cutout masks). Higher levels fit leaf and grass silhouettes more precisely. The terrain fully rebuilds when you change this.",
+	"caustica.options.rt.pauseWhenUnfocused": "Pause When Unfocused",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "Stops rendering, ray tracing included, once the game window has been out of focus for a second. The game keeps running (connection, ticks, sound) and the window holds its last frame until you switch back. Turn this off if you record or stream the game while another window is in front.",
 	"caustica.options.rt.frameStats": "Frame Stats Logging",
 	"caustica.options.rt.frameStats.tooltip": "Log per-frame RT timings and hitch reports to the console (per render-stage breakdowns). Off keeps the log quiet.",
 	"caustica.options.rt.ommStats": "OMM Stats Logging",

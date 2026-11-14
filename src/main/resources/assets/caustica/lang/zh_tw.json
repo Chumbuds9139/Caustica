@@ -288,6 +288,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "構建後壓縮地形加速結構：構建時間略長，但 BLAS 記憶體約減半。更改此項時地形會完全重建，不會有區段停留在舊狀態。",
 	"caustica.options.rt.ommSubdivision": "OMM 細分度",
 	"caustica.options.rt.ommSubdivision.tooltip": "不透明度微圖的微三角形細分級別（0 = 較粗較省，最高 6 = 最緊的鏤空遮罩）。更高級別更精準貼合樹葉與草的輪廓。更改此項時地形會完全重建。",
+	"caustica.options.rt.pauseWhenUnfocused": "失焦時暫停繪製",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "遊戲視窗失去焦點 1 秒後停止繪製畫面（包含光線追蹤）。遊戲本身照常運作（連線、遊戲刻、聲音），視窗會停在最後一張畫面，切回來就恢復。若要在其他視窗位於前景時錄影或直播遊戲，請關閉此選項。",
 	"caustica.options.rt.frameStats": "幀統計記錄",
 	"caustica.options.rt.frameStats.tooltip": "向主控台記錄每幀 RT 計時與卡頓報告（依渲染階段拆分）。關閉時記錄保持安靜。",
 	"caustica.options.rt.ommStats": "OMM 統計記錄",

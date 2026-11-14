@@ -288,6 +288,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "Compacta las estructuras de aceleración del terreno tras construirlas: aproximadamente mitad de memoria BLAS a cambio de un build algo más largo. El terreno se reconstruye por completo al cambiar esto, así ninguna sección queda en el estado viejo.",
 	"caustica.options.rt.ommSubdivision": "Subdivisión de OMM",
 	"caustica.options.rt.ommSubdivision.tooltip": "Nivel de subdivisión de microtriángulos de los opacity micromaps (0 = más tosco/barato, hasta 6 = recortes más ajustados). Niveles mayores ajustan las siluetas de hojas y hierba con más precisión. El terreno se reconstruye por completo al cambiar esto.",
+	"caustica.options.rt.pauseWhenUnfocused": "Pausar sin foco",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "Detiene el renderizado, incluido el trazado de rayos, cuando la ventana del juego lleva un segundo sin foco. El juego sigue funcionando (conexión, ticks, sonido) y la ventana conserva el último fotograma hasta que vuelvas. Desactívalo si grabas o transmites el juego mientras otra ventana está delante.",
 	"caustica.options.rt.frameStats": "Registro de stats de fotograma",
 	"caustica.options.rt.frameStats.tooltip": "Escribe en consola los tiempos de RT por fotograma y los informes de tirones (desglose por etapa de render). Desactivado deja el registro en silencio.",
 	"caustica.options.rt.ommStats": "Registro de stats de OMM",

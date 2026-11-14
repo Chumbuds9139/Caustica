@@ -288,6 +288,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "Verdichtet die Terrain-Beschleunigungsstrukturen nach dem Bau: halbiert den BLAS-Speicher etwa bei etwas längerer Bauzeit. Das Terrain baut bei einer Änderung komplett neu auf, damit keine Sektion im alten Zustand bleibt.",
 	"caustica.options.rt.ommSubdivision": "OMM-Unterteilung",
 	"caustica.options.rt.ommSubdivision.tooltip": "Mikro-Dreieck-Unterteilungsstufe für Opacity-Micromaps (0 = gröber/günstiger, bis 6 = engste Aussparungen). Höhere Stufen passen Blatt- und Grassilhouetten präziser an. Das Terrain baut bei einer Änderung komplett neu auf.",
+	"caustica.options.rt.pauseWhenUnfocused": "Bei Fokusverlust pausieren",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "Hält das Rendern samt Raytracing an, sobald das Spielfenster eine Sekunde lang nicht im Fokus ist. Das Spiel selbst läuft weiter (Verbindung, Ticks, Sound), und das Fenster zeigt das letzte Bild, bis du zurückwechselst. Deaktiviere dies, wenn du das Spiel aufnimmst oder streamst, während ein anderes Fenster im Vordergrund ist.",
 	"caustica.options.rt.frameStats": "Frame-Statistik-Logging",
 	"caustica.options.rt.frameStats.tooltip": "Loggt RT-Zeiten pro Frame und Ruckler-Berichte auf die Konsole (Aufschlüsselung pro Render-Stufe). Deaktiviert hält es das Log ruhig.",
 	"caustica.options.rt.ommStats": "OMM-Statistik-Logging",

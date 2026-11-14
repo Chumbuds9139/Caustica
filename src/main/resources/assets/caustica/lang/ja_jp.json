@@ -288,6 +288,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "構築後に地形の加速構造を圧縮します。ビルド時間はやや長くなりますが BLAS メモリはほぼ半減します。変更時は地形が完全に再構築されるため、旧状態のセクションは残りません。",
 	"caustica.options.rt.ommSubdivision": "OMM サブディビジョン",
 	"caustica.options.rt.ommSubdivision.tooltip": "Opacity Micromap のマイクロ三角形の細分化レベル（0 = 粗く安価、最大 6 = 最もタイトな切り抜きマスク）。高いほど葉や草のシルエットに精密にフィットします。変更時は地形が完全に再構築されます。",
+	"caustica.options.rt.pauseWhenUnfocused": "非アクティブ時に描画を停止",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "ゲームウィンドウのフォーカスが1秒間外れると、レイトレーシングを含む描画を停止します。ゲーム自体（接続、ティック、サウンド）はそのまま動作し、ウィンドウは最後のフレームを表示したまま、戻ると再開します。別のウィンドウを前面にした状態でゲームを録画・配信する場合はオフにしてください。",
 	"caustica.options.rt.frameStats": "フレーム統計ログ",
 	"caustica.options.rt.frameStats.tooltip": "フレームごとの RT タイミングとヒッチレポートをコンソールに記録します（レンダーステージごとの内訳）。オフではログは静かのままです。",
 	"caustica.options.rt.ommStats": "OMM 統計ログ",

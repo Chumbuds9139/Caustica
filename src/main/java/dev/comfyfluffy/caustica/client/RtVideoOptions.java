@@ -98,6 +98,7 @@ public final class RtVideoOptions {
         }
         options.add(omm());
         options.add(ommSubdivision());
+        options.add(bool("caustica.options.rt.pauseWhenUnfocused", CausticaConfig.Rt.PAUSE_WHEN_UNFOCUSED));
         return options.toArray(OptionInstance<?>[]::new);
     }
 

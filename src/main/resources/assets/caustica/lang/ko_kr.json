@@ -288,6 +288,8 @@
 	"caustica.options.rt.blasCompaction.tooltip": "구축 후 지형 가속 구조를 압축합니다. 빌드 시간은 약간 길어지지만 BLAS 메모리가 대략 절반이 됩니다. 바꾸면 지형이 완전히 재구축되므로 이전 상태의 섹션은 남지 않습니다.",
 	"caustica.options.rt.ommSubdivision": "OMM 세분화",
 	"caustica.options.rt.ommSubdivision.tooltip": "Opacity 마이크로맵의 마이크로 삼각형 세분화 레벨(0 = 거칠고 저렴, 최대 6 = 가장 타이트한 컷아웃 마스크). 높을수록 잎과 풀의 실루엣을 더 정밀하게 맞춥니다. 바꾸면 지형이 완전히 재구축됩니다.",
+	"caustica.options.rt.pauseWhenUnfocused": "포커스 해제 시 렌더링 일시 정지",
+	"caustica.options.rt.pauseWhenUnfocused.tooltip": "게임 창의 포커스가 1초 동안 벗어나면 레이 트레이싱을 포함한 렌더링을 멈춥니다. 게임 자체(접속, 틱, 소리)는 계속 동작하며, 창은 마지막 프레임을 유지하다가 다시 돌아오면 재개됩니다. 다른 창을 앞에 둔 채로 게임을 녹화하거나 방송한다면 끄세요.",
 	"caustica.options.rt.frameStats": "프레임 통계 로깅",
 	"caustica.options.rt.frameStats.tooltip": "프레임별 RT 타이밍과 히치 보고서를 콘솔에 기록합니다(렌더 스테이지별 분해). 끄면 로그가 조용합니다.",
 	"caustica.options.rt.ommStats": "OMM 통계 로깅",
