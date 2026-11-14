@@ -24,8 +24,8 @@ public static const uint CULL_SECONDARY_FAR = 0x20u;
 // The mask the current shading point's shadow rays use: CULL_SECONDARY, or CULL_SECONDARY_FAR when the
 // point was reached by a deep diffuse bounce. Set by world.rgen per bounce; per-invocation state.
 public static uint gv_secondaryCull = CULL_SECONDARY;
-// Raygen sets this on a show-celestial ray that should still take the cheap sky/cloud tier (F8 experiment
-// FEATURE_TRY_MIRROR_MEDIA); it travels to world.rmiss as PAYLOAD_CHEAP_MEDIA. False in normal play.
+// Raygen sets this on a show-celestial ray that should still take the cheap sky/cloud tier
+// (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY); it travels to world.rmiss as PAYLOAD_CHEAP_MEDIA.
 public static bool gv_cheapMedia = false;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles

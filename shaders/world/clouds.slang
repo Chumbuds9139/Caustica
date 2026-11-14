@@ -213,6 +213,11 @@ public static const int   CLOUD_LIGHT_STEPS_CHEAP = 2;
 // travel several slab depths through the deck; these cap the cost of that.
 public static const int   CLOUD_MARCH_STEPS_MAX = 44;
 public static const int   CLOUD_MARCH_STEPS_CHEAP_MAX = 12;
+// The fast full tier (FEATURE_FAST_VOLUMETRIC_CLOUDS): a lower cap along the ray and fewer samples toward
+// the sun. The F8 test measured it at about 7 ms of a 62 ms frame; the deck keeps its shape, and only the
+// longest grazing rays near the horizon are sampled more coarsely.
+public static const int   CLOUD_MARCH_STEPS_FAST_MAX = 24;
+public static const int   CLOUD_LIGHT_STEPS_FAST = 3;
 // Target distance between samples. Comfortably finer than a lobe, so the march resolves shape.
 public static const float CLOUD_TARGET_STEP_BLOCKS = 2.5;
 public static const float CLOUD_EXTINCTION = 0.115; // per block, at density 1
@@ -1104,10 +1109,11 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
                               float3 skyBehind, bool highQuality) {
     int marchSteps = highQuality ? CLOUD_MARCH_STEPS : CLOUD_MARCH_STEPS_CHEAP;
     int lightSteps = highQuality ? CLOUD_LIGHT_STEPS : CLOUD_LIGHT_STEPS_CHEAP;
-    // F8 experiment: a lighter full tier (see FEATURE_TRY_LIGHT_CLOUD_MARCH).
-    bool lighterFull = highQuality && worldFeature(push, FEATURE_TRY_LIGHT_CLOUD_MARCH);
+    // The fast full tier (FEATURE_FAST_VOLUMETRIC_CLOUDS, a video option): fewer samples toward the sun
+    // here and a lower cap on samples along the ray below.
+    bool lighterFull = highQuality && worldFeature(push, FEATURE_FAST_VOLUMETRIC_CLOUDS);
     if (lighterFull) {
-        lightSteps = 3;
+        lightSteps = CLOUD_LIGHT_STEPS_FAST;
     }
     CloudVolume result;
     result.scatter = float3(0.0, 0.0, 0.0);
@@ -1177,7 +1183,8 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     // Scale the step count to the distance actually being marched, so a grazing ray through several
     // slab depths is sampled as finely as a vertical one instead of simply taking longer strides.
     // Clamped both ways: never coarser than the base count, never more expensive than the cap.
-    int stepCap = highQuality ? (lighterFull ? 24 : CLOUD_MARCH_STEPS_MAX) : CLOUD_MARCH_STEPS_CHEAP_MAX;
+    int stepCap = highQuality ? (lighterFull ? CLOUD_MARCH_STEPS_FAST_MAX : CLOUD_MARCH_STEPS_MAX)
+                              : CLOUD_MARCH_STEPS_CHEAP_MAX;
     marchSteps = clamp(int((t1 - t0) / CLOUD_TARGET_STEP_BLOCKS), marchSteps, stepCap);
     float stepLen = (t1 - t0) / float(marchSteps);
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
@@ -1314,9 +1321,7 @@ public CloudVolume cloudSegment(WorldPush push, float3 originRel, float3 dir, fl
     //   * a (near) zero thickness collapses to the flat sheet, which is what that slider setting asks
     //     for. It shades like the classic deck of whichever style is active.
     bool classic = cloudStyle(push) == CLOUD_STYLE_CLASSIC;
-    // F8 experiment: the cheap tier draws the deck as the flat sheet below instead of the slab.
-    bool flatCheap = !highQuality && worldFeature(push, FEATURE_TRY_FLAT_INDIRECT_CLOUDS);
-    if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON && !flatCheap) {
+    if (push.cloudAnchor.z > CLOUD_FLAT_EPSILON) {
         if (classic && push.cloudCellsAddr != 0u) {
             return cloudClassicBoxes(push, originRel, dir, maxDistance, ambient);
         }

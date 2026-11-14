@@ -700,6 +700,22 @@ public final class CausticaConfig {
             public static final IntSetting SPP = intAtLeast("caustica.rt.spp", "composite.spp", 1, 1);
             public static final IntSetting MAX_BOUNCES =
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
+            /**
+             * Russian roulette from the first bounce instead of the second at four or more bounces (with
+             * fewer it already starts at the first). Unbiased: a path that survives carries the light of
+             * the ones that stopped, so only the noise in multi-bounce light rises. Measured at about
+             * 12 ms of a 62 ms frame with four bounces on a laptop RTX 4050.
+             */
+            public static final BooleanSetting EARLY_ROULETTE =
+                    bool("caustica.rt.earlyRoulette", "composite.early-roulette", true);
+            /**
+             * Sky, clouds and fog at full quality only along a mirror chain the camera sees. Once a path
+             * has scattered off a diffuse or rough lobe, its later specular rays take the cheap tier that
+             * diffuse rays always use; clear reflections such as water and glass keep the full one.
+             * Measured at about 9 ms of a 62 ms frame.
+             */
+            public static final BooleanSetting SIMPLE_ROUGH_REFLECTION_SKY =
+                    bool("caustica.rt.simpleRoughReflectionSky", "composite.simple-rough-reflection-sky", true);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
             /**
@@ -834,6 +850,13 @@ public final class CausticaConfig {
             public static final StringSetting CLOUD_STYLE =
                     string("caustica.rt.cloudStyle", "composite.cloud-style", "classic",
                             Composite::sanitizeCloudStyle);
+            /**
+             * A lighter full-quality march for volumetric clouds seen directly or in a clear reflection:
+             * at most 24 samples along the ray instead of 44 and 3 toward the sun instead of 5. Only the
+             * volumetric style marches. Measured at about 7 ms of a 62 ms frame.
+             */
+            public static final BooleanSetting FAST_VOLUMETRIC_CLOUDS =
+                    bool("caustica.rt.fastVolumetricClouds", "composite.fast-volumetric-clouds", true);
             /**
              * Classic cloud thickness, 0..1, as a fraction of {@code RtComposite}'s declared maximum.
              *

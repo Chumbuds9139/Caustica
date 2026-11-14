@@ -247,6 +247,8 @@ public final class RtSubScreens {
         return List.of(
                 CausticaConfig.Rt.Composite.SPP,
                 CausticaConfig.Rt.Composite.MAX_BOUNCES,
+                CausticaConfig.Rt.Composite.EARLY_ROULETTE,
+                CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY,
                 CausticaConfig.Rt.DlssRr.ENABLED,
                 CausticaConfig.Rt.DlssRr.QUALITY,
                 CausticaConfig.Rt.DlssRr.PRESET,
@@ -392,6 +394,7 @@ public final class RtSubScreens {
                 CausticaConfig.Rt.Composite.CLOUD_THICKNESS,
                 CausticaConfig.Rt.Composite.CLOUD_MIN_THICKNESS,
                 CausticaConfig.Rt.Composite.CLOUD_MAX_THICKNESS,
+                CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS,
                 CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH,
                 CausticaConfig.Rt.Composite.CLOUD_OPACITY,
                 CausticaConfig.Rt.Composite.RAIN_CLOUD_RESPONSE,

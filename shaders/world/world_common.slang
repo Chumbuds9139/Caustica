@@ -320,23 +320,15 @@ public static const uint SER_KEY_HIT = 1u;          // hit object alone
 public static const uint SER_KEY_HINT = 2u;         // coherence hint alone
 public static const uint SER_BOUNCES_SHIFT = 12u; // 4 bits: leading bounces on the hit-object path
 public static const uint SER_BOUNCES_MASK = 0xFu; // 15 = every bounce
-// Experiments, set only while the F8 performance test runs one of its "try:" rows. Each is a cheaper
-// way to render something that a setting could later adopt; the test measures what it would save. They
-// change the image and are never set in normal play.
-// Full-quality sky, clouds and fog only along a mirror chain the camera sees: once a path has scattered
-// diffusely or off a rough lobe, later specular rays take the cheap tier like diffuse rays already do.
-public static const uint FEATURE_TRY_MIRROR_MEDIA = 0x10000000u;
+// Speed-ups chosen with the F8 performance test; each is a video option, on by default.
+// Sky, clouds and fog at full quality only along a mirror chain the camera sees: once a path has
+// scattered off a diffuse or rough lobe, its later specular rays take the cheap tier diffuse rays use.
+public static const uint FEATURE_SIMPLE_ROUGH_REFLECTION_SKY = 65536u;
 public static const float MIRROR_MEDIA_MAX_ALPHA = 0.2; // GGX alpha above which a specular lobe counts as rough
-// Cheap-tier clouds (diffuse and, with the above, rough-specular rays) as the flat sheet: one plane hit
-// instead of the volumetric march or the classic box walk.
-public static const uint FEATURE_TRY_FLAT_INDIRECT_CLOUDS = 0x20000000u;
 // Russian roulette from the first bounce instead of the second at four or more bounces.
-public static const uint FEATURE_TRY_EARLY_ROULETTE = 0x40000000u;
-// Emitter RIS at half of the vertices past the first hit, picked at random; the other half gather
-// emitters on a hit instead. Each vertex uses exactly one of the two, so the estimate stays unbiased.
-public static const uint FEATURE_TRY_HALF_DEEP_RIS = 0x08000000u;
-// Camera and mirror-ray volumetric clouds with fewer samples: march cap 44 -> 24, light march 5 -> 3.
-public static const uint FEATURE_TRY_LIGHT_CLOUD_MARCH = 0x04000000u;
+public static const uint FEATURE_EARLY_ROULETTE = 131072u;
+// Full-tier volumetric cloud march with fewer samples: march cap 44 -> 24, light march 5 -> 3.
+public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -522,7 +514,7 @@ public static const uint PAYLOAD_VIEWMODEL = 16384u;
 // reordered trace or from an ordinary TraceRay through the very same acceleration structures.
 public static const uint PAYLOAD_REORDERED = 32768u;
 // Set by raygen on a show-celestial ray that should still take the cheap sky/cloud tier (see
-// FEATURE_TRY_MIRROR_MEDIA). world.rmiss reads it; nothing else does. Never set outside that experiment.
+// FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). world.rmiss reads it; nothing else does.
 public static const uint PAYLOAD_CHEAP_MEDIA = 65536u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;

@@ -289,12 +289,10 @@ public final class RtComposite {
     private static final int FEATURE_SER_NO_REORDER = 0x200;
     private static final int SER_KEY_SHIFT = 10;
     private static final int SER_BOUNCES_SHIFT = 12;
-    // F8 performance-test experiments (world_common.slang FEATURE_TRY_*): never set in normal play.
-    public static final int FEATURE_TRY_MIRROR_MEDIA = 0x10000000;
-    public static final int FEATURE_TRY_FLAT_INDIRECT_CLOUDS = 0x20000000;
-    public static final int FEATURE_TRY_EARLY_ROULETTE = 0x40000000;
-    public static final int FEATURE_TRY_HALF_DEEP_RIS = 0x08000000;
-    public static final int FEATURE_TRY_LIGHT_CLOUD_MARCH = 0x04000000;
+    // Speed-ups chosen with the F8 performance test, each a video option (see CausticaConfig).
+    private static final int FEATURE_SIMPLE_ROUGH_REFLECTION_SKY = 65536;
+    private static final int FEATURE_EARLY_ROULETTE = 131072;
+    private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -309,7 +307,7 @@ public final class RtComposite {
      * other runtime-tunable option in the renderer does.
      */
     private static int featureFlags() {
-        int flags = RtPerfSweep.probeFeatureBits();
+        int flags = 0;
         ClientLevel level = Minecraft.getInstance().level;
         flags |= RtSerGuard.bounces(level, dimensionId(level)) << SER_BOUNCES_SHIFT;
         flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;
@@ -318,6 +316,15 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.SSS.value()) {
             flags |= FEATURE_SSS;
+        }
+        if (CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.value()) {
+            flags |= FEATURE_SIMPLE_ROUGH_REFLECTION_SKY;
+        }
+        if (CausticaConfig.Rt.Composite.EARLY_ROULETTE.value()) {
+            flags |= FEATURE_EARLY_ROULETTE;
+        }
+        if (CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value()) {
+            flags |= FEATURE_FAST_VOLUMETRIC_CLOUDS;
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;

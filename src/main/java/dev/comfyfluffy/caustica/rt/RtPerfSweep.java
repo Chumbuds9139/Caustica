@@ -22,9 +22,9 @@ import net.minecraft.network.chat.Component;
  * <p>GPU timestamps can time a whole dispatch but not the pieces of one shader. This measures the pieces
  * by subtraction instead: it runs the scene with the player's own settings, then with one change at a
  * time, and reports how much GPU time each change removed. The changes are kept few so the test stays
- * short: first the "try:" experiments, cheaper ways to render something that a setting could adopt
- * (shader bits that exist only while their row runs), in the order of what they are expected to save;
- * then the expensive features switched off, as the most any experiment on them could win.
+ * short: first the speed-up options switched off, which shows what each is still worth here (a positive
+ * "saved" means it costs that much to have it off); then the expensive features switched off, as the
+ * most any further work on them could win.
  *
  * <p>A laptop GPU's clock drifts by more than most single features cost while it heats up, so the
  * player's settings are measured again between every two variants and each variant is compared with the
@@ -56,13 +56,6 @@ public final class RtPerfSweep {
     private Runnable restore;
     /** The settings the test started from, printed at the top of the report. */
     private String context;
-    // Experiment bits of the row being measured (RtComposite.FEATURE_TRY_*); zero outside "try:" rows.
-    private static volatile int probeBits;
-
-    /** Experiment bits for {@code WorldPush.featureFlags}: zero unless a "try:" row of the test is running. */
-    public static int probeFeatureBits() {
-        return probeBits;
-    }
     private int variantIndex = -1;
     private int frameInVariant;
     private long lastFrameNanos;
@@ -121,42 +114,37 @@ public final class RtPerfSweep {
         boolean clouds = CausticaConfig.Rt.Composite.CLOUDS.value();
         boolean fog = CausticaConfig.Rt.Composite.FOG_ENABLED.value();
         boolean volumetric = CausticaConfig.Rt.Composite.cloudStyleIndex() == 1;
+        boolean simpleSky = CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.value();
+        boolean earlyRoulette = CausticaConfig.Rt.Composite.EARLY_ROULETTE.value();
+        boolean fastClouds = CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
         context = String.format(Locale.ROOT, "bounces %d, samples per pixel %d, RIS candidates %d, "
                 + "clouds %s, fog %s", bounces, spp, ris, cloudText, fog ? "on" : "off");
         restore = () -> {
-            probeBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
             CausticaConfig.Rt.Composite.FOG_ENABLED.set(fog);
+            CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(simpleSky);
+            CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(earlyRoulette);
+            CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
         };
         List<Variant> tests = new ArrayList<>();
-        // Experiments, the one expected to save the most first. Each row is shown on its own; the last
-        // one runs every experiment above it at once.
-        int all = 0;
-        all |= addExperiment(tests, "try: full-quality sky/clouds/fog in mirrors only",
-                RtComposite.FEATURE_TRY_MIRROR_MEDIA);
-        if (clouds) {
-            all |= addExperiment(tests, "try: flat clouds in indirect light",
-                    RtComposite.FEATURE_TRY_FLAT_INDIRECT_CLOUDS);
+        // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
+        // worth. Rows for options that change nothing in this scene are left out.
+        if (simpleSky) {
+            tests.add(new Variant("simplified sky in rough reflections off", false,
+                    () -> CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(false)));
         }
-        if (bounces >= 4) {
-            all |= addExperiment(tests, "try: roulette from the first bounce",
-                    RtComposite.FEATURE_TRY_EARLY_ROULETTE);
+        if (earlyRoulette && bounces >= 4) {
+            tests.add(new Variant("early path termination off", false,
+                    () -> CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(false)));
         }
-        if (ris > 0) {
-            all |= addExperiment(tests, "try: block-light sampling at half the deep hits",
-                    RtComposite.FEATURE_TRY_HALF_DEEP_RIS);
+        if (fastClouds && clouds && volumetric) {
+            tests.add(new Variant("fast volumetric clouds off", false,
+                    () -> CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(false)));
         }
-        if (clouds && volumetric) {
-            all |= addExperiment(tests, "try: lighter cloud march for camera rays",
-                    RtComposite.FEATURE_TRY_LIGHT_CLOUD_MARCH);
-        }
-        if (Integer.bitCount(all) > 1) {
-            addExperiment(tests, "try: all of the above", all);
-        }
-        // The most anything could win: the expensive features switched off outright.
+        // The most anything further could win: the expensive features switched off outright.
         if (clouds) {
             tests.add(new Variant("clouds off", false, () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));
         }
@@ -173,11 +161,6 @@ public final class RtPerfSweep {
             variants.add(test);
             variants.add(baselineVariant());
         }
-    }
-
-    private static int addExperiment(List<Variant> tests, String name, int bits) {
-        tests.add(new Variant(name, false, () -> probeBits = bits));
-        return bits;
     }
 
     private static Variant baselineVariant() {
@@ -333,8 +316,8 @@ public final class RtPerfSweep {
             sb.append("WARNING: the player moved during the test; differences mix setting cost with scene change.\n");
         }
         sb.append("'saved' is the time a change removes from the indirect pass and from the whole RT frame, "
-                + "relative to the mean of the baselines measured just before and after it (negative = cheaper). "
-                + "'try:' rows are experiments that change the picture only while they run. FPS includes CPU time.\n");
+                + "relative to the mean of the baselines measured just before and after it (negative = cheaper, "
+                + "positive = the option turned off was saving that much). FPS includes CPU time.\n");
         return sb.toString();
     }
 

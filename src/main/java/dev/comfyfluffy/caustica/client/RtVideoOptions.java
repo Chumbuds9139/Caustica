@@ -76,6 +76,10 @@ public final class RtVideoOptions {
         List<OptionInstance<?>> options = new ArrayList<>();
         options.add(spp());
         options.add(maxBounces());
+        // Speed-ups the F8 test measured as worth keeping, on by default (see CausticaConfig).
+        options.add(bool("caustica.options.rt.earlyRoulette", CausticaConfig.Rt.Composite.EARLY_ROULETTE));
+        options.add(bool("caustica.options.rt.simpleRoughReflectionSky",
+                CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY));
         options.add(upscaler(upscalerChanged));
         String mode = RtUpscalerSupport.currentUpscalerMode();
         if (RtUpscalerSupport.MODE_DLSS.equals(mode)) {
@@ -270,6 +274,8 @@ public final class RtVideoOptions {
             options.add(cloudCoverage());
             options.add(cloudMinThickness());
             options.add(cloudMaxThickness());
+            options.add(bool("caustica.options.rt.fastVolumetricClouds",
+                    CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS));
         }
         options.add(cloudHeight());
         if (classic) {

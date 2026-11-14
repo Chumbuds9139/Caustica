@@ -304,7 +304,7 @@ void main(inout Payload payload) {
     bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
     bool rayInWater = (payload.flags & PAYLOAD_RAY_IN_WATER) != 0u;
     // Full-quality atmosphere and clouds: what showCelestial chose, unless raygen marked this ray for the
-    // cheap tier (F8 experiment FEATURE_TRY_MIRROR_MEDIA). The sun/moon disc below keeps showCelestial.
+    // cheap tier (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). The sun/moon disc below keeps showCelestial.
     bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
 
     float3 mdir = dir;
