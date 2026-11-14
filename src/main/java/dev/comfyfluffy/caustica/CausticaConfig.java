@@ -1329,13 +1329,13 @@ public final class CausticaConfig {
         /**
          * Shader Execution Reordering (VK_EXT_ray_tracing_invocation_reorder) for the indirect trace. It
          * only regroups rays for speed and never changes the image. Read once at device creation, so a
-         * change needs a restart. Off by default: every device-loss fault seen so far sat inside the one
-         * dispatch that uses it (some of them writes into driver-owned memory), and sessions with it off
-         * did not crash.
+         * change needs a restart. On by default. The device losses it used to be tied to came with
+         * out-of-range terrain hits on reordered traces while terrain was being rebuilt; the indirect raygen
+         * now checks every terrain hit object before and after the reorder and drops a bad one as a miss.
          */
         public static final class Reorder {
             public static final BooleanSetting ENABLED =
-                    bool("caustica.rt.shaderReorder", "reorder.enabled", false);
+                    bool("caustica.rt.shaderReorder", "reorder.enabled", true);
             /** Leading bounces per path that take the hit-object path; 15 means every bounce. Live. */
             public static final IntSetting BOUNCES =
                     clampedInt("caustica.rt.shaderReorderBounces", "reorder.bounces", 15, 0, 15);
