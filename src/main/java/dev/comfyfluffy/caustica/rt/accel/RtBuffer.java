@@ -6,6 +6,11 @@ import org.lwjgl.util.vma.Vma;
 /**
  * A VMA-backed Vulkan buffer with a device address (for RT geometry, scratch, SBT, etc.).
  * Created via {@link dev.comfyfluffy.caustica.rt.RtContext#createBuffer}; freed with {@link #destroy()}.
+ *
+ * <p>An instance can also be a lease on a buffer owned by {@link RtScratchPool}: the same handle and
+ * address, and {@link #destroy()} hands the buffer back to the pool instead of freeing it. Every lease is
+ * its own object, so a second {@code destroy()} by a holder that already gave it back is a no-op and
+ * cannot return the buffer while the next lease is using it.
  */
 public final class RtBuffer {
     public final long handle;
@@ -22,6 +27,8 @@ public final class RtBuffer {
 
     private final long vma;
     private boolean destroyed;
+    private final RtScratchPool pool; // non-null for a lease
+    private final RtBuffer pooled;    // the pool's buffer a lease borrows
 
     public RtBuffer(long vma, long handle, long allocation, long deviceAddress, long mapped, long size, int usage,
                     boolean hostVisible, String label) {
@@ -33,10 +40,44 @@ public final class RtBuffer {
         this.size = size;
         this.usage = usage;
         this.hostVisible = hostVisible;
+        this.pool = null;
+        this.pooled = null;
         VulkanDiagnostics.registerBuffer(deviceAddress, size, handle, label);
     }
 
+    /** A lease on {@code pooled}, named {@code label} in the diagnostics registry while it is out. */
+    RtBuffer(RtBuffer pooled, RtScratchPool pool, String label) {
+        this.vma = pooled.vma;
+        this.handle = pooled.handle;
+        this.allocation = pooled.allocation;
+        this.deviceAddress = pooled.deviceAddress;
+        this.mapped = pooled.mapped;
+        this.size = pooled.size;
+        this.usage = pooled.usage;
+        this.hostVisible = pooled.hostVisible;
+        this.pool = pool;
+        this.pooled = pooled;
+        VulkanDiagnostics.registerBuffer(deviceAddress, size, handle, label);
+    }
+
+    /** True the first time a lease is handed back; the pool calls this under its own lock. */
+    boolean returnLease() {
+        if (destroyed) {
+            return false;
+        }
+        destroyed = true;
+        return true;
+    }
+
+    RtBuffer pooledBuffer() {
+        return pooled;
+    }
+
     public void destroy() {
+        if (pool != null) {
+            pool.release(this);
+            return;
+        }
         if (!destroyed && handle != 0L) {
             VulkanDiagnostics.unregisterBuffer(deviceAddress, handle);
             Vma.vmaDestroyBuffer(vma, handle, allocation);

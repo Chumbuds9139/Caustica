@@ -88,7 +88,13 @@ public final class RtAccel {
     private static final java.util.concurrent.atomic.AtomicBoolean OMM_PREP_FAILURE_LOGGED =
             new java.util.concurrent.atomic.AtomicBoolean();
 
+    /** Scratch for one build, lent by the context's pool; destroy() gives it back once the build is done. */
     private static RtBuffer createScratchBuffer(RtContext ctx, long requiredSize, String label) {
+        return ctx.scratchPool().acquire(requiredSize, label);
+    }
+
+    /** Scratch kept for as long as its owner lives (the TLAS ring), so not worth lending from the pool. */
+    private static RtBuffer createPersistentScratchBuffer(RtContext ctx, long requiredSize, String label) {
         long alignment = ctx.accelerationStructureScratchAlignment();
         return ctx.createAlignedBuffer(Math.max(requiredSize, alignment), VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 false, label, alignment);
@@ -1206,7 +1212,7 @@ public final class RtAccel {
             RtContext.check(vkCreateAccelerationStructureKHR(vk, ci, null, pAs), "vkCreateAccelerationStructureKHR");
             long handle = pAs.get(0);
             RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
-            slot.scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
+            slot.scratch = createPersistentScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack)
                     .sType$Default().accelerationStructure(handle);
             long deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo);

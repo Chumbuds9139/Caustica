@@ -56,6 +56,12 @@ public final class RtGpuExecutor {
     private final AtomicLong pendingPublishWaitValue = new AtomicLong();
     private final AtomicLong nextGraphicsValue = new AtomicLong();
     private final AtomicLong latestGraphicsUseValue = new AtomicLong();
+    // Every build value up to this one has finished: completed on the GPU, cancelled before recording, or
+    // failed. Advanced per batch, never per job, so a cancelled job cannot overtake an earlier one.
+    private final AtomicLong finishedBuildValue = new AtomicLong();
+    // Guards the timeline semaphores against being queried from another thread while shutdown destroys them.
+    private final Object timelineLock = new Object();
+    private boolean timelinesDestroyed;
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
     private final Object submissionLock = new Object();
     private long submittedBuildValue;
@@ -70,7 +76,7 @@ public final class RtGpuExecutor {
         this.buildTimeline = createTimeline("RT terrain build timeline");
         this.graphicsTimeline = createTimeline("RT graphics-use timeline");
         createCommandPool();
-        RtAccelRegistry.trackGraphics(() -> queryTimeline(graphicsTimeline), latestGraphicsUseValue::get);
+        RtAccelRegistry.trackGraphics(this::completedGraphicsValue, latestGraphicsUseValue::get);
         this.thread = new Thread(this::run, "Caustica GPU executor");
         this.thread.setDaemon(true);
         this.thread.start();
@@ -143,6 +149,31 @@ public final class RtGpuExecutor {
     public GraphicsUse latestGraphicsUse() {
         assertRenderThread();
         return new GraphicsUse(latestGraphicsUseValue.get());
+    }
+
+    /**
+     * The graphics-timeline value the GPU has finished, from any thread. {@link Long#MAX_VALUE} once
+     * shutdown has idled the device and destroyed the timeline: everything has finished by then.
+     */
+    public long completedGraphicsValue() {
+        synchronized (timelineLock) {
+            return timelinesDestroyed ? Long.MAX_VALUE : queryTimeline(graphicsTimeline);
+        }
+    }
+
+    /** The newest frame value handed out, including a frame still being recorded. Any thread. */
+    public long reservedGraphicsValue() {
+        return nextGraphicsValue.get();
+    }
+
+    /** The newest build value handed out, including builds still queued. Any thread. */
+    public long assignedBuildValue() {
+        return nextBuildValue.get();
+    }
+
+    /** Every build value up to this one has finished on the GPU or will never run. Any thread. */
+    public long finishedBuildValue() {
+        return finishedBuildValue.get();
     }
 
     /** Rethrow a latched executor failure on the calling thread. */
@@ -227,8 +258,11 @@ public final class RtGpuExecutor {
         }
         VK10.vkDestroyCommandPool(ctx.vk(), commandPool, null);
         commandPool = 0L;
-        VK10.vkDestroySemaphore(ctx.vk(), graphicsTimeline, null);
-        VK10.vkDestroySemaphore(ctx.vk(), buildTimeline, null);
+        synchronized (timelineLock) {
+            timelinesDestroyed = true;
+            VK10.vkDestroySemaphore(ctx.vk(), graphicsTimeline, null);
+            VK10.vkDestroySemaphore(ctx.vk(), buildTimeline, null);
+        }
         if (failure != null) {
             throw new IllegalStateException("RT GPU executor shutdown failed", failure);
         }
@@ -292,6 +326,8 @@ public final class RtGpuExecutor {
                     }
                 }
             }
+            // The queue is FIFO in value order, so the batch's last job holds its largest value.
+            finishedBuildValue.accumulateAndGet(batch.get(batch.size() - 1).build.value, Math::max);
             if (!processDestroyJobsSafely()) {
                 failQueuedJobs(executorFailure);
                 return;
@@ -332,6 +368,7 @@ public final class RtGpuExecutor {
         while ((job = jobs.poll()) != null) {
             if (job != STOP && job != WAKE) {
                 finishJob(job, terminal);
+                finishedBuildValue.accumulateAndGet(job.build.value, Math::max); // never recorded
             }
         }
     }

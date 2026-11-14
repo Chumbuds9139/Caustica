@@ -36,6 +36,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkSubmitInfo;
 
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.RtScratchPool;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 
 import java.nio.LongBuffer;
@@ -61,6 +62,7 @@ public final class RtContext {
     /** Serializes device-wide host waits against submissions from the Caustica compute thread. */
     private final Object deviceQueueHostLock = new Object();
     private final RtGpuExecutor gpuExecutor;
+    private final RtScratchPool scratchPool;
     private final int shaderGroupHandleSize;
     private final int shaderGroupBaseAlignment;
     private final int shaderGroupHandleAlignment;
@@ -87,6 +89,7 @@ public final class RtContext {
         this.updateAfterBindCombinedImageSamplerLimit = updateAfterBindCombinedImageSamplerLimit;
         this.timestampPeriodNanos = timestampPeriodNanos;
         this.gpuExecutor = new RtGpuExecutor(this);
+        this.scratchPool = RtScratchPool.create(this);
     }
 
     /** The RT context for the current Vulkan device, or null if RT/Vulkan isn't available. */
@@ -196,6 +199,11 @@ public final class RtContext {
 
     public long vma() {
         return vma;
+    }
+
+    /** Lends acceleration-structure build scratch; see {@link RtScratchPool}. */
+    public RtScratchPool scratchPool() {
+        return scratchPool;
     }
 
     public RtGpuExecutor gpuExecutor() {
@@ -533,7 +541,8 @@ public final class RtContext {
     }
 
     public void destroy() {
-        gpuExecutor.shutdown();
+        gpuExecutor.shutdown(); // idles the device and runs the queued destroys, which return their scratch
+        scratchPool.close();
         if (commandPool != 0L) {
             VK10.vkDestroyCommandPool(vk, commandPool, null);
             commandPool = 0L;

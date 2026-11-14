@@ -415,6 +415,10 @@ public final class VulkanDiagnostics {
         CausticaMod.LOGGER.error("Vulkan device lost while {}", operation);
         logRuntimeSnapshot();
         CausticaMod.LOGGER.error("{}", dev.comfyfluffy.caustica.rt.accel.RtAccelRegistry.summary());
+        String scratchPool = dev.comfyfluffy.caustica.rt.accel.RtScratchPool.summary();
+        if (scratchPool != null) {
+            CausticaMod.LOGGER.error("{}", scratchPool);
+        }
         if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
             CausticaMod.LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");
             return;
