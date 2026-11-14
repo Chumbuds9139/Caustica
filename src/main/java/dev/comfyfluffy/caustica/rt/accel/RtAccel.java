@@ -136,6 +136,7 @@ public final class RtAccel {
             return;
         }
         if (handle != 0L) {
+            RtAccelRegistry.destroyed(deviceAddress, handle); // a no-op for the TLAS ring's structures
             vkDestroyAccelerationStructureKHR(vk, handle, null);
         }
         if (opacityMicromap != null) {
@@ -779,7 +780,9 @@ public final class RtAccel {
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack)
                     .sType$Default().accelerationStructure(handle);
             long deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo);
-            return new RtAccel(vk, handle, deviceAddress, backing, ownsBacking, opacityMicromap);
+            RtAccel accel = new RtAccel(vk, handle, deviceAddress, backing, ownsBacking, opacityMicromap);
+            RtAccelRegistry.created(deviceAddress, handle, label);
+            return accel;
         } catch (Throwable t) {
             vkDestroyAccelerationStructureKHR(vk, handle, null);
             throw t;
@@ -1036,11 +1039,14 @@ public final class RtAccel {
         }
         ring.cursor = (ring.cursor + 1) % TlasRing.RING;
 
-        TlasAudit audit = TlasAudit.begin(count);
-        writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0, audit);
-        writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount, audit);
-        if (audit != null && audit.finish()) {
-            // The audit's own premise failed (see TlasAudit): write the list again exactly as given.
+        TlasAudit audit = TlasAudit.begin(count, graphicsUse.value());
+        if (audit != null) {
+            synchronized (RtAccelRegistry.lock()) { // one lock for every instance's lookup
+                writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0, audit);
+                writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount, audit);
+            }
+            audit.finish();
+        } else {
             writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0, null);
             writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount, null);
         }
@@ -1087,23 +1093,26 @@ public final class RtAccel {
      * one whose transform is not finite. Neither can be detected after the fact, both are cheap to detect
      * here, and dropping the instance for a frame is invisible next to a crash.
      *
-     * <p>Liveness uses the diagnostics address registry, which assumes a structure's device address lies
-     * inside its backing buffer. That holds on current drivers but is not promised by Vulkan, so the audit
-     * checks its own premise: if most of a frame's instances look dead, the premise is wrong, the frame is
-     * written unfiltered and the liveness half is switched off for the session.
+     * <p>Liveness is the exact device address of a live structure in {@link RtAccelRegistry}. It used to
+     * be "inside some live buffer", which a destroyed structure still passes as soon as its memory is
+     * handed to another buffer, and buffers come and go hundreds of times a second. Every instance address
+     * is taken from {@link RtAccel#deviceAddress} of a structure made by {@code createBlasOn}, which
+     * registers it, so the exact check has no premise to fail. The audit also tells the registry which
+     * frame last named each structure, so destroying one before that frame is done is caught as well.
      */
     private static final class TlasAudit {
         static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-        private static volatile boolean livenessUsable = true;
         private static long lastLogNanos;
         private static final TlasAudit SHARED = new TlasAudit();
 
+        private long graphicsUse;
         private int total;
         private int dead;
         private int nonFinite;
         private int firstDeadIndex;
+        private long firstDeadReference;
 
-        static TlasAudit begin(int count) {
+        static TlasAudit begin(int count, long graphicsUse) {
             boolean enabled;
             try {
                 enabled = dev.comfyfluffy.caustica.CausticaConfig.Rt.Stability.VALIDATE_TLAS.value();
@@ -1114,14 +1123,16 @@ public final class RtAccel {
                 return null;
             }
             TlasAudit audit = SHARED; // render thread only
+            audit.graphicsUse = graphicsUse;
             audit.total = 0;
             audit.dead = 0;
             audit.nonFinite = 0;
             audit.firstDeadIndex = 0;
+            audit.firstDeadReference = 0L;
             return audit;
         }
 
-        /** True when the instance may be traversed as given. */
+        /** True when the instance may be traversed as given. Caller holds the registry lock. */
         boolean accept(Instance instance) {
             total++;
             float[] m = instance.transform3x4();
@@ -1134,39 +1145,39 @@ public final class RtAccel {
                 return false;
             }
             long reference = instance.blasDeviceAddress();
-            if (livenessUsable && reference != 0L
-                    && !dev.comfyfluffy.caustica.rt.VulkanDiagnostics.isLiveBufferAddress(reference)) {
+            if (reference != 0L && !RtAccelRegistry.acceptLocked(reference, graphicsUse)) {
                 if (dead++ == 0) {
                     firstDeadIndex = instance.customIndex();
+                    firstDeadReference = reference;
                 }
                 return false;
             }
             return true;
         }
 
-        /** @return true if the caller must rewrite the instance list without the audit */
-        boolean finish() {
-            if (dead * 2 > total) {
-                livenessUsable = false;
-                dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn(
-                        "TLAS audit: {} of {} instances were not found in the buffer registry, so this driver "
-                                + "does not place structure addresses inside their backing buffers; the liveness "
-                                + "check is disabled for this session", dead, total);
-                return true;
+        void finish() {
+            if (dead + nonFinite == 0) {
+                return;
             }
-            if (dead + nonFinite > 0) {
-                long now = System.nanoTime();
-                if (now - lastLogNanos >= 5_000_000_000L || lastLogNanos == 0L) {
-                    lastLogNanos = now;
-                    dev.comfyfluffy.caustica.CausticaMod.LOGGER.error(
-                            "TLAS audit: dropped {} instance(s) referencing a destroyed BLAS and {} with a "
-                                    + "non-finite transform out of {} this frame (first dead instance custom "
-                                    + "index 0x{}: bit 23 = entity, bit 22 = particle, both = LOD, neither = "
-                                    + "terrain). This would have been a lost device; please report this line.",
-                            dead, nonFinite, total, Integer.toHexString(firstDeadIndex));
-                }
+            String kind = (firstDeadIndex & 0xC00000) == 0xC00000 ? "LOD"
+                    : (firstDeadIndex & 0x800000) != 0 ? "entity"
+                    : (firstDeadIndex & 0x400000) != 0 ? "particle" : "terrain";
+            if (dead > 0) {
+                RtAccelRegistry.noteDropped(dead, kind + " instance 0x" + Integer.toHexString(firstDeadIndex));
             }
-            return false;
+            long now = System.nanoTime();
+            if (now - lastLogNanos >= 5_000_000_000L || lastLogNanos == 0L) {
+                lastLogNanos = now;
+                String first = dead == 0 ? "none"
+                        : kind + " instance custom index 0x" + Integer.toHexString(firstDeadIndex)
+                                + " named BLAS 0x" + Long.toHexString(firstDeadReference) + ": "
+                                + RtAccelRegistry.describeDead(firstDeadReference);
+                dev.comfyfluffy.caustica.CausticaMod.LOGGER.error(
+                        "TLAS audit: dropped {} instance(s) naming a BLAS that is no longer alive and {} with a "
+                                + "non-finite transform, out of {} this frame. First dead one: {}. This would "
+                                + "have been a lost device; please report this line.",
+                        dead, nonFinite, total, first);
+            }
         }
     }
 

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanQueue;
+import dev.comfyfluffy.caustica.rt.accel.RtAccelRegistry;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -69,6 +70,7 @@ public final class RtGpuExecutor {
         this.buildTimeline = createTimeline("RT terrain build timeline");
         this.graphicsTimeline = createTimeline("RT graphics-use timeline");
         createCommandPool();
+        RtAccelRegistry.trackGraphics(() -> queryTimeline(graphicsTimeline), latestGraphicsUseValue::get);
         this.thread = new Thread(this::run, "Caustica GPU executor");
         this.thread.setDaemon(true);
         this.thread.start();
@@ -216,6 +218,7 @@ public final class RtGpuExecutor {
         // submit immediately after vkDeviceWaitIdle returns. The idle wait also makes graphics-side
         // timeline semaphore use complete before those semaphores are destroyed below.
         ctx.waitIdle();
+        RtAccelRegistry.trackGraphics(null, null); // idle for good: no destroy below can be early
         Throwable failure = null;
         try {
             flushDestroysAfterDeviceIdle();
@@ -519,6 +522,11 @@ public final class RtGpuExecutor {
 
         private GraphicsUse(long value) {
             this.value = value;
+        }
+
+        /** This frame's value on the graphics timeline; later frames have larger ones. */
+        public long value() {
+            return value;
         }
     }
 
