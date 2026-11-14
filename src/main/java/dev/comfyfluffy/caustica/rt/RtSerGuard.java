@@ -5,10 +5,15 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import net.minecraft.client.multiplayer.ClientLevel;
 
 /**
- * Keeps the indirect trace off the hit-object path while Shader Execution Reordering is at its most
- * dangerous. The SER raygen carries the ordinary TraceRay path as well (a bounce past
- * {@code reorder.bounces} takes it), and that path draws the same image, so holding SER back only costs
- * the reorder's speed-up for a while.
+ * Keeps Shader Execution Reordering off the indirect trace while it is at its most dangerous. During a
+ * hold the indirect pass runs a raygen built without reordering at all (the world pipeline carries it as
+ * a third raygen when SER is on), and the SER raygen, should it run, is told to take no bounce onto the
+ * hit-object path. Both draw the same image, so a hold only costs the reorder's speed-up for a while.
+ *
+ * <p>A hold used to be the bounce count alone, which left the SER-built module running with no hit-object
+ * call in it; a device loss still came 8 s into such a hold, inside that module. Running the plain raygen
+ * instead says which it was: a loss during a hold now names raygen 2, and if one still comes there the
+ * cause is not in the reordering module.
  *
  * <ul>
  * <li>For {@link #WORLD_CHANGE_HOLD_NANOS} after the world changes (joining, a server hop, a dimension
@@ -62,6 +67,11 @@ public final class RtSerGuard {
         return holding ? 0 : configured;
     }
 
+    /** True while a hold is running: the indirect pass should run the raygen built without reordering. */
+    static boolean holding() {
+        return holding;
+    }
+
     /** A reordered trace had a hit refused (see {@code RtComposite.reportHitFault}). */
     static void refused(String what) {
         if (!RtDeviceBringup.serEnabled()) {
@@ -92,8 +102,9 @@ public final class RtSerGuard {
             CausticaMod.LOGGER.info("Shader Execution Reordering hold extended to {} s from now: {}",
                     nanos / 1_000_000_000L, reason);
         } else {
-            CausticaMod.LOGGER.info("Shader Execution Reordering held back for {} s: {}. Every bounce traces "
-                    + "the ordinary way meanwhile, which draws the same image.", nanos / 1_000_000_000L, reason);
+            CausticaMod.LOGGER.info("Shader Execution Reordering held back for {} s: {}. The indirect pass "
+                    + "runs the raygen built without reordering meanwhile, which draws the same image.",
+                    nanos / 1_000_000_000L, reason);
         }
     }
 
@@ -107,7 +118,8 @@ public final class RtSerGuard {
         String refusals = ", holds after a refused hit=" + refusalHolds;
         if (holding) {
             long left = Math.max(0L, holdUntil - System.nanoTime()) / 1_000_000_000L;
-            return "held back (" + holdReason + "), " + left + " s left" + refusals;
+            return "held back (" + holdReason + "), " + left + " s left, indirect pass on the raygen built "
+                    + "without reordering" + refusals;
         }
         return "active" + refusals;
     }

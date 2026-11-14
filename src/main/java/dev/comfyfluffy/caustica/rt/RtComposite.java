@@ -600,6 +600,9 @@ public final class RtComposite {
     }
 
     private RtPipeline worldPipeline;
+    // With Shader Execution Reordering on, the world pipeline carries a third raygen: the indirect pass
+    // built without it, run while RtSerGuard holds the reorder back (-1 when there is no such raygen).
+    private int plainIndirectRaygen = -1;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
     // atlas + entity textures. We tear down the world pipeline there (drops all descriptor references) and
     // rebuild it once the NEW atlas is in place — detected by the atlas view handle changing away from
@@ -1217,12 +1220,15 @@ public final class RtComposite {
     private RtPipeline ensureWorld(RtContext ctx) {
         if (worldPipeline == null) {
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
-            worldPipeline = RtPipeline.create(ctx, new String[]{
-                            RtDeviceBringup.worldPrimaryRaygenShader(),
-                            RtDeviceBringup.worldRaygenShader()},
+            String[] raygens = RtDeviceBringup.serEnabled()
+                    ? new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader(),
+                            RtDeviceBringup.worldPlainRaygenShader()}
+                    : new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader()};
+            worldPipeline = RtPipeline.create(ctx, raygens,
                     new String[]{"world.rmiss.spv", "world_guide.rmiss.spv"},
                     "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv", "world_entity.rahit.spv",
                     WorldPushConstantsData.BYTE_SIZE, true, GUIDE_COUNT, bindlessTextureCapacity, true);
+            plainIndirectRaygen = raygens.length > 2 ? 2 : -1;
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
                 pushRing = new PushSlot[PUSH_RING];
@@ -2118,9 +2124,12 @@ public final class RtComposite {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to pass B
+            // While the reorder is held back the indirect pass runs the raygen built without it, so a
+            // hold keeps the reordering module itself off the GPU, not only its hit-object calls.
+            int indirectRaygen = plainIndirectRaygen >= 0 && RtSerGuard.holding() ? plainIndirectRaygen : 1;
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
-                active.trace(cmd, renderW, renderH, pushConstants, 1);
+                active.trace(cmd, renderW, renderH, pushConstants, indirectRaygen);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to the temporal/upscale reads
             // A FOV change does NOT need to restart accumulation, so nothing here does.

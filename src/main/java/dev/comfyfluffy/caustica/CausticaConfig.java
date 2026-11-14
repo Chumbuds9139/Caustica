@@ -170,7 +170,8 @@ public final class CausticaConfig {
                         + " identical either way. Off by default: on NVIDIA driver 621.24 every observed GPU\n"
                         + " device-loss crash happened with it on and none with it off.\n"
                         + " When on, it is held back for 30 s after every world change (join, server hop, dimension)\n"
-                        + " and for 2 minutes after a reordered ray has a hit refused; the log says when.\n"
+                        + " and for 2 minutes after a reordered ray has a hit refused, by running the indirect pass\n"
+                        + " on a copy built without it; the log says when.\n"
                         + " enabled: needs a restart. The two settings below apply live and only matter when it is on;\n"
                         + " they exist to find which part of the feature is at fault.\n"
                         + " bounces: how many leading bounces of each path use it (15 = all). Later bounces trace\n"
@@ -1342,7 +1343,7 @@ public final class CausticaConfig {
          * object before and after the reorder did not stop it: the device was later lost with reordering on
          * and not one hit refused, so out-of-range hits were a symptom some losses showed, not the cause.
          * When it is on, {@code RtSerGuard} holds it back for a while after world changes and after a
-         * refused reordered hit.
+         * refused reordered hit, running the indirect pass on a raygen built without reordering meanwhile.
          */
         public static final class Reorder {
             public static final BooleanSetting ENABLED =

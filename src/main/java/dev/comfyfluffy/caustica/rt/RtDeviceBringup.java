@@ -255,6 +255,11 @@ public final class RtDeviceBringup {
         return serBackend.worldRaygenShader;
     }
 
+    /** The indirect raygen built without Shader Execution Reordering, whatever the backend. */
+    public static String worldPlainRaygenShader() {
+        return SerBackend.NONE.worldRaygenShader;
+    }
+
     public static String worldPrimaryRaygenShader() {
         return serBackend.worldPrimaryRaygenShader;
     }
