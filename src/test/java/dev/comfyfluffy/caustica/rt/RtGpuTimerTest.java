@@ -10,7 +10,7 @@ class RtGpuTimerTest {
     @Test
     void passLabelsMapToRegisteredStages() {
         String[] labels = {"composite frame", "BLAS builds 101", "frame TLAS 3873 instances build",
-                "trace rays (raygen 0)", "trace rays (raygen 1)", "DLSS-RR evaluate", "NRD denoise",
+                "trace rays (raygen 0)", "trace rays (raygen 1)", "trace rays (raygen 2)", "DLSS-RR evaluate", "NRD denoise",
                 "SVGF denoise", "FSR upscale", "XeSS upscale", "fallback upscale", "exposure", "rt bloom",
                 "map RT to display"};
         for (String label : labels) {
@@ -19,6 +19,7 @@ class RtGpuTimerTest {
                     label + " -> " + stage + " must be a registered frame stage");
         }
         assertEquals("gpu.traceIndirect", RtGpuTimer.stageFor("trace rays (raygen 1)"));
+        assertEquals("gpu.traceIndirect", RtGpuTimer.stageFor("trace rays (raygen 2)"));
         assertNull(RtGpuTimer.stageFor("block outline mask"));
     }
 }

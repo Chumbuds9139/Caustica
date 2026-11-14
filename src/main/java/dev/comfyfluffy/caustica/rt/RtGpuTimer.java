@@ -92,7 +92,10 @@ public final class RtGpuTimer {
         if (label.startsWith("BLAS builds")) return "gpu.blasBuild";
         if (label.startsWith("frame TLAS")) return "gpu.tlasBuild";
         if (label.equals("trace rays (raygen 0)")) return "gpu.tracePrimary";
-        if (label.equals("trace rays (raygen 1)")) return "gpu.traceIndirect";
+        // Raygen 2 is the indirect pass built without reordering, run while the SER guard holds it back.
+        if (label.equals("trace rays (raygen 1)") || label.equals("trace rays (raygen 2)")) {
+            return "gpu.traceIndirect";
+        }
         if (label.equals("DLSS-RR evaluate")) return "gpu.dlssRr";
         if (label.equals("NRD denoise")) return "gpu.nrd";
         if (label.equals("SVGF denoise")) return "gpu.svgf";
