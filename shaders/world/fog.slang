@@ -156,10 +156,6 @@ public float fogHeightFactor(WorldPush push, float yBlock) {
 // With a height profile the integral degrades to a front-to-back midpoint quadrature, stepping
 // the transmittance like cloudMarch does, because a straight segment across an exponential
 // gradient is exactly the case a single closed-form band would smear.
-// Weight of the next fogSegment call's sun-shaft sample; 0 skips its shadow ray. Only world.rgen's
-// FEATURE_TRY_HALF_FOG_SHADOW_RAYS experiment changes it, for one call at a time.
-public static float gv_fogShaftWeight = 1.0;
-
 public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, float maxDistance,
                             inout uint seed, bool highQuality) {
     FogVolume v;
@@ -198,11 +194,8 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
         float phase = hg(saturate(dot(dir, lightDir)), push.fogParams.y);
         float tS = d * (FOG_SAMPLE_MIN + rndf(seed) * FOG_SAMPLE_SPAN);
         float3 sp = originBlock + dir * tS;
-        float3 sunVis = float3(0.0, 0.0, 0.0);
-        if (gv_fogShaftWeight > 0.0) { // 0: the caller skips this segment's shaft ray (F8 experiment)
-            VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
-            sunVis = shadow.transmittance * gv_fogShaftWeight;
-        }
+        VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
+        float3 sunVis = shadow.transmittance;
         sunVis *= cloudSunShadow(push, sp - push.camOffset, lightDir);
         // Storm is a STATE: the weather lane that erases the sun disc also dims the shafts, so
         // the fog never argues with the sky about whether the sun is out. Geometry (the shadow

@@ -283,6 +283,16 @@ float2 lightningBoltCoverage(float3 rayOrigin, float3 rayDirection, float3 strik
     return float2(core, halo);
 }
 
+float3 addLightning(WorldPush worldPush, float3 col, float3 dir, bool rayInWater) {
+    float flash = clamp(worldPush.lightning.w, 0.0, 5.0);
+    if (!rayInWater && flash > 1.0e-4) {
+        col += float3(2.5, 3.2, 4.8) * flash;
+        float2 bolt = lightningBoltCoverage(WorldRayOrigin(), dir, worldPush.lightning.xyz);
+        col += (float3(48.0, 58.0, 72.0) * bolt.x + float3(4.0, 6.0, 10.0) * bolt.y) * flash;
+    }
+    return col;
+}
+
 [shader("miss")]
 void main(inout Payload payload) {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
@@ -306,9 +316,12 @@ void main(inout Payload payload) {
     // Full-quality atmosphere and clouds: what showCelestial chose, unless raygen marked this ray for the
     // cheap tier (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). The sun/moon disc below keeps showCelestial.
     bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
-    if (!mediaFull && worldFeature(worldPush, FEATURE_TRY_PLAIN_INDIRECT_SKY)) {
-        float3 plain = lerp(SKY_HORIZON_VIVID, SKY_ZENITH_VIVID, saturate(dir.y));
-        writeSkyMiss(payload, plain * (0.05 + 0.95 * sunUp));
+    bool skyCacheBuild = (payload.flags & PAYLOAD_SKY_CACHE_BUILD) != 0u;
+    // Bounced light (no celestials, out of the water) reads the sky pass A cached this frame from the
+    // camera with this same code; only the lightning, which pass A leaves out, is added live.
+    if (!showCelestial && !rayInWater && !skyCacheBuild && skyCacheActive(worldPush)) {
+        writeSkyMiss(payload, addLightning(worldPush, skyCacheSample(worldPush.skyCacheAddr, dir), dir,
+                rayInWater));
         return;
     }
 
@@ -412,11 +425,8 @@ void main(inout Payload payload) {
     // against the sky; the broad, brief radiance lift represents the atmospheric flash, while a
     // separate point-light term illuminates nearby ground in world.rgen (lightningIrradiance). An
     // underwater ray does not see an unattenuated bolt.
-    float flash = clamp(worldPush.lightning.w, 0.0, 5.0);
-    if (!rayInWater && flash > 1.0e-4) {
-        col += float3(2.5, 3.2, 4.8) * flash;
-        float2 bolt = lightningBoltCoverage(WorldRayOrigin(), dir, worldPush.lightning.xyz);
-        col += (float3(48.0, 58.0, 72.0) * bolt.x + float3(4.0, 6.0, 10.0) * bolt.y) * flash;
+    if (!skyCacheBuild) {
+        col = addLightning(worldPush, col, dir, rayInWater);
     }
 
     writeSkyMiss(payload, col);

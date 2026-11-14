@@ -55,6 +55,8 @@
 	"caustica.options.rt.earlyRoulette.tooltip": "경로 반사 횟수가 4 이상일 때, 빛 경로를 두 번째가 아닌 첫 번째 반사부터 무작위로 종료합니다. 계속되는 경로가 종료된 경로의 빛을 대신 전달하므로 평균적으로 이미지는 같습니다. 반사광으로만 밝혀지는 실내와 동굴은 노이즈가 조금 늘고, 디노이저가 이를 부드럽게 합니다. 4회 반사 기준 프레임 시간의 약 5분의 1을 절약합니다. 4회 미만에서는 효과가 없습니다.",
 	"caustica.options.rt.simpleRoughReflectionSky": "거친 반사 속 하늘 단순화",
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "하늘, 구름, 안개를 카메라가 직접 보는 부분과 물이나 유리 같은 선명한 반사에서만 최고 품질로 그립니다. 무광이나 거친 표면에서 이미 반사된 빛에는 반사광이 늘 쓰는 가벼운 버전을 사용합니다. 그 표면이 어차피 디테일을 흐리게 하기 때문입니다. 구름과 안개 비용의 상당 부분을 절약하며, 차이는 거의 보이지 않습니다.",
+	"caustica.options.rt.skyCache": "반사광용 하늘 캐시",
+	"caustica.options.rt.skyCache.tooltip": "반사광이 보는 하늘을 프레임마다 한 번만 카메라 주변의 작은 맵으로 계산합니다. 하늘에 닿는 픽셀과 반사마다 대기와 구름을 다시 계산하지 않습니다. 무광 표면에서 반사된 빛만 이를 사용하며, 직접 보는 하늘과 선명한 반사는 그대로입니다. 반사된 하늘빛에서 구름 디테일이 조금 줄어들 수 있습니다. 프레임 시간을 최대 약 6분의 1 절약합니다.",
 	"caustica.options.rt.sunSize": "태양 크기",
 	"caustica.options.rt.sunSize.tooltip": "태양과 달 원반의 각반경입니다. 원반이 클수록 그림자의 반그림자가 더 부드러워집니다.",
 	"caustica.options.rt.entities": "레이 트레이싱 엔티티",

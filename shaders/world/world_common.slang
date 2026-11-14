@@ -249,6 +249,9 @@ public struct WorldPush {
     // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
     // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. Trailing lane.
     public uint4    hitTableLimits;
+    // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and
+    // read by pass B's misses. 0 = no buffer, and both sides then run the sky as before.
+    public uint64_t skyCacheAddr;
     // Written BY the hit shaders, read back by RtComposite when this ring slot comes round again: the
     // last index they refused. x = HIT_FAULT_* kind (0 = none this frame), y = the refused index,
     // z = the limit it was checked against, w = hitFaultTag (instance, geometry, reordered). Trailing lane; it must
@@ -329,13 +332,11 @@ public static const float MIRROR_MEDIA_MAX_ALPHA = 0.2; // GGX alpha above which
 public static const uint FEATURE_EARLY_ROULETTE = 131072u;
 // Full-tier volumetric cloud march with fewer samples: march cap 44 -> 24, light march 5 -> 3.
 public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
-// F8 performance-test experiments, each set only while its "try:" row runs and never in normal play.
-// Cheap-tier sky misses (bounced light) read a flat gradient instead of marching the atmosphere and the
-// cloud deck: the most a cached sky for bounced light could save.
-public static const uint FEATURE_TRY_PLAIN_INDIRECT_SKY = 268435456u;
-// A full-tier fog segment that ends on geometry traces one fog shadow ray instead of two,
-// the sun-shaft sample or the emitter sample with equal odds, the one traced weighted 2x.
-public static const uint FEATURE_TRY_HALF_FOG_SHADOW_RAYS = 536870912u;
+// Sky cache for bounced light (a video option). Pass A fills a small direction map of the sky as bounced
+// light sees it (the cheap tier: no sun/moon disc, the lighter atmosphere and cloud march), once per frame
+// from the camera; pass B's misses that do not show the celestials read it instead of marching the
+// atmosphere and the cloud deck again for every pixel and bounce. See skyCacheSample.
+public static const uint FEATURE_SKY_CACHE = 524288u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -365,6 +366,46 @@ public static const float PARALLAX_WALL_TILT = 0.5;
 // loads its own WorldPush and must NOT import world_core (that module declares the raygen bindings).
 // world_core re-exports the same predicates against its module-level `worldPush` for every other pass.
 public bool worldFeature(WorldPush push, uint feature) { return (push.featureFlags & feature) != 0u; }
+
+// Sky cache layout: an equirectangular map, x = azimuth (wraps), y = polar angle from straight up. At
+// 256 x 128 a texel spans 1.4 degrees, finer than anything a diffuse or rough bounce can resolve.
+public static const uint SKY_CACHE_W = 256u;
+public static const uint SKY_CACHE_H = 128u;
+
+public bool skyCacheActive(WorldPush push) {
+    return worldFeature(push, FEATURE_SKY_CACHE) && push.skyCacheAddr != 0u
+            && push.dimension == DIMENSION_OVERWORLD;
+}
+
+// The direction through the centre of texel `texel` (row-major index).
+public float3 skyCacheTexelDir(uint texel) {
+    float x = float(texel % SKY_CACHE_W) + 0.5;
+    float y = float(texel / SKY_CACHE_W) + 0.5;
+    float phi = (x / float(SKY_CACHE_W) - 0.5) * 6.28318530718;
+    float theta = y / float(SKY_CACHE_H) * 3.14159265359;
+    float s = sin(theta);
+    return float3(s * cos(phi), cos(theta), s * sin(phi));
+}
+
+// Bilinear read of the cache along `dir`: azimuth wraps, the polar angle clamps at the poles.
+public float3 skyCacheSample(uint64_t addr, float3 dir) {
+    float u = atan2(dir.z, dir.x) * (1.0 / 6.28318530718) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / 3.14159265359);
+    float fx = u * float(SKY_CACHE_W) - 0.5;
+    float fy = clamp(v * float(SKY_CACHE_H) - 0.5, 0.0, float(SKY_CACHE_H - 1u));
+    float x0 = floor(fx);
+    float y0 = floor(fy);
+    float wx = fx - x0;
+    float wy = fy - y0;
+    uint xa = uint(int(x0) + int(SKY_CACHE_W)) % SKY_CACHE_W;
+    uint xb = (xa + 1u) % SKY_CACHE_W;
+    uint ya = min(uint(y0), SKY_CACHE_H - 1u);
+    uint yb = min(ya + 1u, SKY_CACHE_H - 1u);
+    ConstPtr<float4> cache = ConstPtr<float4>(addr);
+    float3 top = lerp(cache[ya * SKY_CACHE_W + xa].rgb, cache[ya * SKY_CACHE_W + xb].rgb, wx);
+    float3 bottom = lerp(cache[yb * SKY_CACHE_W + xa].rgb, cache[yb * SKY_CACHE_W + xb].rgb, wx);
+    return lerp(top, bottom, wy);
+}
 public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
@@ -523,6 +564,9 @@ public static const uint PAYLOAD_REORDERED = 32768u;
 // Set by raygen on a show-celestial ray that should still take the cheap sky/cloud tier (see
 // FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). world.rmiss reads it; nothing else does.
 public static const uint PAYLOAD_CHEAP_MEDIA = 65536u;
+// world.rmiss: this miss fills a sky-cache texel (world_primary.rgen), so it computes the sky instead of
+// reading the cache it is filling, and leaves out the lightning, which every reader adds live.
+public static const uint PAYLOAD_SKY_CACHE_BUILD = 131072u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect

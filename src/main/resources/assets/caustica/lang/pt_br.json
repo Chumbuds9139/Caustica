@@ -55,6 +55,8 @@
 	"caustica.options.rt.earlyRoulette.tooltip": "Com 4 ou mais ricochetes de caminho, encerra aleatoriamente caminhos de luz a partir do primeiro ricochete em vez do segundo. Os caminhos que continuam carregam a luz dos que pararam, então a imagem fica igual em média; salas e cavernas iluminadas só por ricochetes ficam com um pouco mais de ruído, que o redutor de ruído suaviza. Economiza cerca de um quinto do tempo de quadro com 4 ricochetes. Sem efeito abaixo de 4.",
 	"caustica.options.rt.simpleRoughReflectionSky": "Céu simplificado em reflexos ásperos",
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "Céu, nuvens e névoa são calculados em qualidade total apenas no que a câmera vê diretamente e em reflexos nítidos como água e vidro. A luz que já ricocheteou em uma superfície fosca ou áspera usa a versão mais barata que a luz indireta sempre usa, pois essa superfície já borra os detalhes. Economiza boa parte do custo de nuvens e névoa; a diferença mal se nota.",
+	"caustica.options.rt.skyCache": "Cache do céu para luz refletida",
+	"caustica.options.rt.skyCache.tooltip": "Calcula uma vez por quadro o céu que a luz refletida vê, em um pequeno mapa ao redor da câmera, em vez de recalcular a atmosfera e as nuvens para cada pixel e reflexão que alcança o céu. Só a luz que refletiu em uma superfície fosca o usa; o céu que você vê e os reflexos nítidos não mudam. A luz do céu refletida pode perder um pouco de detalhe das nuvens. Economiza até um sexto do tempo de quadro.",
 	"caustica.options.rt.sunSize": "Tamanho do sol",
 	"caustica.options.rt.sunSize.tooltip": "Raio angular do disco do sol e da lua. Discos maiores projetam penumbras mais suaves.",
 	"caustica.options.rt.entities": "Entidades com traçado de raios",

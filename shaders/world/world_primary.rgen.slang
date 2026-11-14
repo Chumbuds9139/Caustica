@@ -253,6 +253,15 @@ void main() {
             : airMedium());
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
     uint baseRecordCount = dimensions.x * dimensions.y;
+    // Fill the sky cache pass B's bounced-light misses read (FEATURE_SKY_CACHE): the first
+    // SKY_CACHE_W * SKY_CACHE_H threads each take one texel (looping if the dispatch is smaller). The
+    // barrier between the passes publishes it.
+    if (skyCacheActive(worldPush)) {
+        DevicePtr<float4> skyCache = DevicePtr<float4>(worldPush.skyCacheAddr);
+        for (uint texel = pixelIndex; texel < SKY_CACHE_W * SKY_CACHE_H; texel += baseRecordCount) {
+            skyCache[texel] = float4(traceSkyCacheTexel(worldPush.camOffset, skyCacheTexelDir(texel)), 0.0);
+        }
+    }
     uint splitRecord = baseRecordCount + pixelIndex;
     DevicePtr<PackedPathSegment> queue = DevicePtr<PackedPathSegment>(pc.pathQueueAddr);
 

@@ -22,8 +22,7 @@ import net.minecraft.network.chat.Component;
  * <p>GPU timestamps can time a whole dispatch but not the pieces of one shader. This measures the pieces
  * by subtraction instead: it runs the scene with the player's own settings, then with one change at a
  * time, and reports how much GPU time each change removed. The changes are kept few so the test stays
- * short: first the "try:" experiments, cheaper ways to render something that a setting could adopt
- * next; then the speed-up options switched off, which shows what each is still worth here (a positive
+ * short: first the speed-up options switched off, which shows what each is still worth here (a positive
  * "saved" means it costs that much to have it off); then the expensive features switched off, as the
  * most any further work on them could win.
  *
@@ -49,11 +48,12 @@ public final class RtPerfSweep {
     }
 
     record Result(String name, boolean baseline, double indirectMs, double primaryMs, double gpuFrameMs,
-                  double frameMs, int samples) {
+                  double frameMs, int samples, int serHeldSamples) {
+        Result(String name, boolean baseline, double indirectMs, double primaryMs, double gpuFrameMs,
+               double frameMs, int samples) {
+            this(name, baseline, indirectMs, primaryMs, gpuFrameMs, frameMs, samples, 0);
+        }
     }
-
-    // Experiment bits of the row being measured (RtComposite.FEATURE_TRY_*); zero outside "try:" rows.
-    private static volatile int experimentBits;
 
     private final List<Variant> variants = new ArrayList<>();
     private final List<Result> results = new ArrayList<>();
@@ -68,6 +68,7 @@ public final class RtPerfSweep {
     private final double[] gpuFrame = new double[MEASURE_FRAMES];
     private final double[] interval = new double[MEASURE_FRAMES];
     private int samples;
+    private int serHeldSamples;
     private double pendingIndirect;
     private double pendingPrimary;
     private double pendingGpuFrame;
@@ -78,11 +79,6 @@ public final class RtPerfSweep {
     private boolean moved;
 
     private RtPerfSweep() {
-    }
-
-    /** Experiment bits for {@code WorldPush.featureFlags}: zero unless a "try:" row of the test is running. */
-    public static int experimentBits() {
-        return experimentBits;
     }
 
     public boolean running() {
@@ -126,6 +122,7 @@ public final class RtPerfSweep {
         boolean simpleSky = CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.value();
         boolean earlyRoulette = CausticaConfig.Rt.Composite.EARLY_ROULETTE.value();
         boolean fastClouds = CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value();
+        boolean skyCache = CausticaConfig.Rt.Composite.SKY_CACHE.value();
         boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
@@ -133,7 +130,6 @@ public final class RtPerfSweep {
                 + "clouds %s, fog %s, SHaRC %s", bounces, spp, ris, cloudText, fog ? "on" : "off",
                 sharc ? "on from bounce " + sharcStart : "off");
         restore = () -> {
-            experimentBits = 0;
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
@@ -141,20 +137,15 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(simpleSky);
             CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(earlyRoulette);
             CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
+            CausticaConfig.Rt.Composite.SKY_CACHE.set(skyCache);
         };
         List<Variant> tests = new ArrayList<>();
-        // Experiments. Bounced light that reaches the sky marches the atmosphere and the cloud deck at the
-        // cheap tier; this row reads a flat gradient instead, the most a cached sky could save there.
-        tests.add(new Variant("try: plain sky in bounced light (cache bound)", false,
-                () -> experimentBits = RtComposite.FEATURE_TRY_PLAIN_INDIRECT_SKY));
-        // Fog's camera segment traces two shadow rays, one for the sun shafts and one for the torch the
-        // surface was lit by; this traces one of the two per pixel, the other's light carried at 2x.
-        if (fog) {
-            tests.add(new Variant("try: one fog shadow ray instead of two", false,
-                    () -> experimentBits = RtComposite.FEATURE_TRY_HALF_FOG_SHADOW_RAYS));
-        }
         // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
         // worth. Rows for options that change nothing in this scene are left out.
+        if (skyCache) {
+            tests.add(new Variant("sky cache for bounced light off", false,
+                    () -> CausticaConfig.Rt.Composite.SKY_CACHE.set(false)));
+        }
         if (simpleSky) {
             tests.add(new Variant("simplified sky in rough reflections off", false,
                     () -> CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(false)));
@@ -196,6 +187,7 @@ public final class RtPerfSweep {
         variants.get(index).apply.run();
         frameInVariant = 0;
         samples = 0;
+        serHeldSamples = 0;
         pendingValid = false;
         lastFrameNanos = 0L;
         Variant v = variants.get(index);
@@ -243,13 +235,18 @@ public final class RtPerfSweep {
             gpuFrame[samples] = pendingGpuFrame;
             interval[samples] = frameMs;
             samples++;
+            // The indirect pass runs without thread reordering while the SER guard holds it back (after a
+            // world change or a refused hit), which is far slower: such a row is not comparable.
+            if (RtSerGuard.holding()) {
+                serHeldSamples++;
+            }
         }
         pendingIndirect = pendingPrimary = pendingGpuFrame = 0.0;
         pendingValid = false;
         if (samples >= MEASURE_FRAMES || frameInVariant > WARMUP_FRAMES + MEASURE_FRAMES * 3) {
             Variant v = variants.get(variantIndex);
             results.add(new Result(v.name, v.baseline, median(indirect, samples), median(primary, samples),
-                    median(gpuFrame, samples), median(interval, samples), samples));
+                    median(gpuFrame, samples), median(interval, samples), samples, serHeldSamples));
             if (variantIndex + 1 < variants.size()) {
                 beginVariant(variantIndex + 1);
             } else {
@@ -307,11 +304,16 @@ public final class RtPerfSweep {
         }
         sb.append(String.format(Locale.ROOT, "%-52s %9s %9s %9s %9s %9s %8s%n", "setting", "indirect", "saved",
                 "primary", "RT frame", "saved", "FPS"));
+        boolean anySerHeld = false;
         double minBase = Double.MAX_VALUE;
         double maxBase = -Double.MAX_VALUE;
         for (int i = 0; i < results.size(); i++) {
             Result r = results.get(i);
             String note = r.samples < MEASURE_FRAMES ? "  (only " + r.samples + " samples)" : "";
+            if (r.serHeldSamples > 0) {
+                anySerHeld = true;
+                note += "  (SER held back)";
+            }
             if (r.baseline) {
                 minBase = Math.min(minBase, r.indirectMs);
                 maxBase = Math.max(maxBase, r.indirectMs);
@@ -335,13 +337,17 @@ public final class RtPerfSweep {
             sb.append(String.format(Locale.ROOT, "baseline range over the test: %.2f - %.2f ms (drift %.2f ms)%n",
                     minBase, maxBase, maxBase - minBase));
         }
+        if (anySerHeld) {
+            sb.append("WARNING: rows marked 'SER held back' ran while thread reordering was paused (it pauses "
+                    + "after a world change or a refused hit); the indirect pass is much slower then, so compare "
+                    + "only rows without the mark, or run the test again.\n");
+        }
         if (moved) {
             sb.append("WARNING: the player moved during the test; differences mix setting cost with scene change.\n");
         }
         sb.append("'saved' is the time a change removes from the indirect pass and from the whole RT frame, "
                 + "relative to the mean of the baselines measured just before and after it (negative = cheaper, "
-                + "positive = the option turned off was saving that much). 'try:' rows are experiments that "
-                + "change the picture only while they run. FPS includes CPU time.\n");
+                + "positive = the option turned off was saving that much). FPS includes CPU time.\n");
         return sb.toString();
     }
 

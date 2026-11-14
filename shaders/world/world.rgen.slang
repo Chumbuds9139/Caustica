@@ -324,16 +324,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // the segment's own darkening; the emitter term below accumulates at shading time (the
         // light sample only exists then) and must not silently pick up this segment's fog T.
         float3 fogSegThroughput = throughput;
-        float fogEmitterWeight = 1.0;
         if (fogEnabled(worldPush) && fogAppliesHere(medium)) {
-            // F8 experiment: one fog shadow ray per full-tier segment, sun shaft or emitter, weighted 2x.
-            if (mediaFull && worldFeature(worldPush, FEATURE_TRY_HALF_FOG_SHADOW_RAYS)) {
-                bool shaftTurn = rndf(seed) < 0.5;
-                gv_fogShaftWeight = shaftTurn ? 2.0 : 0.0;
-                fogEmitterWeight = shaftTurn ? 0.0 : 2.0;
-            }
             FogVolume segFog = fogSegment(worldPush, ro, rd, payload.hitT, seed, mediaFull);
-            gv_fogShaftWeight = 1.0;
             L += throughput * segFog.scatter;
             if (channel == 2) {
                 Lspec += throughput * segFog.scatter;
@@ -898,9 +890,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the direct-hit emission convention above, and the pre-fog segment throughput
                 // keeps it from eating this segment's own darkening twice.
                 if (fogEnabled(worldPush) && fogAppliesHere(medium) && mediaFull
-                        && fogEmitterWeight > 0.0 && r.W > 0.0 && r.phat > 0.0) {
+                        && r.W > 0.0 && r.phat > 0.0) {
                     float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
-                            r.pos, r.lnrm, r.le, r.area) * (estimatorScale * fogEmitterWeight);
+                            r.pos, r.lnrm, r.le, r.area) * estimatorScale;
                     fogE *= fogSegThroughput;
                     L += fogE;
                     if (channel == 2) {

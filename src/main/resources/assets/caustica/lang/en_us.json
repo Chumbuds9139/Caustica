@@ -55,6 +55,8 @@
 	"caustica.options.rt.earlyRoulette.tooltip": "Lets the renderer randomly end light paths from the first bounce instead of the second when Path Bounces is 4 or more. The paths that continue carry the light of those that stopped, so the image stays the same on average; bounce-lit rooms and caves get a little more noise for the denoiser to smooth. Saves about a fifth of the frame time at 4 bounces. No effect below 4 bounces.",
 	"caustica.options.rt.simpleRoughReflectionSky": "Simplified Sky in Rough Reflections",
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "Sky, clouds and fog are rendered at full quality only in what the camera sees directly and in clear reflections such as water and glass. Light that has already bounced off a matte or rough surface uses the cheaper version that bounced light always uses, since that surface blurs the detail away anyway. Saves a large share of the cloud and fog cost; the difference is hard to see.",
+	"caustica.options.rt.skyCache": "Sky Cache for Bounced Light",
+	"caustica.options.rt.skyCache.tooltip": "Computes the sky that bounced light sees once per frame, into a small map around the camera, instead of computing the atmosphere and clouds again for every pixel and bounce that reaches the sky. Only light that has bounced off a matte surface uses it; the sky you look at and clear reflections are unchanged. Bounced skylight can lose a little cloud detail. Saves up to a sixth of the frame time.",
 	"caustica.options.rt.sunSize": "Sun Size",
 	"caustica.options.rt.sunSize.tooltip": "Angular radius of the sun and moon disk. Larger discs cast softer shadow penumbrae.",
 	"caustica.options.rt.entities": "Ray-Traced Entities",

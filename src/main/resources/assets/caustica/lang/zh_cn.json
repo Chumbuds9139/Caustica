@@ -55,6 +55,8 @@
 	"caustica.options.rt.earlyRoulette.tooltip": "路径反弹为 4 次以上时，从第 1 次反弹起（而非第 2 次）就随机结束部分光线路径。继续的路径会承担被终止路径的光，所以画面平均下来不变；只靠反弹光照亮的室内和洞穴噪点会稍多，交给降噪抹平。4 次反弹时约省下五分之一的帧时间。反弹少于 4 次时没有作用。",
 	"caustica.options.rt.simpleRoughReflectionSky": "简化粗糙反射中的天空",
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "天空、云和雾只在相机直接看到的画面，以及水面、玻璃等清晰反射中以完整质量绘制。已经从哑光或粗糙表面反弹过的光，改用反弹光本来就用的较便宜版本，因为那个表面早已把细节模糊掉。可省下云和雾的大部分开销，画面差异很难察觉。",
+	"caustica.options.rt.skyCache": "反弹光的天空缓存",
+	"caustica.options.rt.skyCache.tooltip": "每帧只计算一次反弹光看到的天空，存成相机周围的一张小图，而不是每个像素、每次反弹碰到天空时都重新计算大气和云。只有从哑光表面反弹过的光会用到；你直接看到的天空和清晰反射都不变。反弹的天光可能少一点云的细节。最多可省下约六分之一的帧时间。",
 	"caustica.options.rt.sunSize": "太阳大小",
 	"caustica.options.rt.sunSize.tooltip": "太阳和月亮圆盘的角半径。圆盘越大，投射的半影越柔和。",
 	"caustica.options.rt.entities": "光追实体",

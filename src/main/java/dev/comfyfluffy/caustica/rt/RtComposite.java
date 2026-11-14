@@ -293,9 +293,9 @@ public final class RtComposite {
     private static final int FEATURE_SIMPLE_ROUGH_REFLECTION_SKY = 65536;
     private static final int FEATURE_EARLY_ROULETTE = 131072;
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
-    // F8 performance-test experiment (world_common.slang FEATURE_TRY_*): set only while its row runs.
-    public static final int FEATURE_TRY_PLAIN_INDIRECT_SKY = 268435456;
-    public static final int FEATURE_TRY_HALF_FOG_SHADOW_RAYS = 536870912;
+    private static final int FEATURE_SKY_CACHE = 524288;
+    // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
+    private static final long SKY_CACHE_BYTES = 256L * 128L * 16L;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -310,7 +310,7 @@ public final class RtComposite {
      * other runtime-tunable option in the renderer does.
      */
     private static int featureFlags() {
-        int flags = RtPerfSweep.experimentBits();
+        int flags = 0;
         ClientLevel level = Minecraft.getInstance().level;
         flags |= RtSerGuard.bounces(level, dimensionId(level)) << SER_BOUNCES_SHIFT;
         flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;
@@ -328,6 +328,9 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value()) {
             flags |= FEATURE_FAST_VOLUMETRIC_CLOUDS;
+        }
+        if (CausticaConfig.Rt.Composite.SKY_CACHE.value()) {
+            flags |= FEATURE_SKY_CACHE;
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
@@ -746,6 +749,9 @@ public final class RtComposite {
     // Packed primary -> indirect continuations. Pass A is fixed at one sample and owns two records per
     // render pixel (base + optional transmission); Pass B resamples them at the configured SPP.
     private RtBuffer continuationQueue;
+    // Written by pass A, read by pass B's misses (FEATURE_SKY_CACHE); like the continuation queue, the
+    // barrier between the passes orders the two, and it is rewritten in full every frame.
+    private RtBuffer skyCache;
     // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
     // only `current`, so spatial neighbour reuse never races another raygen invocation. The pair exists
     // only while the player setting is ON; live toggles idle the device before destruction/allocation.
@@ -1617,6 +1623,10 @@ public final class RtComposite {
             continuationQueue.destroy();
             continuationQueue = null;
         }
+        if (skyCache != null) {
+            skyCache.destroy();
+            skyCache = null;
+        }
         destroyRestirResources();
         destroyGuideImages();
 
@@ -1660,6 +1670,8 @@ public final class RtComposite {
         continuationQueue = ctx.createBuffer(continuationBytes,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "path continuation queue " + renderW + "x" + renderH + "x2");
+        skyCache = ctx.createBuffer(SKY_CACHE_BYTES, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
+                "sky cache for bounced light");
         syncRestirResources(ctx);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
@@ -2088,6 +2100,8 @@ public final class RtComposite {
                     // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
                     new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
                             fe.geomTableCount(), 0),
+                    // WorldPush.skyCacheAddr: pass A fills it, pass B's bounced-light misses read it.
+                    skyCache != null ? skyCache.deviceAddress : 0L,
                     // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
                     // when this ring slot is selected again.
                     new Int4(0, 0, 0, 0)
@@ -3224,6 +3238,10 @@ public final class RtComposite {
         if (continuationQueue != null) {
             continuationQueue.destroy();
             continuationQueue = null;
+        }
+        if (skyCache != null) {
+            skyCache.destroy();
+            skyCache = null;
         }
         destroyRestirResources();
         destroyGuideImages();

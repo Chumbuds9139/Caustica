@@ -716,6 +716,14 @@ public final class CausticaConfig {
              */
             public static final BooleanSetting SIMPLE_ROUGH_REFLECTION_SKY =
                     bool("caustica.rt.simpleRoughReflectionSky", "composite.simple-rough-reflection-sky", true);
+            /**
+             * The sky bounced light sees, computed once per frame into a small direction map from the
+             * camera instead of marching the atmosphere and the clouds again for every pixel and bounce
+             * that reaches the sky. Only light that has bounced off a matte surface reads it; the sky the
+             * camera sees and clear reflections are unchanged. Measured at up to 9 ms of a 54 ms frame.
+             */
+            public static final BooleanSetting SKY_CACHE =
+                    bool("caustica.rt.skyCache", "composite.sky-cache", true);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
             /**
