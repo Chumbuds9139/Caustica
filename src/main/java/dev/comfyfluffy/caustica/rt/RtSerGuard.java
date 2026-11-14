@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.rt.terrain.RtDistantHorizonsTerrain;
 import net.minecraft.client.multiplayer.ClientLevel;
 
 /**
@@ -18,7 +19,11 @@ import net.minecraft.client.multiplayer.ClientLevel;
  * <ul>
  * <li>For {@link #WORLD_CHANGE_HOLD_NANOS} after the world changes (joining, a server hop, a dimension
  *     change). Six of the eight device losses logged with reordering on happened within 30 s of one,
- *     while those 30 s windows held under a seventh of the play time.</li>
+ *     while those 30 s windows held under a seventh of the play time. If the distant-terrain (LOD) proxy
+ *     is still rebuilding when that runs out, the hold lasts until {@link #LOD_SETTLE_NANOS} after the
+ *     rebuild ends, but never past {@link #WORLD_CHANGE_MAX_HOLD_NANOS} after the change: a later loss
+ *     came 8 s after a 30 s hold ended, in a new dimension whose LOD proxy was 263 of 305 batches into
+ *     its first full rebuild.</li>
  * <li>For {@link #REFUSAL_HOLD_NANOS} after a reordered trace has had a hit refused: an index out of
  *     range, or a hit object that described a different hit after the reorder than before it. Three of
  *     the four losses that followed such a refusal came within 4 to 21 s of it. The hold is not for the
@@ -31,6 +36,9 @@ import net.minecraft.client.multiplayer.ClientLevel;
 public final class RtSerGuard {
     private static final long WORLD_CHANGE_HOLD_NANOS = 30_000_000_000L;
     private static final long REFUSAL_HOLD_NANOS = 120_000_000_000L;
+    private static final long LOD_SETTLE_NANOS = 5_000_000_000L;
+    private static final long WORLD_CHANGE_MAX_HOLD_NANOS = 120_000_000_000L;
+    private static final String WORLD_CHANGED = "the world changed";
 
     private static ClientLevel lastLevel;
     private static int lastDimension;
@@ -38,6 +46,8 @@ public final class RtSerGuard {
     private static long holdUntil;
     private static String holdReason;
     private static int refusalHolds;
+    private static long worldChangedAt;
+    private static boolean lodExtensionLogged;
 
     private RtSerGuard() {
     }
@@ -57,7 +67,22 @@ public final class RtSerGuard {
         } else if (level != lastLevel || dimension != lastDimension) {
             lastLevel = level;
             lastDimension = dimension;
-            hold(now, WORLD_CHANGE_HOLD_NANOS, "the world changed");
+            worldChangedAt = now;
+            lodExtensionLogged = false;
+            hold(now, WORLD_CHANGE_HOLD_NANOS, WORLD_CHANGED);
+        }
+        if (holding && WORLD_CHANGED.equals(holdReason) && holdUntil - now < LOD_SETTLE_NANOS
+                && now - worldChangedAt < WORLD_CHANGE_MAX_HOLD_NANOS
+                && RtDistantHorizonsTerrain.INSTANCE.rebuilding()) {
+            // Still rebuilding the distant terrain of the world just entered: keep the hold running a
+            // little past the end of it (re-checked every frame, so it ends LOD_SETTLE_NANOS after).
+            holdUntil = Math.min(now + LOD_SETTLE_NANOS, worldChangedAt + WORLD_CHANGE_MAX_HOLD_NANOS);
+            if (!lodExtensionLogged) {
+                lodExtensionLogged = true;
+                CausticaMod.LOGGER.info("Shader Execution Reordering stays held back until the distant "
+                        + "terrain finishes rebuilding (at most {} s after the world changed)",
+                        WORLD_CHANGE_MAX_HOLD_NANOS / 1_000_000_000L);
+            }
         }
         if (holding && now - holdUntil >= 0L) {
             holding = false;

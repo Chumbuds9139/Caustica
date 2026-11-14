@@ -283,6 +283,14 @@ public final class RtDistantHorizonsTerrain {
         return bootstrapComplete;
     }
 
+    /**
+     * True while a replacement proxy is being planned or built: BLAS for changed LOD meshes are still
+     * being created and swapped in. Render thread only, like {@link #frame}.
+     */
+    public boolean rebuilding() {
+        return buildSession != null || cpuPending || packPending;
+    }
+
     private void startCpuBuild(int originX, int originZ, int proxyRadius, long taskEpoch,
                                long revision, Proxy base, RtMaterialRegistry.Snapshot materials,
                                DistantHorizonsCompat.LodQuality quality) {
