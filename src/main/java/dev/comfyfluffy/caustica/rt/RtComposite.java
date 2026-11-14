@@ -293,6 +293,8 @@ public final class RtComposite {
     private static final int FEATURE_SIMPLE_ROUGH_REFLECTION_SKY = 65536;
     private static final int FEATURE_EARLY_ROULETTE = 131072;
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
+    // F8 performance-test experiment (world_common.slang FEATURE_TRY_*): set only while its row runs.
+    public static final int FEATURE_TRY_CAMERA_HIT_ROULETTE = 268435456;
 
     // ---- Dimension ids (WorldPush.dimension). Mirrors world_common.slang's DIMENSION_* constants.
     // The Overworld runs the atmosphere march and the sun/moon cycle; the Nether and the End have no
@@ -307,7 +309,7 @@ public final class RtComposite {
      * other runtime-tunable option in the renderer does.
      */
     private static int featureFlags() {
-        int flags = 0;
+        int flags = RtPerfSweep.experimentBits();
         ClientLevel level = Minecraft.getInstance().level;
         flags |= RtSerGuard.bounces(level, dimensionId(level)) << SER_BOUNCES_SHIFT;
         flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;

@@ -22,7 +22,8 @@ import net.minecraft.network.chat.Component;
  * <p>GPU timestamps can time a whole dispatch but not the pieces of one shader. This measures the pieces
  * by subtraction instead: it runs the scene with the player's own settings, then with one change at a
  * time, and reports how much GPU time each change removed. The changes are kept few so the test stays
- * short: first the speed-up options switched off, which shows what each is still worth here (a positive
+ * short: first the "try:" experiments, cheaper ways to render something that a setting could adopt
+ * next; then the speed-up options switched off, which shows what each is still worth here (a positive
  * "saved" means it costs that much to have it off); then the expensive features switched off, as the
  * most any further work on them could win.
  *
@@ -51,6 +52,9 @@ public final class RtPerfSweep {
                   double frameMs, int samples) {
     }
 
+    // Experiment bits of the row being measured (RtComposite.FEATURE_TRY_*); zero outside "try:" rows.
+    private static volatile int experimentBits;
+
     private final List<Variant> variants = new ArrayList<>();
     private final List<Result> results = new ArrayList<>();
     private Runnable restore;
@@ -74,6 +78,11 @@ public final class RtPerfSweep {
     private boolean moved;
 
     private RtPerfSweep() {
+    }
+
+    /** Experiment bits for {@code WorldPush.featureFlags}: zero unless a "try:" row of the test is running. */
+    public static int experimentBits() {
+        return experimentBits;
     }
 
     public boolean running() {
@@ -117,10 +126,15 @@ public final class RtPerfSweep {
         boolean simpleSky = CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.value();
         boolean earlyRoulette = CausticaConfig.Rt.Composite.EARLY_ROULETTE.value();
         boolean fastClouds = CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value();
+        boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
+        int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
         context = String.format(Locale.ROOT, "bounces %d, samples per pixel %d, RIS candidates %d, "
-                + "clouds %s, fog %s", bounces, spp, ris, cloudText, fog ? "on" : "off");
+                + "clouds %s, fog %s, SHaRC %s", bounces, spp, ris, cloudText, fog ? "on" : "off",
+                sharc ? "on from bounce " + sharcStart : "off");
         restore = () -> {
+            experimentBits = 0;
+            CausticaConfig.Rt.Sharc.START_BOUNCE.set(sharcStart);
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
             CausticaConfig.Rt.Composite.CLOUDS.set(clouds);
@@ -130,6 +144,22 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
         };
         List<Variant> tests = new ArrayList<>();
+        // Experiments, in the order of what they are expected to save. Both cut the path after the camera
+        // hit: SHaRC by reading its cache at the first bounce's hit instead of shading it and tracing on,
+        // the roulette by ending some of the camera hit's diffuse continuations before they are traced.
+        boolean sharcEarlier = sharc && sharcStart > 1;
+        if (sharcEarlier) {
+            tests.add(new Variant("try: SHaRC from the first bounce", false,
+                    () -> CausticaConfig.Rt.Sharc.START_BOUNCE.set(1)));
+        }
+        tests.add(new Variant("try: roulette at the camera hit (diffuse)", false,
+                () -> experimentBits = RtComposite.FEATURE_TRY_CAMERA_HIT_ROULETTE));
+        if (sharcEarlier) {
+            tests.add(new Variant("try: both", false, () -> {
+                CausticaConfig.Rt.Sharc.START_BOUNCE.set(1);
+                experimentBits = RtComposite.FEATURE_TRY_CAMERA_HIT_ROULETTE;
+            }));
+        }
         // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
         // worth. Rows for options that change nothing in this scene are left out.
         if (simpleSky) {
@@ -317,7 +347,8 @@ public final class RtPerfSweep {
         }
         sb.append("'saved' is the time a change removes from the indirect pass and from the whole RT frame, "
                 + "relative to the mean of the baselines measured just before and after it (negative = cheaper, "
-                + "positive = the option turned off was saving that much). FPS includes CPU time.\n");
+                + "positive = the option turned off was saving that much). 'try:' rows are experiments that "
+                + "change the picture only while they run. FPS includes CPU time.\n");
         return sb.toString();
     }
 

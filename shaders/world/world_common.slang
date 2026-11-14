@@ -329,6 +329,9 @@ public static const float MIRROR_MEDIA_MAX_ALPHA = 0.2; // GGX alpha above which
 public static const uint FEATURE_EARLY_ROULETTE = 131072u;
 // Full-tier volumetric cloud march with fewer samples: march cap 44 -> 24, light march 5 -> 3.
 public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
+// F8 performance-test experiment, set only while its "try:" row runs and never in normal play: Russian
+// roulette on the camera hit's diffuse continuation too (survival at least 1/2).
+public static const uint FEATURE_TRY_CAMERA_HIT_ROULETTE = 268435456u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
