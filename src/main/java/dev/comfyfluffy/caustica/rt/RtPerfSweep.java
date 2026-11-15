@@ -248,6 +248,10 @@ public final class RtPerfSweep {
         double frameMs = lastFrameNanos == 0L ? 0.0 : (now - lastFrameNanos) / 1.0e6;
         lastFrameNanos = now;
         Minecraft mc = Minecraft.getInstance();
+        // The player keeps still for the whole test, and after a minute without input vanilla's inactivity
+        // limit caps the game at 30 FPS: the later rows then measured the cap, and an idling GPU also
+        // clocks differently. The test counts as input.
+        mc.getFramerateLimitTracker().onInputReceived();
         if (mc.player != null) {
             double dx = mc.player.getX() - startX, dy = mc.player.getY() - startY, dz = mc.player.getZ() - startZ;
             if (dx * dx + dy * dy + dz * dz > MOVE_TOLERANCE_BLOCKS * MOVE_TOLERANCE_BLOCKS) {
