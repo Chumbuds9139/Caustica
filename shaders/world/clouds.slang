@@ -604,7 +604,7 @@ public float cloudAlpha(WorldPush push, CloudHit h, float density) {
  * samples coverage without any view/camera fade.
  */
 public float cloudSunShadow(WorldPush push, float3 pointRel, float3 lightDir) {
-    if (!cloudsEnabled(push)) {
+    if (!cloudsEnabled(push) || worldFeature(push, FEATURE_PROBE_NO_CLOUD_SHADOWS)) {
         return 1.0;
     }
     float strength = cloudShadowStrength(push);

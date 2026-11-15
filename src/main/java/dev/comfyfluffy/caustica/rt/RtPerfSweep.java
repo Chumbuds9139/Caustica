@@ -128,8 +128,8 @@ public final class RtPerfSweep {
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
         context = String.format(Locale.ROOT, "bounces %d, samples per pixel %d, RIS candidates %d, "
-                + "clouds %s, fog %s, SHaRC %s", bounces, spp, ris, cloudText, fog ? "on" : "off",
-                sharc ? "on from bounce " + sharcStart : "off");
+                + "clouds %s, fog %s, SHaRC %s, ReSTIR %s", bounces, spp, ris, cloudText, fog ? "on" : "off",
+                sharc ? "on from bounce " + sharcStart : "off", restir ? "on" : "off");
         restore = () -> {
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
@@ -157,18 +157,11 @@ public final class RtPerfSweep {
             tests.add(new Variant("fast volumetric clouds off", false,
                     () -> CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(false)));
         }
-        // Coarse split of the indirect pass: how much of it the later bounces, the radiance cache and the
-        // light reservoirs account for.
+        // Coarse split of the indirect pass: how much of it the later bounces, the light reservoirs and (last
+        // row, below) the radiance cache account for. Two is the fewest bounces the setting allows.
         if (bounces > 2) {
             tests.add(new Variant("bounces " + bounces + " -> 2", false,
                     () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(2)));
-        }
-        if (bounces > 1) {
-            tests.add(new Variant("bounces " + bounces + " -> 1", false,
-                    () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(1)));
-        }
-        if (sharc) {
-            tests.add(new Variant("SHaRC off", false, () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
         }
         if (restir && ris > 0) {
             tests.add(new Variant("ReSTIR off", false,
@@ -184,6 +177,8 @@ public final class RtPerfSweep {
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
             tests.add(new Variant("probe: clouds in bounced light skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_BOUNCE_CLOUDS));
+            tests.add(new Variant("probe: cloud shadows skipped", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CLOUD_SHADOWS));
         }
         // The most anything further could win: the expensive features switched off outright.
         if (clouds) {
@@ -195,6 +190,10 @@ public final class RtPerfSweep {
         if (spp > 1) {
             tests.add(new Variant("samples per pixel " + spp + " -> 1", false,
                     () -> CausticaConfig.Rt.Composite.SPP.set(1)));
+        }
+        // Last, so a cache that went cold while it was off can only slow the closing baseline.
+        if (sharc) {
+            tests.add(new Variant("SHaRC off", false, () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
         }
         // Baseline, test, baseline, test, ..., baseline: every test sits between two baselines.
         variants.add(baselineVariant());

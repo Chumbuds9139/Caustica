@@ -345,9 +345,11 @@ public static const uint FEATURE_SKY_CACHE = 524288u;
 //   NO_CAMERA_CLOUDS:     camera rays: the sky they reach and the stretch to their first hit.
 //   NO_REFLECTION_CLOUDS: later full-tier rays: clear reflections and refractions.
 //   NO_BOUNCE_CLOUDS:     cheap-tier rays: bounced light, rough reflections and the sky cache they read.
+//   NO_CLOUD_SHADOWS:     the deck's shadow on sunlit surfaces and fog (cloudSunShadow).
 public static const uint FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576u;
 public static const uint FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152u;
 public static const uint FEATURE_PROBE_NO_BOUNCE_CLOUDS = 4194304u;
+public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
