@@ -123,7 +123,6 @@ public final class RtPerfSweep {
         boolean earlyRoulette = CausticaConfig.Rt.Composite.EARLY_ROULETTE.value();
         boolean fastClouds = CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value();
         boolean skyCache = CausticaConfig.Rt.Composite.SKY_CACHE.value();
-        boolean cloudReuse = CausticaConfig.Rt.Composite.CLOUD_REUSE.value();
         boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
@@ -140,7 +139,7 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(earlyRoulette);
             CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(fastClouds);
             CausticaConfig.Rt.Composite.SKY_CACHE.set(skyCache);
-            CausticaConfig.Rt.Composite.CLOUD_REUSE.set(cloudReuse);
+            RtComposite.perfProbes = 0;
         };
         List<Variant> tests = new ArrayList<>();
         // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
@@ -148,10 +147,6 @@ public final class RtPerfSweep {
         if (skyCache) {
             tests.add(new Variant("sky cache for bounced light off", false,
                     () -> CausticaConfig.Rt.Composite.SKY_CACHE.set(false)));
-        }
-        if (cloudReuse && clouds && volumetric) {
-            tests.add(new Variant("camera sky cloud reuse off", false,
-                    () -> CausticaConfig.Rt.Composite.CLOUD_REUSE.set(false)));
         }
         if (simpleSky) {
             tests.add(new Variant("simplified sky in rough reflections off", false,
@@ -175,6 +170,16 @@ public final class RtPerfSweep {
             tests.add(new Variant("RIS candidates " + ris + " -> " + ris / 2, false,
                     () -> CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(ris / 2)));
         }
+        // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one.
+        if (fog) {
+            tests.add(new Variant("probe: fog sun shafts unshadowed", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_FOG_SUN_SHADOW));
+            tests.add(new Variant("probe: fog glow from lights off", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_FOG_EMITTER));
+        }
+        tests.add(new Variant("probe: sky atmosphere march skipped", false,
+                () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_FULL_ATMOSPHERE));
         // The most anything further could win: the expensive features switched off outright.
         if (clouds) {
             tests.add(new Variant("clouds off", false, () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));

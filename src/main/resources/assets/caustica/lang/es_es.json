@@ -57,8 +57,6 @@
 	"caustica.options.rt.simpleRoughReflectionSky.tooltip": "El cielo, las nubes y la niebla se calculan con calidad completa solo en lo que la cámara ve directamente y en reflejos nítidos como el agua y el vidrio. La luz que ya rebotó en una superficie mate o rugosa usa la versión más barata que siempre usa la luz rebotada, ya que esa superficie difumina los detalles de todos modos. Ahorra gran parte del coste de nubes y niebla; la diferencia apenas se nota.",
 	"caustica.options.rt.skyCache": "Caché del cielo para la luz rebotada",
 	"caustica.options.rt.skyCache.tooltip": "Calcula una vez por fotograma el cielo que ve la luz rebotada, en un pequeño mapa alrededor de la cámara, en lugar de volver a calcular la atmósfera y las nubes para cada píxel y rebote que llega al cielo. Solo la usa la luz que ha rebotado en una superficie mate; el cielo que ves y los reflejos nítidos no cambian. La luz del cielo rebotada puede perder algo de detalle de las nubes. Ahorra hasta una sexta parte del tiempo de fotograma.",
-	"caustica.options.rt.cloudReuse": "Reutilización de nubes en el cielo",
-	"caustica.options.rt.cloudReuse.tooltip": "Las nubes volumétricas que ves directamente en el cielo se calculan en la mitad de los píxeles en cada fotograma, alternando cada fotograma; la otra mitad reutiliza el resultado del fotograma anterior, desplazado con la cámara. Las nubes en reflejos, en la luz rebotada y delante del terreno no cambian. Las nubes que se mueven rápido pueden verse algo más suaves.",
 	"caustica.options.rt.sunSize": "Tamaño del sol",
 	"caustica.options.rt.sunSize.tooltip": "Radio angular del disco del sol y la luna. Los discos más grandes proyectan penumbras más suaves.",
 	"caustica.options.rt.entities": "Entidades con trazado de rayos",

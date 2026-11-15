@@ -294,9 +294,12 @@ public final class RtComposite {
     private static final int FEATURE_EARLY_ROULETTE = 131072;
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
     private static final int FEATURE_SKY_CACHE = 524288;
-    private static final int FEATURE_CLOUD_REUSE = 1048576;
-    // One camera-sky cloud reuse entry (world.rmiss's cameraCloudDeck): a uint4 per render pixel, two halves.
-    private static final long CLOUD_REUSE_ENTRY_BYTES = 16L;
+    // F8 probes (world_common.slang): RtPerfSweep sets one per row through perfProbes, never a setting.
+    static final int FEATURE_PROBE_NO_FOG_SUN_SHADOW = 1048576;
+    static final int FEATURE_PROBE_NO_FOG_EMITTER = 2097152;
+    static final int FEATURE_PROBE_NO_FULL_ATMOSPHERE = 4194304;
+    /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
+    static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
     private static final long SKY_CACHE_BYTES = 256L * 128L * 16L;
 
@@ -313,7 +316,7 @@ public final class RtComposite {
      * other runtime-tunable option in the renderer does.
      */
     private static int featureFlags() {
-        int flags = 0;
+        int flags = perfProbes;
         ClientLevel level = Minecraft.getInstance().level;
         flags |= RtSerGuard.bounces(level, dimensionId(level)) << SER_BOUNCES_SHIFT;
         flags |= CausticaConfig.Rt.Reorder.KEY.value() << SER_KEY_SHIFT;
@@ -334,9 +337,6 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.SKY_CACHE.value()) {
             flags |= FEATURE_SKY_CACHE;
-        }
-        if (CausticaConfig.Rt.Composite.CLOUD_REUSE.value()) {
-            flags |= FEATURE_CLOUD_REUSE;
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
@@ -758,9 +758,6 @@ public final class RtComposite {
     // Written by pass A, read by pass B's misses (FEATURE_SKY_CACHE); like the continuation queue, the
     // barrier between the passes orders the two, and it is rewritten in full every frame.
     private RtBuffer skyCache;
-    // Camera-sky cloud reuse (FEATURE_CLOUD_REUSE): two render-resolution halves that pass B's camera-ray
-    // misses ping-pong between by frame parity. Zeroed when created, so no entry carries a valid stamp.
-    private RtBuffer cloudReuse;
     // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
     // only `current`, so spatial neighbour reuse never races another raygen invocation. The pair exists
     // only while the player setting is ON; live toggles idle the device before destruction/allocation.
@@ -1636,10 +1633,6 @@ public final class RtComposite {
             skyCache.destroy();
             skyCache = null;
         }
-        if (cloudReuse != null) {
-            cloudReuse.destroy();
-            cloudReuse = null;
-        }
         destroyRestirResources();
         destroyGuideImages();
 
@@ -1685,17 +1678,6 @@ public final class RtComposite {
                 "path continuation queue " + renderW + "x" + renderH + "x2");
         skyCache = ctx.createBuffer(SKY_CACHE_BYTES, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "sky cache for bounced light");
-        long cloudReuseBytes = Math.multiplyExact(Math.multiplyExact(pixelRecords, 2L), CLOUD_REUSE_ENTRY_BYTES);
-        cloudReuse = ctx.createBuffer(cloudReuseBytes,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false,
-                "camera sky cloud reuse " + renderW + "x" + renderH + "x2");
-        RtBuffer clearedCloudReuse = cloudReuse;
-        ctx.submitSync(cmd -> {
-            VK10.vkCmdFillBuffer(cmd, clearedCloudReuse.handle, 0L, cloudReuseBytes, 0);
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VulkanCommandEncoder.memoryBarrier(cmd, stack);
-            }
-        });
         syncRestirResources(ctx);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
@@ -2124,8 +2106,6 @@ public final class RtComposite {
                     // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
                     // WorldPush.skyCacheAddr: pass A fills it, pass B's cheap-tier misses read it.
                     skyCache != null ? skyCache.deviceAddress : 0L,
-                    // WorldPush.cloudReuseAddr: pass B's camera-ray misses read and write it.
-                    cloudReuse != null ? cloudReuse.deviceAddress : 0L,
                     new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
                             fe.geomTableCount(), 0),
                     // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
@@ -3268,10 +3248,6 @@ public final class RtComposite {
         if (skyCache != null) {
             skyCache.destroy();
             skyCache = null;
-        }
-        if (cloudReuse != null) {
-            cloudReuse.destroy();
-            cloudReuse = null;
         }
         destroyRestirResources();
         destroyGuideImages();

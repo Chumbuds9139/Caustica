@@ -27,11 +27,6 @@ public static uint gv_secondaryCull = CULL_SECONDARY;
 // Raygen sets this on a show-celestial ray that should still take the cheap sky/cloud tier
 // (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY); it travels to world.rmiss as PAYLOAD_CHEAP_MEDIA.
 public static bool gv_cheapMedia = false;
-// Raygen sets this for pass B's first trace of a camera ray only; it travels as PAYLOAD_CAMERA_SKY.
-public static bool gv_cameraSky = false;
-// ...and, of those, the rays on this frame's reuse half (FEATURE_CLOUD_REUSE). Only the reordered trace
-// carries it on, as PAYLOAD_CLOUD_REUSE_STALE: without the reorder it would split warps, not save work.
-public static bool gv_cameraSkyStale = false;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither
@@ -138,8 +133,7 @@ void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, flo
     // cloud deck and the lightning bolt out of rays that have not left the water column yet.
     uint flags = (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
             | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
-            | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u)
-            | (gv_cameraSky ? PAYLOAD_CAMERA_SKY : 0u);
+            | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u);
     payload = makeRadiancePayload(flags, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, missIndex,

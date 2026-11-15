@@ -189,12 +189,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // Quality tier of the sky, clouds and fog this ray sees (see simpleRoughSky above).
         bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough);
         gv_cheapMedia = showCelestial && !mediaFull;
-        // Only this pixel's own camera ray (sample 0) may read or write its slot of the camera-sky cloud
-        // reuse buffer; cleared straight after the trace so no other ray of this bounce carries it.
-        gv_cameraSky = bounce == 0 && seg.bounce == 0 && sampleIndex == 0u;
-        gv_cameraSkyStale = gv_cameraSky && worldFeature(worldPush, FEATURE_CLOUD_REUSE)
-                && worldPush.cloudReuseAddr != 0u
-                && ((pix.x + pix.y + worldPush.frameIndex) & 1u) != 0u;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -207,10 +201,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 #ifdef CAUSTICA_ENABLE_EXT_SER
         // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
-        // Phase 3 (otherwise unused): camera-sky rays that reuse last frame's clouds, so they share warps
-        // only with each other and the marching half runs without them (PAYLOAD_CLOUD_REUSE_STALE).
-        uint pathPhaseHint = gv_cameraSkyStale ? 3u
-                : (bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u));
+        uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
         // Diagnostic split: only the first serBounces bounces take the hit-object path (15 = all of them).
         uint serBounces = (worldPush.featureFlags >> SER_BOUNCES_SHIFT) & SER_BOUNCES_MASK;
         if (serBounces == SER_BOUNCES_MASK || uint(bounce) < serBounces) {
@@ -225,8 +216,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
 #endif
-        gv_cameraSky = false;
-        gv_cameraSkyStale = false;
         // The point this ray reaches is shaded with the same view of the scene it was found with.
         gv_secondaryCull = secondaryCull;
 
@@ -901,7 +890,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the direct-hit emission convention above, and the pre-fog segment throughput
                 // keeps it from eating this segment's own darkening twice.
                 if (fogEnabled(worldPush) && fogAppliesHere(medium) && mediaFull
-                        && r.W > 0.0 && r.phat > 0.0) {
+                        && r.W > 0.0 && r.phat > 0.0
+                        && !worldFeature(worldPush, FEATURE_PROBE_NO_FOG_EMITTER)) {
                     float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
                             r.pos, r.lnrm, r.le, r.area) * estimatorScale;
                     fogE *= fogSegThroughput;

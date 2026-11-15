@@ -194,8 +194,11 @@ public FogVolume fogSegment(WorldPush push, float3 originBlock, float3 dir, floa
         float phase = hg(saturate(dot(dir, lightDir)), push.fogParams.y);
         float tS = d * (FOG_SAMPLE_MIN + rndf(seed) * FOG_SAMPLE_SPAN);
         float3 sp = originBlock + dir * tS;
-        VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
-        float3 sunVis = shadow.transmittance;
+        float3 sunVis = float3(1.0, 1.0, 1.0);
+        if (!worldFeature(push, FEATURE_PROBE_NO_FOG_SUN_SHADOW)) {
+            VisibilityResult shadow = visibility(sp, lightDir, 10000.0);
+            sunVis = shadow.transmittance;
+        }
         sunVis *= cloudSunShadow(push, sp - push.camOffset, lightDir);
         // Storm is a STATE: the weather lane that erases the sun disc also dims the shafts, so
         // the fog never argues with the sky about whether the sun is out. Geometry (the shadow

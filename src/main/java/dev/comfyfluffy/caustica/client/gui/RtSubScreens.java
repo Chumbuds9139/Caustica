@@ -250,7 +250,6 @@ public final class RtSubScreens {
                 CausticaConfig.Rt.Composite.EARLY_ROULETTE,
                 CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY,
                 CausticaConfig.Rt.Composite.SKY_CACHE,
-                CausticaConfig.Rt.Composite.CLOUD_REUSE,
                 CausticaConfig.Rt.DlssRr.ENABLED,
                 CausticaConfig.Rt.DlssRr.QUALITY,
                 CausticaConfig.Rt.DlssRr.PRESET,

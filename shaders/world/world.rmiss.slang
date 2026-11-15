@@ -315,81 +315,6 @@ float3 addLightning(WorldPush worldPush, float3 col, float3 dir, bool rayInWater
     return col;
 }
 
-// Camera-sky cloud reuse (FEATURE_CLOUD_REUSE). The full-tier cloud march is the most expensive thing a
-// camera ray that reaches the sky does, and between two frames that march barely changes. So each frame
-// only half the camera's sky pixels march, in a checkerboard that flips every frame, and the other half
-// take last frame's march from the pixels that ran it. The reuse half exists only on SER's reordered trace,
-// which sorts it into warps of its own; on the plain trace every camera-sky ray marches (and still writes).
-//
-// The reprojection follows the point on the deck's mid-plane the ray looks through, moved by the camera's
-// own motion (camDelta), so walking or flying under the deck keeps the reused cloud where it was rather than
-// sliding it by the parallax a direction-only lookup would get wrong. Only entries written LAST frame are
-// trusted (stamp frameIndex), which is also what rejects a pixel that was ground or water last frame: it
-// never wrote. A ray with no valid entry around its reprojected position, or none at all (offscreen,
-// looking away from the deck, a teleport), simply marches like the fresh half.
-static const float CLOUD_REUSE_MAX_CAMERA_STEP = 8.0;
-
-CloudVolume cameraCloudDeck(WorldPush worldPush, float3 originRel, float3 dir, float3 skyAmbient,
-                            bool reuseHalf) {
-    uint2 pix = DispatchRaysIndex().xy;
-    uint2 dims = DispatchRaysDimensions().xy;
-    uint frame = worldPush.frameIndex;
-    uint64_t halfBytes = uint64_t(dims.x) * uint64_t(dims.y) * 16u;
-    DevicePtr<uint4> current = DevicePtr<uint4>(worldPush.cloudReuseAddr + (frame & 1u) * halfBytes);
-    ConstPtr<uint4> previous = ConstPtr<uint4>(worldPush.cloudReuseAddr + ((frame & 1u) ^ 1u) * halfBytes);
-
-    // reuseHalf: world.rgen's checkerboard ((x + y + frame) odd), carried as PAYLOAD_CLOUD_REUSE_STALE.
-    bool fresh = !reuseHalf || frame == 0u
-            || dot(worldPush.camDelta, worldPush.camDelta)
-                    > CLOUD_REUSE_MAX_CAMERA_STEP * CLOUD_REUSE_MAX_CAMERA_STEP;
-    if (!fresh) {
-        // The deck's mid-plane, along this ray; a ray parallel to it, or pointing away, has no point there.
-        float tDeck = abs(dir.y) > 1.0e-4 ? (worldPush.clouds.w - originRel.y) / dir.y : -1.0;
-        fresh = tDeck <= 0.0;
-        if (!fresh) {
-            float3 deckPoint = dir * min(tDeck, max(worldPush.cloudAnchor.w, 1.0));
-            float4 clip = mul(worldPush.prevViewProj, float4(deckPoint + worldPush.camDelta, 1.0));
-            fresh = clip.w <= 0.0;
-            if (!fresh) {
-                float2 p = (clip.xy / clip.w * 0.5 + 0.5) * float2(dims) - 0.5;
-                float2 base = floor(p);
-                float2 f = p - base;
-                float3 scatter = float3(0.0, 0.0, 0.0);
-                float transmittance = 0.0;
-                float weight = 0.0;
-                [unroll]
-                for (uint i = 0u; i < 4u; i++) {
-                    int2 q = int2(base) + int2(int(i & 1u), int(i >> 1u));
-                    if (any(q < int2(0, 0)) || any(q >= int2(dims))) {
-                        continue;
-                    }
-                    uint4 e = previous[uint(q.y) * dims.x + uint(q.x)];
-                    if (e.z != frame) { // written last frame as (frameIndex - 1) + 1
-                        continue;
-                    }
-                    float w = ((i & 1u) != 0u ? f.x : 1.0 - f.x) * ((i >> 1u) != 0u ? f.y : 1.0 - f.y);
-                    float2 rg = unpackHalf2(e.x);
-                    float2 bt = unpackHalf2(e.y);
-                    scatter += float3(rg, bt.x) * w;
-                    transmittance += bt.y * w;
-                    weight += w;
-                }
-                fresh = weight <= 1.0e-3;
-                if (!fresh) {
-                    CloudVolume reused;
-                    reused.scatter = max(scatter / weight, float3(0.0, 0.0, 0.0));
-                    reused.transmittance = saturate(transmittance / weight);
-                    return reused;
-                }
-            }
-        }
-    }
-    CloudVolume deck = cloudSegment(worldPush, originRel, dir, 1.0e9, skyAmbient, true);
-    current[pix.y * dims.x + pix.x] = uint4(packHalf2(deck.scatter.rg),
-            packHalf2(float2(deck.scatter.b, deck.transmittance)), frame + 1u, 0u);
-    return deck;
-}
-
 [shader("miss")]
 void main(inout Payload payload) {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
@@ -437,9 +362,14 @@ void main(inout Payload payload) {
         mdir = fl > 1.0e-4 ? float3(flat2.x / fl, 0.0, flat2.y / fl) : float3(1.0, 0.0, 0.0);
         downFade = exp(dir.y * 3.0);
     }
-    float3 col = mediaFull
-            ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
-            : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
+    float3 col;
+    if (mediaFull && worldFeature(worldPush, FEATURE_PROBE_NO_FULL_ATMOSPHERE)) {
+        col = float3(0.30, 0.45, 0.80) * day + 0.02; // F8 probe only: what the full-tier march costs
+    } else {
+        col = mediaFull
+                ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
+                : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
+    }
 
     // RTX/Areal vivid: smooth gradient from light cyan at horizon to pure saturated blue at zenith
     // No gray/brown haze injection - clean blue only
@@ -507,13 +437,8 @@ void main(inout Payload payload) {
     // ordinary cloud layer is restored.
     float cloudTransmittance = 1.0;
     if (!rayInWater) {
-        float3 originRel = WorldRayOrigin() - worldPush.camOffset;
-        bool reuse = mediaFull && (payload.flags & PAYLOAD_CAMERA_SKY) != 0u && !skyCacheBuild
-                && worldFeature(worldPush, FEATURE_CLOUD_REUSE) && worldPush.cloudReuseAddr != 0u;
-        CloudVolume deck = reuse
-                ? cameraCloudDeck(worldPush, originRel, dir, skyAmbient,
-                                  (payload.flags & PAYLOAD_CLOUD_REUSE_STALE) != 0u)
-                : cloudSegment(worldPush, originRel, dir, 1.0e9, skyAmbient, mediaFull);
+        CloudVolume deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
+                                        skyAmbient, mediaFull);
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;
     }
