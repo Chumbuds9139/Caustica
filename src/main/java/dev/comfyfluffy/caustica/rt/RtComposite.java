@@ -303,6 +303,8 @@ public final class RtComposite {
     static final int FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432;
     static final int FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864;
     static final int FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728;
+    static final int FEATURE_PROBE_CLOUD_LIGHT_STEPS_2 = 268435456;
+    static final int FEATURE_PROBE_CLOUD_LIGHT_STEPS_1 = 536870912;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
@@ -771,6 +773,11 @@ public final class RtComposite {
     // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): one float4 per 2x2 block of the
     // render, written by pass A and read by pass B's camera-ray misses, ordered by the same barrier.
     private RtBuffer cameraClouds;
+    // Its two halves alternate as this frame's blocks and last frame's history; see cameraCloudsAddress.
+    private boolean cameraCloudsParity;
+    private boolean cameraCloudsFilledLastFrame;
+    private ClientLevel cameraCloudsLevel;
+    private int cameraCloudsDimension;
     // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
     // only `current`, so spatial neighbour reuse never races another raygen invocation. The pair exists
     // only while the player setting is ON; live toggles idle the device before destruction/allocation.
@@ -1650,6 +1657,7 @@ public final class RtComposite {
             cameraClouds.destroy();
             cameraClouds = null;
         }
+        cameraCloudsFilledLastFrame = false;
         destroyRestirResources();
         destroyGuideImages();
 
@@ -1696,7 +1704,9 @@ public final class RtComposite {
         skyCache = ctx.createBuffer(SKY_CACHE_BYTES, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "sky cache for bounced light");
         long cloudTexels = Math.multiplyExact((long) (renderW + 1) / 2, (long) (renderH + 1) / 2);
-        cameraClouds = ctx.createBuffer(Math.multiplyExact(cloudTexels, 16L),
+        // Two halves: this frame's blocks and last frame's, alternating (see cameraCloudsAddress).
+        cameraCloudsFilledLastFrame = false;
+        cameraClouds = ctx.createBuffer(Math.multiplyExact(cloudTexels, 32L),
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "half-res camera clouds " + (renderW + 1) / 2 + "x" + (renderH + 1) / 2);
         syncRestirResources(ctx);
@@ -2000,6 +2010,8 @@ public final class RtComposite {
             // Analytic held-item light: position + intensity lane and the item's RGB tint; w == 0
             // disables the shader term (toggle off, no luminous item, or no player).
             HandLightState hand = handLightState(terrain);
+            int frameFeatures = featureFlags();
+            long cameraCloudsAddress = cameraCloudsAddress(frameFeatures, level, dimension);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -2050,7 +2062,7 @@ public final class RtComposite {
                     // Shader-only POM: x relief depth (blocks), y max texel crossings, w fade distance.
                     parallaxParams(),
                     dimension,
-                    featureFlags(),
+                    frameFeatures,
                     // Analytic held-item light: xyz rebased position, w intensity (0 = none held),
                     // then the item's RGB tint lane.
                     hand.light(),
@@ -2128,7 +2140,7 @@ public final class RtComposite {
                     // WorldPush.skyCacheAddr: pass A fills it, pass B's cheap-tier misses read it.
                     skyCache != null ? skyCache.deviceAddress : 0L,
                     // WorldPush.cloudBufferAddr: pass A fills it, pass B's camera-ray misses read it.
-                    cameraClouds != null ? cameraClouds.deviceAddress : 0L,
+                    cameraCloudsAddress,
                     new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
                             fe.geomTableCount(), 0),
                     // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
@@ -2818,6 +2830,28 @@ public final class RtComposite {
      * rather than sniffing dimension type flags, so a datapack dimension that merely reuses the Nether's
      * or the End's type still renders as the Overworld unless it really is that dimension.
      */
+    /**
+     * WorldPush.cloudBufferAddr for this frame, or 0 when the half-resolution camera clouds are off. The
+     * buffer holds two halves of one texel per 2x2 render block: pass A writes one while it reads last
+     * frame's from the other, and pass B reads the one just written. The address is 16-byte aligned, so its
+     * low bits carry the frame's state: bit 0 = which half is this frame's, bit 1 = the other half is a
+     * valid history (pass A filled it last frame, in this same world and buffer).
+     */
+    private long cameraCloudsAddress(int features, ClientLevel level, int dimension) {
+        boolean fill = (features & FEATURE_HALF_RES_CAMERA_CLOUDS) != 0 && cameraClouds != null
+                && (cameraClouds.deviceAddress & 15L) == 0L;
+        boolean historyValid = fill && cameraCloudsFilledLastFrame && level == cameraCloudsLevel
+                && dimension == cameraCloudsDimension;
+        cameraCloudsFilledLastFrame = fill;
+        cameraCloudsLevel = level;
+        cameraCloudsDimension = dimension;
+        if (!fill) {
+            return 0L;
+        }
+        cameraCloudsParity = !cameraCloudsParity;
+        return cameraClouds.deviceAddress | (cameraCloudsParity ? 1L : 0L) | (historyValid ? 2L : 0L);
+    }
+
     private static int dimensionId(ClientLevel level) {
         if (level == null) {
             return DIMENSION_OVERWORLD;
@@ -3276,6 +3310,7 @@ public final class RtComposite {
             cameraClouds.destroy();
             cameraClouds = null;
         }
+        cameraCloudsFilledLastFrame = false;
         destroyRestirResources();
         destroyGuideImages();
         exposure.destroy();

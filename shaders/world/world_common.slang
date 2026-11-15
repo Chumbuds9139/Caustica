@@ -249,8 +249,9 @@ public struct WorldPush {
     // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and
     // read by pass B's misses. 0 = no buffer, and both sides then run the sky as before.
     public uint64_t skyCacheAddr;
-    // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): one float4 per 2x2 pixel block
-    // of the render, written by pass A and read by pass B's camera-ray misses. 0 = no buffer.
+    // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): two halves of one float4 per 2x2
+    // pixel block of the render. Pass A writes this frame's half from last frame's, pass B reads it. The
+    // low bits carry the frame's state (CAMERA_CLOUD_*); see cameraCloudHalf. 0 = off this frame.
     public uint64_t cloudBufferAddr;
     // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
     // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. It must stay right
@@ -365,6 +366,10 @@ public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
 public static const uint FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432u;
 public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
 public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
+//   CLOUD_LIGHT_STEPS_2 / _1: the march toward the sun takes at most 2 / exactly 1 sample over the same
+//   distance (a candidate setting, not a removal: the image changes a little).
+public static const uint FEATURE_PROBE_CLOUD_LIGHT_STEPS_2 = 268435456u;
+public static const uint FEATURE_PROBE_CLOUD_LIGHT_STEPS_1 = 536870912u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -444,6 +449,14 @@ public float4 skyCacheSample(uint64_t addr, float3 dir) {
 }
 public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }
 
+// WorldPush.cloudBufferAddr's low bits (the buffer is 16-byte aligned): which half is this frame's, and
+// whether the other half holds last frame's blocks for this same world and buffer.
+public static const uint CAMERA_CLOUD_PARITY = 1u;
+public static const uint CAMERA_CLOUD_HISTORY_VALID = 2u;
+// How much of each frame's fresh march goes into a block. The rest is last frame's, reprojected, which is
+// what averages away the per-frame step dither a 2x2 block would otherwise show as moving blotches.
+public static const float CAMERA_CLOUD_BLEND = 0.2;
+
 public bool cameraCloudBufferActive(WorldPush push) {
     return worldFeature(push, FEATURE_HALF_RES_CAMERA_CLOUDS) && push.cloudBufferAddr != 0u;
 }
@@ -453,21 +466,38 @@ public uint2 cameraCloudBufferDims(uint2 renderDims) {
     return (renderDims + 1u) / 2u;
 }
 
-/**
- * The camera clouds of render pixel `pix`, bilinear between the four nearest texels: xyz premultiplied
- * scatter, w transmittance. Texel t is centred on the corner its four pixels share (pixel coordinate
- * 2t + 1), so pixel p, centred at p + 0.5, sits at texel coordinate (p - 0.5) / 2.
- */
-public float4 cameraCloudBufferSample(uint64_t addr, uint2 pix, uint2 renderDims) {
+/** Address of one half of the buffer: this frame's (current = true) or last frame's. */
+public uint64_t cameraCloudHalf(uint64_t tagged, uint2 renderDims, bool current) {
     uint2 dims = cameraCloudBufferDims(renderDims);
-    float2 u = clamp((float2(pix) - 0.5) * 0.5, float2(0.0, 0.0), float2(dims) - 1.0);
+    uint64_t base = (tagged >> 4u) << 4u;
+    bool upper = ((uint(tagged) & CAMERA_CLOUD_PARITY) != 0u) == current;
+    return upper ? base + uint64_t(dims.x * dims.y) * 16u : base;
+}
+
+public bool cameraCloudHistoryValid(uint64_t tagged) {
+    return (uint(tagged) & CAMERA_CLOUD_HISTORY_VALID) != 0u;
+}
+
+/** Bilinear read of one half at texel coordinate `u` (texel t centred at u = t), clamped to the grid. */
+public float4 cameraCloudBilinear(uint64_t half, uint2 dims, float2 u) {
+    u = clamp(u, float2(0.0, 0.0), float2(dims) - 1.0);
     uint2 a = uint2(floor(u));
     uint2 b = min(a + 1u, dims - 1u);
     float2 w = u - float2(a);
-    ConstPtr<float4> buf = ConstPtr<float4>(addr);
+    ConstPtr<float4> buf = ConstPtr<float4>(half);
     float4 top = lerp(buf[a.y * dims.x + a.x], buf[a.y * dims.x + b.x], w.x);
     float4 bottom = lerp(buf[b.y * dims.x + a.x], buf[b.y * dims.x + b.x], w.x);
     return lerp(top, bottom, w.y);
+}
+
+/**
+ * The camera clouds of render pixel `pix` from this frame's half, bilinear between the four nearest
+ * blocks: xyz premultiplied scatter, w transmittance. Block t is centred on the corner its four pixels
+ * share (pixel coordinate 2t + 1), so pixel p, centred at p + 0.5, sits at block coordinate (p - 0.5) / 2.
+ */
+public float4 cameraCloudBufferSample(uint64_t tagged, uint2 pix, uint2 renderDims) {
+    return cameraCloudBilinear(cameraCloudHalf(tagged, renderDims, true), cameraCloudBufferDims(renderDims),
+                               (float2(pix) - 0.5) * 0.5);
 }
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section

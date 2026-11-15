@@ -150,35 +150,30 @@ public final class RtPerfSweep {
         };
         List<Variant> tests = new ArrayList<>();
         // Rows answered on 2026-11-15 and left out to keep the test short: the sky cache, the simplified
-        // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, the fog and
-        // atmosphere probes, and the clouds in bounced light (about 0) and the cloud shadow (about 0.5 ms).
-        // This round is the clouds: the half-resolution camera clouds against the camera-clouds ceiling,
-        // and what a cheaper march could cut inside the volumetric density.
+        // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, fast
+        // clouds, the fog and atmosphere probes, the clouds in reflections, in bounced light and their
+        // shadow, and the 3D noise and 2D coverage inside the density (2.5 and about 0 ms).
+        // This round: the half-resolution camera clouds (now blended over frames) against the
+        // camera-clouds ceiling, and the march toward the sun, the largest piece of the clouds (5.4 ms).
         boolean marching = clouds && volumetric;
-        if (fastClouds && marching) {
-            tests.add(new Variant("fast volumetric clouds off", false,
-                    () -> CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(false)));
-        }
         if (marching) {
             tests.add(new Variant(halfResClouds ? "half-res camera clouds off" : "half-res camera clouds on",
                     false, () -> CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(!halfResClouds)));
         }
         // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
-        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The "twice"
-        // probes add the piece once more instead (the image stays right): the added time is its cost.
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The light
+        // step rows are candidate settings instead: the image changes a little.
         if (clouds) {
             tests.add(new Variant("probe: clouds on camera rays skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CAMERA_CLOUDS));
-            tests.add(new Variant("probe: clouds in reflections skipped", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
         }
         if (marching) {
             tests.add(new Variant("probe: cloud light march skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH));
-            tests.add(new Variant("probe: cloud 3D noise evaluated twice", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_3D_NOISE_TWICE));
-            tests.add(new Variant("probe: cloud 2D coverage evaluated twice", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_COVERAGE_TWICE));
+            tests.add(new Variant("probe: cloud light steps -> 2", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_LIGHT_STEPS_2));
+            tests.add(new Variant("probe: cloud light steps -> 1", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_LIGHT_STEPS_1));
         }
         // The most anything further could win: the clouds switched off outright.
         if (clouds) {

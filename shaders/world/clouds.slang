@@ -1132,6 +1132,13 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
     if (lighterFull) {
         lightSteps = CLOUD_LIGHT_STEPS_FAST;
     }
+    // F8 probes: fewer samples toward the sun; lightStepBlocks below stretches them over the same distance.
+    if (worldFeature(push, FEATURE_PROBE_CLOUD_LIGHT_STEPS_2)) {
+        lightSteps = min(lightSteps, 2);
+    }
+    if (worldFeature(push, FEATURE_PROBE_CLOUD_LIGHT_STEPS_1)) {
+        lightSteps = 1;
+    }
     CloudVolume result;
     result.scatter = float3(0.0, 0.0, 0.0);
     result.transmittance = 1.0;

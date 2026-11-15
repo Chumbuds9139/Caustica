@@ -867,8 +867,10 @@ public final class CausticaConfig {
                     bool("caustica.rt.fastVolumetricClouds", "composite.fast-volumetric-clouds", true);
             /**
              * Volumetric clouds the camera sees directly, marched once per 2x2 block of the render (in
-             * pass A) and blended for each pixel, instead of once per pixel. Reflections and bounced light
-             * still march their own. Off by default until it has been measured and looked at.
+             * pass A) and blended for each pixel, instead of once per pixel. Each block also keeps 80% of
+             * last frame's along the same direction, which averages away the per-frame step dither that
+             * otherwise shows as moving blotches. Reflections and bounced light still march their own. Off
+             * by default until it has been measured and looked at: saves about 3.5 ms (2026-11-15).
              */
             public static final BooleanSetting HALF_RES_CAMERA_CLOUDS =
                     bool("caustica.rt.halfResCameraClouds", "composite.half-res-camera-clouds", false);

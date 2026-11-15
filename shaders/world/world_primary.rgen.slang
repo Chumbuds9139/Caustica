@@ -270,15 +270,37 @@ void main() {
     if (cameraCloudBufferActive(worldPush)
             && !(cameraSubmerged() && worldPush.underwaterEffects.w > 0.0)) {
         uint2 cloudDims = cameraCloudBufferDims(dimensions);
-        DevicePtr<float4> cloudBuffer = DevicePtr<float4>(worldPush.cloudBufferAddr);
+        DevicePtr<float4> cloudBuffer = DevicePtr<float4>(cameraCloudHalf(worldPush.cloudBufferAddr,
+                                                                          dimensions, true));
+        uint64_t cloudHistory = cameraCloudHalf(worldPush.cloudBufferAddr, dimensions, false);
+        bool historyValid = cameraCloudHistoryValid(worldPush.cloudBufferAddr);
         for (uint texel = pixelIndex; texel < cloudDims.x * cloudDims.y; texel += baseRecordCount) {
             float2 corner = float2(float(texel % cloudDims.x), float(texel / cloudDims.x)) * 2.0 + 1.0;
             float2 tndc = ((corner + worldPush.jitter) / size) * 2.0 - 1.0;
             float4 tNearH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 1.0, 1.0));
             float4 tFarH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 0.0, 1.0));
             float3 tNear = tNearH.xyz / tNearH.w;
-            cloudBuffer[texel] = traceCameraCloudTexel(tNear + worldPush.camOffset,
-                    normalize(tFarH.xyz / tFarH.w - tNear));
+            float3 tDir = normalize(tFarH.xyz / tFarH.w - tNear);
+            float4 fresh = traceCameraCloudTexel(tNear + worldPush.camOffset, tDir);
+            // Blend into last frame's block along the same direction. The deck is far enough away that
+            // the direction alone places it (w = 0: the camera's own move is left out). Taking off this
+            // frame's jitter puts a still camera back on exactly the same block, so the history is never
+            // resampled between blocks frame after frame, which would blur it. A direction last frame did
+            // not see (behind the camera or off the edge) starts again from the fresh march.
+            if (historyValid) {
+                float4 prevClip = mul(worldPush.prevViewProj, float4(tDir, 0.0));
+                if (prevClip.w > 1.0e-6) {
+                    float2 prevCorner = (prevClip.xy / prevClip.w * 0.5 + 0.5) * size - worldPush.jitter;
+                    float2 u = (prevCorner - 1.0) * 0.5;
+                    if (all(u >= -0.5) && all(u <= float2(cloudDims) - 0.5)) {
+                        float4 history = cameraCloudBilinear(cloudHistory, cloudDims, u);
+                        if (all(isfinite(history)) && history.a >= 0.0 && history.a <= 1.0) {
+                            fresh = lerp(history, fresh, CAMERA_CLOUD_BLEND);
+                        }
+                    }
+                }
+            }
+            cloudBuffer[texel] = fresh;
         }
     }
     uint splitRecord = baseRecordCount + pixelIndex;
