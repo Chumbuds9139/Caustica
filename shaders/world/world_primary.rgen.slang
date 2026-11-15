@@ -264,9 +264,11 @@ void main() {
     }
     // Fill the camera cloud buffer (FEATURE_HALF_RES_CAMERA_CLOUDS) the same way: the leading threads each
     // march the deck along the camera ray through the shared corner of one 2x2 pixel block, with this
-    // frame's jitter, so pass B's camera-ray misses can blend instead of marching. Under water the camera
-    // rays never reach the deck before world.rgen leaves the water, so there is nothing to fill.
-    if (cameraCloudBufferActive(worldPush) && !cameraSubmerged()) {
+    // frame's jitter, so pass B's camera-ray misses can blend instead of marching. Skipped only when no
+    // camera-ray miss will read it: under water with the underwater sky on, those misses carry
+    // PAYLOAD_RAY_IN_WATER and leave the deck out (traceRadianceMiss sets it on exactly that condition).
+    if (cameraCloudBufferActive(worldPush)
+            && !(cameraSubmerged() && worldPush.underwaterEffects.w > 0.0)) {
         uint2 cloudDims = cameraCloudBufferDims(dimensions);
         DevicePtr<float4> cloudBuffer = DevicePtr<float4>(worldPush.cloudBufferAddr);
         for (uint texel = pixelIndex; texel < cloudDims.x * cloudDims.y; texel += baseRecordCount) {
