@@ -264,17 +264,23 @@ void main() {
     }
     // Fill the camera cloud buffer (FEATURE_HALF_RES_CAMERA_CLOUDS) the same way: the leading threads each
     // march the deck along the camera ray through the shared corner of one 2x2 pixel block, with this
-    // frame's jitter, so pass B's camera-ray misses can blend instead of marching. Skipped only when no
-    // camera-ray miss will read it: under water with the underwater sky on, those misses carry
-    // PAYLOAD_RAY_IN_WATER and leave the deck out (traceRadianceMiss sets it on exactly that condition).
-    if (cameraCloudBufferActive(worldPush)
-            && !(cameraSubmerged() && worldPush.underwaterEffects.w > 0.0)) {
+    // frame's jitter, so pass B's camera-ray misses can blend instead of marching.
+    if (cameraCloudBufferActive(worldPush)) {
         uint2 cloudDims = cameraCloudBufferDims(dimensions);
         DevicePtr<float4> cloudBuffer = DevicePtr<float4>(cameraCloudHalf(worldPush.cloudBufferAddr,
                                                                           dimensions, true));
         uint64_t cloudHistory = cameraCloudHalf(worldPush.cloudBufferAddr, dimensions, false);
         bool historyValid = cameraCloudHistoryValid(worldPush.cloudBufferAddr);
+        // Under water with the underwater sky on, no camera-ray miss reads the deck (those misses carry
+        // PAYLOAD_RAY_IN_WATER, which traceRadianceMiss sets on exactly this condition), so nothing is
+        // marched. The blocks are marked empty instead (w < 0), so the first frame after surfacing starts
+        // from fresh marches rather than blending into whatever this half last held.
+        bool unread = cameraSubmerged() && worldPush.underwaterEffects.w > 0.0;
         for (uint texel = pixelIndex; texel < cloudDims.x * cloudDims.y; texel += baseRecordCount) {
+            if (unread) {
+                cloudBuffer[texel] = float4(0.0, 0.0, 0.0, -1.0);
+                continue;
+            }
             float2 corner = float2(float(texel % cloudDims.x), float(texel / cloudDims.x)) * 2.0 + 1.0;
             float2 tndc = ((corner + worldPush.jitter) / size) * 2.0 - 1.0;
             float4 tNearH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 1.0, 1.0));
@@ -282,13 +288,19 @@ void main() {
             float3 tNear = tNearH.xyz / tNearH.w;
             float3 tDir = normalize(tFarH.xyz / tFarH.w - tNear);
             float4 fresh = traceCameraCloudTexel(tNear + worldPush.camOffset, tDir);
-            // Blend into last frame's block along the same direction. The deck is far enough away that
-            // the direction alone places it (w = 0: the camera's own move is left out). Taking off this
-            // frame's jitter puts a still camera back on exactly the same block, so the history is never
-            // resampled between blocks frame after frame, which would blur it. A direction last frame did
-            // not see (behind the camera or off the edge) starts again from the fresh march.
+            // Blend into last frame's block at the same piece of deck. It is placed where this ray meets
+            // the deck's mid-plane (within the cloud view limit) and projected the way the guide motion
+            // vectors are (guides.slang), so walking or flying does not drag the clouds; a ray that never
+            // meets the plane is placed by its direction alone. Taking off this frame's jitter puts a still
+            // camera back on exactly the same block, so the history is never resampled between blocks
+            // frame after frame, which would blur it. A block last frame did not see (behind the camera,
+            // off the edge, or marked empty) starts again from the fresh march.
             if (historyValid) {
-                float4 prevClip = mul(worldPush.prevViewProj, float4(tDir, 0.0));
+                float deckT = abs(tDir.y) > 1.0e-4 ? (worldPush.clouds.w - tNear.y) / tDir.y : -1.0;
+                float4 prevClip = deckT > 0.0
+                        ? mul(worldPush.prevViewProj, float4(tNear + tDir * min(deckT, worldPush.cloudAnchor.w)
+                                                             + worldPush.camDelta, 1.0))
+                        : mul(worldPush.prevViewProj, float4(tDir, 0.0));
                 if (prevClip.w > 1.0e-6) {
                     float2 prevCorner = (prevClip.xy / prevClip.w * 0.5 + 0.5) * size - worldPush.jitter;
                     float2 u = (prevCorner - 1.0) * 0.5;
