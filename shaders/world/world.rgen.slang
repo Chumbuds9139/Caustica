@@ -116,7 +116,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // Atmospheric clouds are not part of an underwater camera prefix: integrating the deck
             // through water produced a hard horizon seam / dark tile when rays split at the surface.
             // The resumed air segment still evaluates clouds normally after the interface.
-            if (!cameraSubmerged()) {
+            if (!cameraSubmerged() && !cloudProbeSkips(worldPush, true, true)) {
                 CloudVolume pre = cloudSegment(worldPush, float3(0.0, 0.0, 0.0), toStart / prefixDist,
                                                prefixDist, cloudSkyAmbient(worldPush), seg.showCelestial);
                 L += throughput * pre.scatter;
@@ -189,6 +189,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // Quality tier of the sky, clouds and fog this ray sees (see simpleRoughSky above).
         bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough);
         gv_cheapMedia = showCelestial && !mediaFull;
+        bool cameraRay = bounce == 0 && seg.bounce == 0;
+        gv_cameraRay = cameraRay;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -216,6 +218,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         traceRadiance(bounce == 0 ? CULL_PRIMARY : secondaryCull, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
 #endif
+        gv_cameraRay = false;
         // The point this ray reaches is shaded with the same view of the scene it was found with.
         gv_secondaryCull = secondaryCull;
 
@@ -346,7 +349,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // it is the same kind of thing: a participating medium along this segment. Being in the path
         // integral rather than at a display seam is what makes it correct in reflections and
         // refractions too.
-        {
+        if (!cloudProbeSkips(worldPush, cameraRay, mediaFull)) {
             // showCelestial marks the rays whose clouds are seen directly (camera + specular bounces),
             // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
             CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
@@ -890,8 +893,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                 // the direct-hit emission convention above, and the pre-fog segment throughput
                 // keeps it from eating this segment's own darkening twice.
                 if (fogEnabled(worldPush) && fogAppliesHere(medium) && mediaFull
-                        && r.W > 0.0 && r.phat > 0.0
-                        && !worldFeature(worldPush, FEATURE_PROBE_NO_FOG_EMITTER)) {
+                        && r.W > 0.0 && r.phat > 0.0) {
                     float3 fogE = fogEmitterScatter(worldPush, ro, rd, payload.hitT,
                             r.pos, r.lnrm, r.le, r.area) * estimatorScale;
                     fogE *= fogSegThroughput;

@@ -341,12 +341,13 @@ public static const uint FEATURE_SKY_CACHE = 524288u;
 // F8 performance-test probes (RtPerfSweep sets them for one row each, never a setting): each removes one
 // piece of work so the test can show what a cheaper scheme for it could save at most. The image is wrong
 // while one is set.
-//   NO_FOG_SUN_SHADOW: full-tier fog treats its sun-shaft sample as unshadowed (no shadow ray).
-//   NO_FOG_EMITTER:    the fog in-scatter from the shaded emitter (and its shadow ray) is left out.
-//   NO_FULL_ATMOSPHERE: full-tier sky misses use a flat colour instead of marching the atmosphere.
-public static const uint FEATURE_PROBE_NO_FOG_SUN_SHADOW = 1048576u;
-public static const uint FEATURE_PROBE_NO_FOG_EMITTER = 2097152u;
-public static const uint FEATURE_PROBE_NO_FULL_ATMOSPHERE = 4194304u;
+// The cloud deck split three ways, by who sees it (see cloudProbeSkips):
+//   NO_CAMERA_CLOUDS:     camera rays: the sky they reach and the stretch to their first hit.
+//   NO_REFLECTION_CLOUDS: later full-tier rays: clear reflections and refractions.
+//   NO_BOUNCE_CLOUDS:     cheap-tier rays: bounced light, rough reflections and the sky cache they read.
+public static const uint FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576u;
+public static const uint FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152u;
+public static const uint FEATURE_PROBE_NO_BOUNCE_CLOUDS = 4194304u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -376,6 +377,13 @@ public static const float PARALLAX_WALL_TILT = 0.5;
 // loads its own WorldPush and must NOT import world_core (that module declares the raygen bindings).
 // world_core re-exports the same predicates against its module-level `worldPush` for every other pass.
 public bool worldFeature(WorldPush push, uint feature) { return (push.featureFlags & feature) != 0u; }
+
+// F8 cloud probes: whether this row leaves the deck out for a ray of this kind.
+public bool cloudProbeSkips(WorldPush push, bool cameraRay, bool fullTier) {
+    uint probe = cameraRay ? FEATURE_PROBE_NO_CAMERA_CLOUDS
+            : (fullTier ? FEATURE_PROBE_NO_REFLECTION_CLOUDS : FEATURE_PROBE_NO_BOUNCE_CLOUDS);
+    return worldFeature(push, probe);
+}
 
 // Sky cache layout: an equirectangular map, x = azimuth (wraps), y = polar angle from straight up. At
 // 256 x 128 a texel spans 1.4 degrees, finer than anything a diffuse or rough bounce can resolve.
@@ -578,6 +586,8 @@ public static const uint PAYLOAD_CHEAP_MEDIA = 65536u;
 // world.rmiss: this miss fills a sky-cache texel (world_primary.rgen), so it computes the sky instead of
 // reading the cache it is filling, and leaves out the lightning, which every reader adds live.
 public static const uint PAYLOAD_SKY_CACHE_BUILD = 131072u;
+// Pass B's trace of a camera ray. Read only by the F8 cloud probes (cloudProbeSkips) in world.rmiss.
+public static const uint PAYLOAD_CAMERA_RAY = 262144u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect

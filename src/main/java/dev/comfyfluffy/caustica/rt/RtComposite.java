@@ -295,9 +295,9 @@ public final class RtComposite {
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
     private static final int FEATURE_SKY_CACHE = 524288;
     // F8 probes (world_common.slang): RtPerfSweep sets one per row through perfProbes, never a setting.
-    static final int FEATURE_PROBE_NO_FOG_SUN_SHADOW = 1048576;
-    static final int FEATURE_PROBE_NO_FOG_EMITTER = 2097152;
-    static final int FEATURE_PROBE_NO_FULL_ATMOSPHERE = 4194304;
+    static final int FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576;
+    static final int FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152;
+    static final int FEATURE_PROBE_NO_BOUNCE_CLOUDS = 4194304;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.

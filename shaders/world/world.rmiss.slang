@@ -362,14 +362,9 @@ void main(inout Payload payload) {
         mdir = fl > 1.0e-4 ? float3(flat2.x / fl, 0.0, flat2.y / fl) : float3(1.0, 0.0, 0.0);
         downFade = exp(dir.y * 3.0);
     }
-    float3 col;
-    if (mediaFull && worldFeature(worldPush, FEATURE_PROBE_NO_FULL_ATMOSPHERE)) {
-        col = float3(0.30, 0.45, 0.80) * day + 0.02; // F8 probe only: what the full-tier march costs
-    } else {
-        col = mediaFull
-                ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
-                : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
-    }
+    float3 col = mediaFull
+            ? atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS, ATMOS_LIGHT_STEPS)
+            : atmosphere(mdir, sd, ATMOS_PRIMARY_STEPS_DIFFUSE, ATMOS_LIGHT_STEPS_DIFFUSE);
 
     // RTX/Areal vivid: smooth gradient from light cyan at horizon to pure saturated blue at zenith
     // No gray/brown haze injection - clean blue only
@@ -436,7 +431,7 @@ void main(inout Payload payload) {
     // underwater sky misses. Once refraction has left the medium, raygen clears this flag and the
     // ordinary cloud layer is restored.
     float cloudTransmittance = 1.0;
-    if (!rayInWater) {
+    if (!rayInWater && !cloudProbeSkips(worldPush, (payload.flags & PAYLOAD_CAMERA_RAY) != 0u, mediaFull)) {
         CloudVolume deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
                                         skyAmbient, mediaFull);
         col = col * deck.transmittance + deck.scatter;
