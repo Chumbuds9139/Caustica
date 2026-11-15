@@ -437,15 +437,24 @@ void main(inout Payload payload) {
     deck.scatter = float3(0.0, 0.0, 0.0);
     deck.transmittance = 1.0;
     if (!rayInWater && !cloudProbeSkips(worldPush, cameraRay, mediaFull)) {
+        bool blocksRead = false;
         if (cameraRay && !cloudBufferBuild && cameraCloudBufferActive(worldPush)) {
-            // Pass A marched the camera clouds once per 2x2 pixel block (FEATURE_HALF_RES_CAMERA_CLOUDS).
-            float4 blended = cameraCloudBufferSample(worldPush.cloudBufferAddr, DispatchRaysIndex().xy,
-                                                     DispatchRaysDimensions().xy);
-            deck.scatter = blended.rgb;
-            deck.transmittance = blended.a;
-        } else {
+            // Pass A marched the camera clouds once per 2x2 pixel block (FEATURE_HALF_RES_CAMERA_CLOUDS),
+            // in the tiles where last frame's camera rays saw sky; mark this one for the next frame. Empty
+            // blocks (sky just turned toward or uncovered) fall through to this pixel's own march.
+            uint2 pix = DispatchRaysIndex().xy;
+            uint2 renderDims = DispatchRaysDimensions().xy;
+            cameraCloudMarkSky(worldPush.cloudBufferAddr, pix, renderDims);
+            float4 blended = cameraCloudBufferSample(worldPush.cloudBufferAddr, pix, renderDims);
+            if (blended.a >= 0.0) {
+                deck.scatter = blended.rgb;
+                deck.transmittance = blended.a;
+                blocksRead = true;
+            }
+        }
+        if (!blocksRead) {
             deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
-                                skyAmbient, mediaFull);
+                                skyAmbient, cloudFullTier(worldPush, cameraRay, mediaFull));
         }
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;

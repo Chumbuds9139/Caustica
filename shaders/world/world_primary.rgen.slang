@@ -276,12 +276,22 @@ void main() {
         // marched. The blocks are marked empty instead (w < 0), so the first frame after surfacing starts
         // from fresh marches rather than blending into whatever this half last held.
         bool unread = cameraSubmerged() && worldPush.underwaterEffects.w > 0.0;
+        // Only the tiles near last frame's sky are marched (see CAMERA_CLOUD_TILE). Last frame's mask is
+        // trusted only when its half is a valid history: the same world and buffer, filled last frame.
+        // This frame's mask is cleared here for pass B to set; the barrier orders the two.
+        uint2 cloudTiles = cameraCloudTileDims(dimensions);
+        if (pixelIndex < cloudTiles.x * cloudTiles.y) {
+            DevicePtr<uint>(cameraCloudMask(worldPush.cloudBufferAddr, dimensions, true))[pixelIndex] = 0u;
+        }
+        uint64_t lastSkyMask = cameraCloudMask(worldPush.cloudBufferAddr, dimensions, false);
         for (uint texel = pixelIndex; texel < cloudDims.x * cloudDims.y; texel += baseRecordCount) {
-            if (unread) {
+            uint2 block = uint2(texel % cloudDims.x, texel / cloudDims.x);
+            if (unread || (historyValid
+                    && !cameraCloudTileWanted(lastSkyMask, block / CAMERA_CLOUD_TILE, cloudTiles))) {
                 cloudBuffer[texel] = float4(0.0, 0.0, 0.0, -1.0);
                 continue;
             }
-            float2 corner = float2(float(texel % cloudDims.x), float(texel / cloudDims.x)) * 2.0 + 1.0;
+            float2 corner = float2(block) * 2.0 + 1.0;
             float2 tndc = ((corner + worldPush.jitter) / size) * 2.0 - 1.0;
             float4 tNearH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 1.0, 1.0));
             float4 tFarH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 0.0, 1.0));

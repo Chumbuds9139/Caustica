@@ -366,10 +366,9 @@ public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
 public static const uint FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432u;
 public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
 public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
-//   CLOUD_LIGHT_STEPS_2 / _1: the march toward the sun takes at most 2 / exactly 1 sample over the same
-//   distance (a candidate setting, not a removal: the image changes a little).
-public static const uint FEATURE_PROBE_CLOUD_LIGHT_STEPS_2 = 268435456u;
-public static const uint FEATURE_PROBE_CLOUD_LIGHT_STEPS_1 = 536870912u;
+//   CHEAP_REFLECTION_CLOUDS: later full-tier rays (clear reflections and refractions) march the deck at
+//   the cheap tier, as bounced light does (a candidate scheme, not a removal: the image changes a little).
+public static const uint FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -405,6 +404,12 @@ public bool cloudProbeSkips(WorldPush push, bool cameraRay, bool fullTier) {
     uint probe = cameraRay ? FEATURE_PROBE_NO_CAMERA_CLOUDS
             : (fullTier ? FEATURE_PROBE_NO_REFLECTION_CLOUDS : FEATURE_PROBE_NO_BOUNCE_CLOUDS);
     return worldFeature(push, probe);
+}
+
+// Whether this ray marches the deck at the full tier: what the caller chose, except for the reflections
+// and refractions the F8 CHEAP_REFLECTION_CLOUDS row demotes.
+public bool cloudFullTier(WorldPush push, bool cameraRay, bool fullTier) {
+    return fullTier && (cameraRay || !worldFeature(push, FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
 }
 
 // Sky cache layout: an equirectangular map, x = azimuth (wraps), y = polar angle from straight up. At
@@ -474,25 +479,88 @@ public uint64_t cameraCloudHalf(uint64_t tagged, uint2 renderDims, bool current)
     return upper ? base + uint64_t(dims.x * dims.y) * 16u : base;
 }
 
+// The blocks are grouped in square tiles of CAMERA_CLOUD_TILE x CAMERA_CLOUD_TILE (32 x 32 pixels). Pass B's
+// camera-ray sky misses mark their tile in this frame's sky mask; pass A next frame marches only the tiles
+// within one tile of a marked one and writes the rest as empty (w < 0), so a view with little sky does not
+// pay for marching the whole screen. A miss whose blocks are empty (sky the camera has just turned toward
+// or uncovered) marches its own, as it would with the option off, and marks its tile for the next frame.
+// Tiles are large and the sky is one connected region, so a warp's threads nearly always agree.
+public static const uint CAMERA_CLOUD_TILE = 16u;
+
+public uint2 cameraCloudTileDims(uint2 renderDims) {
+    return (cameraCloudBufferDims(renderDims) + CAMERA_CLOUD_TILE - 1u) / CAMERA_CLOUD_TILE;
+}
+
+/**
+ * Address of one sky mask (one uint per tile, nonzero = a camera-ray miss reached the deck there): this
+ * frame's (current = true), which pass A clears and pass B sets, or last frame's, which pass A reads. The
+ * two masks follow both halves in the buffer and alternate with the same parity.
+ */
+public uint64_t cameraCloudMask(uint64_t tagged, uint2 renderDims, bool current) {
+    uint2 dims = cameraCloudBufferDims(renderDims);
+    uint2 tiles = cameraCloudTileDims(renderDims);
+    uint64_t base = ((tagged >> 4u) << 4u) + uint64_t(dims.x * dims.y) * 32u;
+    bool upper = ((uint(tagged) & CAMERA_CLOUD_PARITY) != 0u) == current;
+    return upper ? base + uint64_t(tiles.x * tiles.y) * 4u : base;
+}
+
+/** Pass B: a camera-ray miss at render pixel `pix` reached the deck; mark its tile for next frame's fill. */
+public void cameraCloudMarkSky(uint64_t tagged, uint2 pix, uint2 renderDims) {
+    uint2 tiles = cameraCloudTileDims(renderDims);
+    uint2 tile = min(pix / (2u * CAMERA_CLOUD_TILE), tiles - 1u);
+    DevicePtr<uint> mask = DevicePtr<uint>(cameraCloudMask(tagged, renderDims, true));
+    uint index = tile.y * tiles.x + tile.x;
+    // Every writer stores the same value, so the race is harmless; the read only saves most of the stores.
+    if (mask[index] == 0u) {
+        mask[index] = 1u;
+    }
+}
+
+/** Pass A: whether last frame's mask marks block tile `tile` or one of its eight neighbours. */
+public bool cameraCloudTileWanted(uint64_t lastMask, uint2 tile, uint2 tiles) {
+    ConstPtr<uint> mask = ConstPtr<uint>(lastMask);
+    uint x0 = tile.x > 0u ? tile.x - 1u : 0u;
+    uint y0 = tile.y > 0u ? tile.y - 1u : 0u;
+    uint x1 = min(tile.x + 1u, tiles.x - 1u);
+    uint y1 = min(tile.y + 1u, tiles.y - 1u);
+    for (uint y = y0; y <= y1; y++) {
+        for (uint x = x0; x <= x1; x++) {
+            if (mask[y * tiles.x + x] != 0u) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 public bool cameraCloudHistoryValid(uint64_t tagged) {
     return (uint(tagged) & CAMERA_CLOUD_HISTORY_VALID) != 0u;
 }
 
-/** Bilinear read of one half at texel coordinate `u` (texel t centred at u = t), clamped to the grid. */
+/**
+ * Bilinear read of one half at texel coordinate `u` (texel t centred at u = t), clamped to the grid. w is
+ * negative when any of the four blocks is empty, so a reader never blends a march with an empty block.
+ */
 public float4 cameraCloudBilinear(uint64_t half, uint2 dims, float2 u) {
     u = clamp(u, float2(0.0, 0.0), float2(dims) - 1.0);
     uint2 a = uint2(floor(u));
     uint2 b = min(a + 1u, dims - 1u);
     float2 w = u - float2(a);
     ConstPtr<float4> buf = ConstPtr<float4>(half);
-    float4 top = lerp(buf[a.y * dims.x + a.x], buf[a.y * dims.x + b.x], w.x);
-    float4 bottom = lerp(buf[b.y * dims.x + a.x], buf[b.y * dims.x + b.x], w.x);
-    return lerp(top, bottom, w.y);
+    float4 t00 = buf[a.y * dims.x + a.x];
+    float4 t10 = buf[a.y * dims.x + b.x];
+    float4 t01 = buf[b.y * dims.x + a.x];
+    float4 t11 = buf[b.y * dims.x + b.x];
+    float4 result = lerp(lerp(t00, t10, w.x), lerp(t01, t11, w.x), w.y);
+    if (min(min(t00.w, t10.w), min(t01.w, t11.w)) < 0.0) {
+        result.w = -1.0;
+    }
+    return result;
 }
 
 /**
  * The camera clouds of render pixel `pix` from this frame's half, bilinear between the four nearest
- * blocks: xyz premultiplied scatter, w transmittance. Block t is centred on the corner its four pixels
+ * blocks: xyz premultiplied scatter, w transmittance (negative: a block is empty, march instead). Block t is centred on the corner its four pixels
  * share (pixel coordinate 2t + 1), so pixel p, centred at p + 0.5, sits at block coordinate (p - 0.5) / 2.
  */
 public float4 cameraCloudBufferSample(uint64_t tagged, uint2 pix, uint2 renderDims) {

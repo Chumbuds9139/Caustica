@@ -303,8 +303,7 @@ public final class RtComposite {
     static final int FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432;
     static final int FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864;
     static final int FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728;
-    static final int FEATURE_PROBE_CLOUD_LIGHT_STEPS_2 = 268435456;
-    static final int FEATURE_PROBE_CLOUD_LIGHT_STEPS_1 = 536870912;
+    static final int FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
@@ -771,7 +770,8 @@ public final class RtComposite {
     // barrier between the passes orders the two, and it is rewritten in full every frame.
     private RtBuffer skyCache;
     // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): one float4 per 2x2 block of the
-    // render, written by pass A and read by pass B's camera-ray misses, ordered by the same barrier.
+    // render, written by pass A and read by pass B's camera-ray misses, ordered by the same barrier. The
+    // misses also mark which tiles saw sky, which the next frame's pass A reads to skip the rest.
     private RtBuffer cameraClouds;
     // Its two halves alternate as this frame's blocks and last frame's history; see cameraCloudsAddress.
     private boolean cameraCloudsParity;
@@ -1704,9 +1704,12 @@ public final class RtComposite {
         skyCache = ctx.createBuffer(SKY_CACHE_BYTES, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "sky cache for bounced light");
         long cloudTexels = Math.multiplyExact((long) (renderW + 1) / 2, (long) (renderH + 1) / 2);
-        // Two halves: this frame's blocks and last frame's, alternating (see cameraCloudsAddress).
+        // Tiles of 16 x 16 blocks (CAMERA_CLOUD_TILE in world_common.slang), one uint each in the sky masks.
+        long cloudTiles = (long) (((renderW + 1) / 2 + 15) / 16) * (((renderH + 1) / 2 + 15) / 16);
+        // Two halves (this frame's blocks and last frame's, alternating; see cameraCloudsAddress), then the
+        // two sky masks that alternate with them.
         cameraCloudsFilledLastFrame = false;
-        cameraClouds = ctx.createBuffer(Math.multiplyExact(cloudTexels, 32L),
+        cameraClouds = ctx.createBuffer(Math.addExact(Math.multiplyExact(cloudTexels, 32L), cloudTiles * 8L),
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "half-res camera clouds " + (renderW + 1) / 2 + "x" + (renderH + 1) / 2);
         syncRestirResources(ctx);
@@ -2833,9 +2836,10 @@ public final class RtComposite {
     /**
      * WorldPush.cloudBufferAddr for this frame, or 0 when the half-resolution camera clouds are off. The
      * buffer holds two halves of one texel per 2x2 render block: pass A writes one while it reads last
-     * frame's from the other, and pass B reads the one just written. The address is 16-byte aligned, so its
-     * low bits carry the frame's state: bit 0 = which half is this frame's, bit 1 = the other half is a
-     * valid history (pass A filled it last frame, in this same world and buffer).
+     * frame's from the other, and pass B reads the one just written. Two per-tile sky masks follow, which
+     * pass B sets and the next pass A reads. The address is 16-byte aligned, so its low bits carry the
+     * frame's state: bit 0 = which half (and mask) is this frame's, bit 1 = the other half and mask are
+     * valid (pass A and B used them last frame, in this same world and buffer).
      */
     private long cameraCloudsAddress(int features, ClientLevel level, int dimension) {
         boolean fill = (features & FEATURE_HALF_RES_CAMERA_CLOUDS) != 0 && cameraClouds != null

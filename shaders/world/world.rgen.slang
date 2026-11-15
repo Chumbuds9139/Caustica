@@ -354,7 +354,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
             CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
                                                 payload.hitT, cloudSkyAmbient(worldPush),
-                                                mediaFull);
+                                                cloudFullTier(worldPush, cameraRay, mediaFull));
             L += throughput * segCloud.scatter;
             if (channel == 2) {
                 Lspec += throughput * segCloud.scatter;

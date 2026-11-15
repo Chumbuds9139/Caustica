@@ -31,7 +31,9 @@ import net.minecraft.network.chat.Component;
  * mean of the two baselines on either side of it, which cancels any drift that is close to linear over
  * that span. Every step runs {@value #WARMUP_FRAMES} frames to settle (the GPU timer reads results four
  * frames late, and the TDR guard steps bounces up over a few frames) and is then measured over
- * {@value #MEASURE_FRAMES} frames, reported as medians. Settings are changed in memory only, are restored after every variant and when
+ * {@value #MEASURE_FRAMES} frames, reported as medians. The first baseline settles for
+ * {@value #FIRST_WARMUP_FRAMES} frames instead: the GPU is still clocking down from the menu then, which read
+ * 1-2 ms low in every test that had no SER hold. Settings are changed in memory only, are restored after every variant and when
  * the sweep ends or is cancelled, and are never written to the config file.
  *
  * <p>The player should stand still: a moving camera changes the scene between variants. Movement of
@@ -41,6 +43,7 @@ public final class RtPerfSweep {
     public static final RtPerfSweep INSTANCE = new RtPerfSweep();
 
     private static final int WARMUP_FRAMES = 45;
+    private static final int FIRST_WARMUP_FRAMES = WARMUP_FRAMES + 120;
     private static final int MEASURE_FRAMES = 120;
     private static final double MOVE_TOLERANCE_BLOCKS = 2.0;
 
@@ -106,7 +109,8 @@ public final class RtPerfSweep {
         startY = mc.player.getY();
         startZ = mc.player.getZ();
         moved = false;
-        int seconds = variants.size() * (WARMUP_FRAMES + MEASURE_FRAMES) / 20;
+        int seconds = (variants.size() * (WARMUP_FRAMES + MEASURE_FRAMES)
+                + FIRST_WARMUP_FRAMES - WARMUP_FRAMES) / 20;
         say(Component.translatable("caustica.options.perfTest.started", variants.size(), seconds), false);
         beginVariant(0);
     }
@@ -153,27 +157,26 @@ public final class RtPerfSweep {
         // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, fast
         // clouds, the fog and atmosphere probes, the clouds in reflections, in bounced light and their
         // shadow, and the 3D noise and 2D coverage inside the density (2.5 and about 0 ms).
-        // This round: the half-resolution camera clouds (now blended over frames) against the
-        // camera-clouds ceiling, and the march toward the sun, the largest piece of the clouds (5.4 ms).
+        // Also answered: the march toward the sun (3.5 ms, but fewer samples visibly flatten the clouds).
+        // This round: the half-resolution camera clouds (now marched only near sky) against the camera
+        // clouds ceiling, and the clouds in clear reflections against a cheaper march for them.
         boolean marching = clouds && volumetric;
         if (marching) {
             tests.add(new Variant(halfResClouds ? "half-res camera clouds off" : "half-res camera clouds on",
                     false, () -> CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(!halfResClouds)));
         }
         // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
-        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The light
-        // step rows are candidate settings instead: the image changes a little.
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The cheap
+        // reflection row is a candidate scheme instead: the image changes a little.
         if (clouds) {
             tests.add(new Variant("probe: clouds on camera rays skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CAMERA_CLOUDS));
+            tests.add(new Variant("probe: clouds in reflections skipped", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
         }
         if (marching) {
-            tests.add(new Variant("probe: cloud light march skipped", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH));
-            tests.add(new Variant("probe: cloud light steps -> 2", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_LIGHT_STEPS_2));
-            tests.add(new Variant("probe: cloud light steps -> 1", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_LIGHT_STEPS_1));
+            tests.add(new Variant("probe: reflection clouds at the cheap march", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
         }
         // The most anything further could win: the clouds switched off outright.
         if (clouds) {
@@ -247,7 +250,8 @@ public final class RtPerfSweep {
             }
         }
         frameInVariant++;
-        if (frameInVariant > WARMUP_FRAMES && pendingValid && frameMs > 0.0 && samples < MEASURE_FRAMES) {
+        int warmup = variantIndex == 0 ? FIRST_WARMUP_FRAMES : WARMUP_FRAMES;
+        if (frameInVariant > warmup && pendingValid && frameMs > 0.0 && samples < MEASURE_FRAMES) {
             indirect[samples] = pendingIndirect;
             primary[samples] = pendingPrimary;
             gpuFrame[samples] = pendingGpuFrame;
@@ -261,7 +265,7 @@ public final class RtPerfSweep {
         }
         pendingIndirect = pendingPrimary = pendingGpuFrame = 0.0;
         pendingValid = false;
-        if (samples >= MEASURE_FRAMES || frameInVariant > WARMUP_FRAMES + MEASURE_FRAMES * 3) {
+        if (samples >= MEASURE_FRAMES || frameInVariant > warmup + MEASURE_FRAMES * 3) {
             Variant v = variants.get(variantIndex);
             results.add(new Result(v.name, v.baseline, median(indirect, samples), median(primary, samples),
                     median(gpuFrame, samples), median(interval, samples), samples, serHeldSamples));
