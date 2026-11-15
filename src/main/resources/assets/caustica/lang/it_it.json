@@ -99,6 +99,8 @@
 	"caustica.options.rt.cloudMaxThickness.tooltip": "La formazione nuvolosa più spessa generata, in blocchi (16-22). L'altezza di ogni nuvola è scelta nell'intervallo min-max, quindi un intervallo ampio dà un misto naturale di nuvole basse e masse più profonde invece di uno strato uniforme. Alzare il minimo oltre questo valore lo alza anch'esso, e viceversa, così l'intervallo resta sempre valido.",
 	"caustica.options.rt.fastVolumetricClouds": "Nuvole volumetriche veloci",
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Disegna le nuvole volumetriche con meno campioni: al massimo 24 invece di 44 lungo ogni raggio visivo e 3 invece di 5 verso il sole. Le nuvole mantengono forma e illuminazione; solo le visuali molto lunghe e radenti vicino all'orizzonte sono campionate più grossolanamente. Risparmia circa un decimo del tempo di fotogramma.",
+	"caustica.options.rt.halfResCameraClouds": "Nuvole della visuale a metà risoluzione",
+	"caustica.options.rt.halfResCameraClouds.tooltip": "Calcola le nuvole volumetriche viste direttamente una volta per ogni blocco di 2×2 pixel e le fonde, invece di una volta per pixel. Le nuvole nei riflessi e nella luce rimbalzata non cambiano. I bordi delle nuvole possono apparire un po' più morbidi. Sperimentale: misuralo con il test delle prestazioni (F8).",
 	"caustica.options.rt.cloudThickness.blocks": "%s blocchi",
 	"caustica.options.rt.cloudShadowStrength": "Ombre delle nuvole",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "Quanto il manto di nuvole attenua la luce del sole e della luna che raggiunge il terreno sotto. 0% disegna nuvole senza alcuna ombra; 100% permette a una nuvola solida di bloccare del tutto il sole. Non costa nessun raggio extra.",

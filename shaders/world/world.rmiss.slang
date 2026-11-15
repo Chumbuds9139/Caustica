@@ -339,6 +339,8 @@ void main(inout Payload payload) {
     // cheap tier (FEATURE_SIMPLE_ROUGH_REFLECTION_SKY). The sun/moon disc below keeps showCelestial.
     bool mediaFull = showCelestial && (payload.flags & PAYLOAD_CHEAP_MEDIA) == 0u;
     bool skyCacheBuild = (payload.flags & PAYLOAD_SKY_CACHE_BUILD) != 0u;
+    bool cloudBufferBuild = (payload.flags & PAYLOAD_CLOUD_BUFFER_BUILD) != 0u;
+    bool cameraRay = (payload.flags & PAYLOAD_CAMERA_RAY) != 0u;
     // Cheap-tier misses out of the water (bounced light, and rough reflections) read the sky pass A
     // cached this frame from the camera with this same code. What pass A leaves out is added live: the
     // lightning, and for a rough reflection the sun/moon disc, behind the cached cloud transmittance.
@@ -422,7 +424,7 @@ void main(inout Payload payload) {
     // a STATE, not an occlusion lottery. Cloud gaps in lesser weather still hide/show the discs
     // geometrically via the cloudLayer composite below, as before.
     float discVisible = 1.0 - rainStrength;
-    if (showCelestial && discVisible > 0.0) {
+    if (showCelestial && discVisible > 0.0 && !cloudBufferBuild) {
         col += celestialDiscs(worldPush, dir, sunUp, day, discVisible);
     }
 
@@ -431,11 +433,27 @@ void main(inout Payload payload) {
     // underwater sky misses. Once refraction has left the medium, raygen clears this flag and the
     // ordinary cloud layer is restored.
     float cloudTransmittance = 1.0;
-    if (!rayInWater && !cloudProbeSkips(worldPush, (payload.flags & PAYLOAD_CAMERA_RAY) != 0u, mediaFull)) {
-        CloudVolume deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
-                                        skyAmbient, mediaFull);
+    CloudVolume deck;
+    deck.scatter = float3(0.0, 0.0, 0.0);
+    deck.transmittance = 1.0;
+    if (!rayInWater && !cloudProbeSkips(worldPush, cameraRay, mediaFull)) {
+        if (cameraRay && !cloudBufferBuild && cameraCloudBufferActive(worldPush)) {
+            // Pass A marched the camera clouds once per 2x2 pixel block (FEATURE_HALF_RES_CAMERA_CLOUDS).
+            float4 blended = cameraCloudBufferSample(worldPush.cloudBufferAddr, DispatchRaysIndex().xy,
+                                                     DispatchRaysDimensions().xy);
+            deck.scatter = blended.rgb;
+            deck.transmittance = blended.a;
+        } else {
+            deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
+                                skyAmbient, mediaFull);
+        }
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;
+    }
+    if (cloudBufferBuild) {
+        writeSkyMiss(payload, deck.scatter);
+        payload.normal = half3(half(deck.transmittance), 0.0h, 0.0h);
+        return;
     }
 
     // A short lightning event is authored in world space. The bolt itself is a narrow jagged polyline

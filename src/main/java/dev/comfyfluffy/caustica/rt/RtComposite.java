@@ -294,11 +294,15 @@ public final class RtComposite {
     private static final int FEATURE_EARLY_ROULETTE = 131072;
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
     private static final int FEATURE_SKY_CACHE = 524288;
+    private static final int FEATURE_HALF_RES_CAMERA_CLOUDS = 16777216;
     // F8 probes (world_common.slang): RtPerfSweep sets one per row through perfProbes, never a setting.
     static final int FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576;
     static final int FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152;
     static final int FEATURE_PROBE_NO_BOUNCE_CLOUDS = 4194304;
     static final int FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608;
+    static final int FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432;
+    static final int FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864;
+    static final int FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
@@ -338,6 +342,11 @@ public final class RtComposite {
         }
         if (CausticaConfig.Rt.Composite.SKY_CACHE.value()) {
             flags |= FEATURE_SKY_CACHE;
+        }
+        // Only the volumetric deck marches; the classic one is analytic and gains nothing from it.
+        if (CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.value()
+                && CausticaConfig.Rt.Composite.cloudStyleIndex() == 1) {
+            flags |= FEATURE_HALF_RES_CAMERA_CLOUDS;
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
@@ -759,6 +768,9 @@ public final class RtComposite {
     // Written by pass A, read by pass B's misses (FEATURE_SKY_CACHE); like the continuation queue, the
     // barrier between the passes orders the two, and it is rewritten in full every frame.
     private RtBuffer skyCache;
+    // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): one float4 per 2x2 block of the
+    // render, written by pass A and read by pass B's camera-ray misses, ordered by the same barrier.
+    private RtBuffer cameraClouds;
     // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
     // only `current`, so spatial neighbour reuse never races another raygen invocation. The pair exists
     // only while the player setting is ON; live toggles idle the device before destruction/allocation.
@@ -1634,6 +1646,10 @@ public final class RtComposite {
             skyCache.destroy();
             skyCache = null;
         }
+        if (cameraClouds != null) {
+            cameraClouds.destroy();
+            cameraClouds = null;
+        }
         destroyRestirResources();
         destroyGuideImages();
 
@@ -1679,6 +1695,10 @@ public final class RtComposite {
                 "path continuation queue " + renderW + "x" + renderH + "x2");
         skyCache = ctx.createBuffer(SKY_CACHE_BYTES, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
                 "sky cache for bounced light");
+        long cloudTexels = Math.multiplyExact((long) (renderW + 1) / 2, (long) (renderH + 1) / 2);
+        cameraClouds = ctx.createBuffer(Math.multiplyExact(cloudTexels, 16L),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
+                "half-res camera clouds " + (renderW + 1) / 2 + "x" + (renderH + 1) / 2);
         syncRestirResources(ctx);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
@@ -2107,6 +2127,8 @@ public final class RtComposite {
                     // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
                     // WorldPush.skyCacheAddr: pass A fills it, pass B's cheap-tier misses read it.
                     skyCache != null ? skyCache.deviceAddress : 0L,
+                    // WorldPush.cloudBufferAddr: pass A fills it, pass B's camera-ray misses read it.
+                    cameraClouds != null ? cameraClouds.deviceAddress : 0L,
                     new Int4(terrain.tableLimit(), RtDistantHorizonsTerrain.INSTANCE.tableLimit(),
                             fe.geomTableCount(), 0),
                     // WorldPush.hitFault: cleared here, written by the hit shaders, read back above
@@ -3249,6 +3271,10 @@ public final class RtComposite {
         if (skyCache != null) {
             skyCache.destroy();
             skyCache = null;
+        }
+        if (cameraClouds != null) {
+            cameraClouds.destroy();
+            cameraClouds = null;
         }
         destroyRestirResources();
         destroyGuideImages();

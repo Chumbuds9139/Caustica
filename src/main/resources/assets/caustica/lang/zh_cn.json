@@ -99,6 +99,8 @@
 	"caustica.options.rt.cloudMaxThickness.tooltip": "生成的云团的最大厚度，单位为方块（16–22）。每朵云的高度都在最小–最大范围内取样，因此较宽的区间会自然混合出低矮的云团和更厚的云块，而不是单一均匀的一层。若把最小值提高到超过此值，此值也会随之提高，反之亦然，从而始终保持区间有效。",
 	"caustica.options.rt.fastVolumetricClouds": "更快的体积云",
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "以更少的采样绘制体积云：每条视线最多 24 次（原为 44 次），朝太阳方向 3 次（原为 5 次）。云的形状和光影不变；只有地平线附近很长的斜向视线采样会变粗。约省下十分之一的帧时间。",
+	"caustica.options.rt.halfResCameraClouds": "半分辨率相机云",
+	"caustica.options.rt.halfResCameraClouds.tooltip": "直接看到的体积云改为每 2×2 个像素计算一次再混合，而不是每个像素各算一次。反射和反弹光中的云不受影响。云的边缘可能略微变柔。实验性功能：请用性能测试（F8）测量效果。",
 	"caustica.options.rt.cloudThickness.blocks": "%s 方块",
 	"caustica.options.rt.cloudShadowStrength": "云影",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "云层对射向下方地面的日光和月光的减暗程度。0% 绘制完全不投影的云；100% 让浓云能完全遮住太阳。不消耗额外的光线。",

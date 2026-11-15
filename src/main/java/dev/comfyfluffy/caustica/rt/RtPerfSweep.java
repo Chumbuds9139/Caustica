@@ -125,11 +125,14 @@ public final class RtPerfSweep {
         boolean skyCache = CausticaConfig.Rt.Composite.SKY_CACHE.value();
         boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         boolean restir = CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value();
+        boolean halfResClouds = CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.value();
+        boolean ser = CausticaConfig.Rt.Reorder.ENABLED.value();
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
         context = String.format(Locale.ROOT, "bounces %d, samples per pixel %d, RIS candidates %d, "
-                + "clouds %s, fog %s, SHaRC %s, ReSTIR %s", bounces, spp, ris, cloudText, fog ? "on" : "off",
-                sharc ? "on from bounce " + sharcStart : "off", restir ? "on" : "off");
+                + "clouds %s, fog %s, SHaRC %s, ReSTIR %s, SER %s", bounces, spp, ris, cloudText,
+                fog ? "on" : "off", sharc ? "on from bounce " + sharcStart : "off", restir ? "on" : "off",
+                ser ? "on" : "off");
         restore = () -> {
             CausticaConfig.Rt.Composite.MAX_BOUNCES.set(bounces);
             CausticaConfig.Rt.Composite.SPP.set(spp);
@@ -142,58 +145,48 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Composite.SKY_CACHE.set(skyCache);
             CausticaConfig.Rt.Sharc.ENABLED.set(sharc);
             CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(restir);
+            CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(halfResClouds);
             RtComposite.perfProbes = 0;
         };
         List<Variant> tests = new ArrayList<>();
-        // What each speed-up option still saves here: the row turns it off, so a positive "saved" is its
-        // worth. Rows for options that change nothing in this scene are left out. (The sky cache, the
-        // simplified rough-reflection sky, one bounce less, half the RIS candidates and the fog and
-        // atmosphere probes were measured on 2026-11-15 and are left out to keep the test short.)
-        if (earlyRoulette && bounces >= 4) {
-            tests.add(new Variant("early path termination off", false,
-                    () -> CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(false)));
-        }
-        if (fastClouds && clouds && volumetric) {
+        // Rows answered on 2026-11-15 and left out to keep the test short: the sky cache, the simplified
+        // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, the fog and
+        // atmosphere probes, and the clouds in bounced light (about 0) and the cloud shadow (about 0.5 ms).
+        // This round is the clouds: the half-resolution camera clouds against the camera-clouds ceiling,
+        // and what a cheaper march could cut inside the volumetric density.
+        boolean marching = clouds && volumetric;
+        if (fastClouds && marching) {
             tests.add(new Variant("fast volumetric clouds off", false,
                     () -> CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(false)));
         }
-        // Coarse split of the indirect pass: how much of it the later bounces, the light reservoirs and (last
-        // row, below) the radiance cache account for. Two is the fewest bounces the setting allows.
-        if (bounces > 2) {
-            tests.add(new Variant("bounces " + bounces + " -> 2", false,
-                    () -> CausticaConfig.Rt.Composite.MAX_BOUNCES.set(2)));
-        }
-        if (restir && ris > 0) {
-            tests.add(new Variant("ReSTIR off", false,
-                    () -> CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(false)));
+        if (marching) {
+            tests.add(new Variant(halfResClouds ? "half-res camera clouds off" : "half-res camera clouds on",
+                    false, () -> CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(!halfResClouds)));
         }
         // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
-        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The cloud deck
-        // is split by the rays that see it.
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The "twice"
+        // probes add the piece once more instead (the image stays right): the added time is its cost.
         if (clouds) {
             tests.add(new Variant("probe: clouds on camera rays skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CAMERA_CLOUDS));
             tests.add(new Variant("probe: clouds in reflections skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
-            tests.add(new Variant("probe: clouds in bounced light skipped", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_BOUNCE_CLOUDS));
-            tests.add(new Variant("probe: cloud shadows skipped", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CLOUD_SHADOWS));
         }
-        // The most anything further could win: the expensive features switched off outright.
+        if (marching) {
+            tests.add(new Variant("probe: cloud light march skipped", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH));
+            tests.add(new Variant("probe: cloud 3D noise evaluated twice", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_3D_NOISE_TWICE));
+            tests.add(new Variant("probe: cloud 2D coverage evaluated twice", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CLOUD_COVERAGE_TWICE));
+        }
+        // The most anything further could win: the clouds switched off outright.
         if (clouds) {
             tests.add(new Variant("clouds off", false, () -> CausticaConfig.Rt.Composite.CLOUDS.set(false)));
-        }
-        if (fog) {
-            tests.add(new Variant("fog off", false, () -> CausticaConfig.Rt.Composite.FOG_ENABLED.set(false)));
         }
         if (spp > 1) {
             tests.add(new Variant("samples per pixel " + spp + " -> 1", false,
                     () -> CausticaConfig.Rt.Composite.SPP.set(1)));
-        }
-        // Last, so a cache that went cold while it was off can only slow the closing baseline.
-        if (sharc) {
-            tests.add(new Variant("SHaRC off", false, () -> CausticaConfig.Rt.Sharc.ENABLED.set(false)));
         }
         // Baseline, test, baseline, test, ..., baseline: every test sits between two baselines.
         variants.add(baselineVariant());

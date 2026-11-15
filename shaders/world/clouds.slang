@@ -55,6 +55,9 @@ import world_common;
 public static const float CLOUD_CELL_BLOCKS = 12.0;  // vanilla's cloud cell size
 public static const int   CLOUD_PERIOD_CELLS = 1024; // power of two, so the wrap below is a mask
 public static const int   CLOUD_CELL_MASK = CLOUD_PERIOD_CELLS - 1;
+// One period of the coverage field in blocks (CLOUD_CELL_BLOCKS * CLOUD_WEATHER_DIV * CLOUD_PERIOD_CELLS),
+// used only by the F8 probe that evaluates the field twice.
+public static const float CLOUD_FIELD_PERIOD_PROBE = 196608.0;
 // Width of the coverage ramp for the volumetric style. Classic quantises instead (see cloudCoverage).
 public static const float CLOUD_EDGE_SOFTNESS = 0.22;
 public static const float3 CLOUD_ALBEDO = float3(0.94, 0.95, 0.98);
@@ -957,6 +960,10 @@ float cloudVolumeDensity(WorldPush push, float2 samplePos, float yInDeck, float 
         return 0.0;
     }
     float weather = cloudCoverageField(samplePos);
+    if (worldFeature(push, FEATURE_PROBE_CLOUD_COVERAGE_TWICE)) {
+        // F8 probe: the same field one period away (exact on the masked lattice), averaged with itself.
+        weather = 0.5 * (weather + cloudCoverageField(samplePos + float2(CLOUD_FIELD_PERIOD_PROBE, 0.0)));
+    }
     float threshold = 1.0 - coverage;
     float mask = smoothstep(threshold, threshold + CLOUD_EDGE_SOFTNESS, weather);
     if (mask <= 0.0) {
@@ -996,6 +1003,13 @@ float cloudVolumeDensity(WorldPush push, float2 samplePos, float yInDeck, float 
     float3 lobeP = p / (CLOUD_CELL_BLOCKS * CLOUD_LOBE_DIV);
     lobeP.y *= CLOUD_LOBE_Y_STRETCH;
     float worley = cloudWorleyFbm(lobeP, octaves);
+    bool noiseTwice = worldFeature(push, FEATURE_PROBE_CLOUD_3D_NOISE_TWICE);
+    if (noiseTwice) {
+        // F8 probe: both lattices again one period away (the same values), averaged with themselves.
+        float3 period = float3(float(CLOUD_PERIOD_CELLS), 0.0, 0.0);
+        perlin = 0.5 * (perlin + cloudFbm3(shapeP + period, octaves));
+        worley = 0.5 * (worley + cloudWorleyFbm(lobeP + period, octaves));
+    }
     float shape = lerp(perlin, worley, CLOUD_WORLEY_MIX);
 
     // ---- 5. Vertical envelope. 1 through the body of the formation, closing to 0 above its crown and
@@ -1028,6 +1042,9 @@ float cloudVolumeDensity(WorldPush push, float2 samplePos, float yInDeck, float 
     if (detail > 0.0) {
         float3 detailP = p / (CLOUD_CELL_BLOCKS * CLOUD_DETAIL_DIV);
         float carve = 1.0 - cloudWorleyFbm(detailP, 1);
+        if (noiseTwice) {
+            carve = 0.5 * (carve + 1.0 - cloudWorleyFbm(detailP + float3(float(CLOUD_PERIOD_CELLS), 0.0, 0.0), 1));
+        }
         float erosion = carve * CLOUD_EROSION * detail * (1.0 - density);
         density = clamp((density - erosion) / max(1.0 - erosion, 1.0e-4), 0.0, 1.0);
     }
@@ -1226,8 +1243,9 @@ public CloudVolume cloudMarch(WorldPush push, float3 originRel, float3 dir, floa
         }
         float extinction = density * sigma * stepLen;
         float sampleTransmittance = exp(-extinction);
-        float opticalDepth = cloudLightOpticalDepth(push, samplePos, yInDeck, push.lightDir.xyz,
-                                                    lightSteps, lightStepBlocks);
+        float opticalDepth = worldFeature(push, FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH) ? 0.0
+                : cloudLightOpticalDepth(push, samplePos, yInDeck, push.lightDir.xyz,
+                                         lightSteps, lightStepBlocks);
         float3 inScatter;
         if (classic) {
             // Flat, vanilla-style face tone. Self-shadowing is deliberately damped (mixed only 40% in)

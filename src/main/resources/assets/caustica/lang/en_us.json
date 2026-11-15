@@ -99,6 +99,8 @@
 	"caustica.options.rt.cloudMaxThickness.tooltip": "Thickest generated cloud formation, in blocks (16-22). Every cloud's height is sampled inside the Min/Max range, so a wide range gives a natural mix of shallow puffs and deeper masses instead of a single uniform deck. Raising the minimum above this value raises it too, and vice versa, so the range always stays valid.",
 	"caustica.options.rt.fastVolumetricClouds": "Fast Volumetric Clouds",
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Renders the volumetric clouds with fewer samples: at most 24 along each view ray instead of 44, and 3 toward the sun instead of 5. The clouds keep their shape and lighting; only very long, grazing views near the horizon are sampled more coarsely. Saves about a tenth of the frame time.",
+	"caustica.options.rt.halfResCameraClouds": "Half-Resolution Camera Clouds",
+	"caustica.options.rt.halfResCameraClouds.tooltip": "Marches the volumetric clouds you look at directly once per 2×2 block of pixels and blends them, instead of once per pixel. Clouds in reflections and in bounced light are unchanged. Cloud edges can look a little softer. Experimental: measure it with the performance test (F8).",
 	"caustica.options.rt.cloudThickness.blocks": "%s blocks",
 	"caustica.options.rt.cloudShadowStrength": "Cloud Shadows",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "How much the cloud deck dims the sunlight and moonlight reaching the ground under it. 0% draws clouds that cast no shadow at all; 100% lets a solid cloud block the sun completely. Costs no extra rays.",

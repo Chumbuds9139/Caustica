@@ -249,6 +249,9 @@ public struct WorldPush {
     // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and
     // read by pass B's misses. 0 = no buffer, and both sides then run the sky as before.
     public uint64_t skyCacheAddr;
+    // Camera clouds at half resolution (FEATURE_HALF_RES_CAMERA_CLOUDS): one float4 per 2x2 pixel block
+    // of the render, written by pass A and read by pass B's camera-ray misses. 0 = no buffer.
+    public uint64_t cloudBufferAddr;
     // Entry counts of the three tables the hit shaders index with the instance custom index: x = terrain
     // section table, y = DH/Voxy LOD table, z = entity geometry table, w reserved. It must stay right
     // before hitFault: RtComposite's hit-guard report reads it from there.
@@ -338,9 +341,15 @@ public static const uint FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144u;
 // pass B's cheap-tier misses (bounced light, rough reflections) read it instead of marching the atmosphere
 // and the cloud deck again for every pixel and bounce. See skyCacheSample.
 public static const uint FEATURE_SKY_CACHE = 524288u;
+// Camera clouds at half resolution (a video option): pass A marches the cloud deck once per 2x2 pixel block
+// into cloudBufferAddr, and pass B's camera-ray sky misses blend the four nearest blocks instead of
+// marching their own (see cameraCloudBufferSample).
+public static const uint FEATURE_HALF_RES_CAMERA_CLOUDS = 16777216u;
+
 // F8 performance-test probes (RtPerfSweep sets them for one row each, never a setting): each removes one
 // piece of work so the test can show what a cheaper scheme for it could save at most. The image is wrong
-// while one is set.
+// while one is set. The *_TWICE probes instead evaluate a piece twice (the same value, averaged with
+// itself), so the image stays right and the added time is what that piece costs.
 // The cloud deck split three ways, by who sees it (see cloudProbeSkips):
 //   NO_CAMERA_CLOUDS:     camera rays: the sky they reach and the stretch to their first hit.
 //   NO_REFLECTION_CLOUDS: later full-tier rays: clear reflections and refractions.
@@ -350,6 +359,12 @@ public static const uint FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576u;
 public static const uint FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152u;
 public static const uint FEATURE_PROBE_NO_BOUNCE_CLOUDS = 4194304u;
 public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
+//   NO_CLOUD_LIGHT_MARCH: volumetric samples skip their march toward the sun (lit as if unshadowed).
+//   CLOUD_3D_NOISE_TWICE: the volumetric density's 3D shape, lobe and detail noise, every sample.
+//   CLOUD_COVERAGE_TWICE: the volumetric density's 2D coverage field, every sample.
+public static const uint FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432u;
+public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
+public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -428,6 +443,32 @@ public float4 skyCacheSample(uint64_t addr, float3 dir) {
     return lerp(top, bottom, wy);
 }
 public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }
+
+public bool cameraCloudBufferActive(WorldPush push) {
+    return worldFeature(push, FEATURE_HALF_RES_CAMERA_CLOUDS) && push.cloudBufferAddr != 0u;
+}
+
+/** Texel grid of the camera cloud buffer: one texel per 2x2 block of the render. */
+public uint2 cameraCloudBufferDims(uint2 renderDims) {
+    return (renderDims + 1u) / 2u;
+}
+
+/**
+ * The camera clouds of render pixel `pix`, bilinear between the four nearest texels: xyz premultiplied
+ * scatter, w transmittance. Texel t is centred on the corner its four pixels share (pixel coordinate
+ * 2t + 1), so pixel p, centred at p + 0.5, sits at texel coordinate (p - 0.5) / 2.
+ */
+public float4 cameraCloudBufferSample(uint64_t addr, uint2 pix, uint2 renderDims) {
+    uint2 dims = cameraCloudBufferDims(renderDims);
+    float2 u = clamp((float2(pix) - 0.5) * 0.5, float2(0.0, 0.0), float2(dims) - 1.0);
+    uint2 a = uint2(floor(u));
+    uint2 b = min(a + 1u, dims - 1u);
+    float2 w = u - float2(a);
+    ConstPtr<float4> buf = ConstPtr<float4>(addr);
+    float4 top = lerp(buf[a.y * dims.x + a.x], buf[a.y * dims.x + b.x], w.x);
+    float4 bottom = lerp(buf[b.y * dims.x + a.x], buf[b.y * dims.x + b.x], w.x);
+    return lerp(top, bottom, w.y);
+}
 
 // 32-byte hot area-light record. Radiance uses packed R11G11B10 and the grid-relative owner section
 // uses three unsigned 10-bit coordinates; the geometric normal is reconstructed from the half axes.
@@ -590,6 +631,9 @@ public static const uint PAYLOAD_CHEAP_MEDIA = 65536u;
 public static const uint PAYLOAD_SKY_CACHE_BUILD = 131072u;
 // Pass B's trace of a camera ray. Read only by the F8 cloud probes (cloudProbeSkips) in world.rmiss.
 public static const uint PAYLOAD_CAMERA_RAY = 262144u;
+// world.rmiss: this miss fills a camera cloud buffer texel (world_primary.rgen): it returns the cloud deck
+// alone, scatter in albedo and transmittance in normal.x, instead of the sky.
+public static const uint PAYLOAD_CLOUD_BUFFER_BUILD = 524288u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect

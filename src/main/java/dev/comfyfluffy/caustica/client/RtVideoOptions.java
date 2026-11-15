@@ -277,6 +277,8 @@ public final class RtVideoOptions {
             options.add(cloudMaxThickness());
             options.add(bool("caustica.options.rt.fastVolumetricClouds",
                     CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS));
+            options.add(bool("caustica.options.rt.halfResCameraClouds",
+                    CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS));
         }
         options.add(cloudHeight());
         if (classic) {

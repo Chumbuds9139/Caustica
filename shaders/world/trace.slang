@@ -129,6 +129,17 @@ public float4 traceSkyCacheTexel(float3 origin, float3 dir) {
     return float4(float3(payload.albedo), float(payload.normal.x));
 }
 
+// Pass A: the camera clouds of one 2x2 pixel block (FEATURE_HALF_RES_CAMERA_CLOUDS), through the miss
+// shader so the deck is marched with the same sky behind it as a camera ray's own miss. xyz = premultiplied
+// scatter, w = transmittance. Marked as a camera ray, so the F8 camera-clouds probe leaves it out too.
+public float4 traceCameraCloudTexel(float3 origin, float3 dir) {
+    payload = makeRadiancePayload(PAYLOAD_SHOW_CELESTIAL | PAYLOAD_CAMERA_RAY | PAYLOAD_CLOUD_BUFFER_BUILD, 0u);
+    TraceRay(topLevelAS, RAY_FLAG_NONE, 0u,
+            SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
+            makeRay(origin, 0.0, dir, 1.0e9), payload);
+    return float4(float3(payload.albedo), float(payload.normal.x));
+}
+
 void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                     bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread) {
     // `rayInWater` is the CURRENT medium's water state: the miss shader uses it to keep the above-water

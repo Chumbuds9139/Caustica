@@ -99,6 +99,8 @@
 	"caustica.options.rt.cloudMaxThickness.tooltip": "La formación de nube más gruesa que se genera, en bloques (16-22). La altura de cada nube se elige dentro del rango mín-máx, así que un rango amplio da una mezcla natural de nubes bajas y masas más profundas en lugar de una capa uniforme. Si subes el mínimo por encima de este valor, también sube, y viceversa, para que el rango siempre sea válido.",
 	"caustica.options.rt.fastVolumetricClouds": "Nubes volumétricas rápidas",
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Dibuja las nubes volumétricas con menos muestras: como máximo 24 en lugar de 44 a lo largo de cada rayo de visión, y 3 en lugar de 5 hacia el sol. Las nubes conservan su forma e iluminación; solo las vistas muy largas y rasantes cerca del horizonte se muestrean con menos detalle. Ahorra alrededor de una décima parte del tiempo de fotograma.",
+	"caustica.options.rt.halfResCameraClouds": "Nubes de cámara a media resolución",
+	"caustica.options.rt.halfResCameraClouds.tooltip": "Calcula las nubes volumétricas que ves directamente una vez por cada bloque de 2×2 píxeles y las mezcla, en lugar de una vez por píxel. Las nubes en reflejos y en la luz rebotada no cambian. Los bordes de las nubes pueden verse algo más suaves. Experimental: mídelo con la prueba de rendimiento (F8).",
 	"caustica.options.rt.cloudThickness.blocks": "%s bloques",
 	"caustica.options.rt.cloudShadowStrength": "Sombras de nubes",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "Cuánto atenúa la capa de nubes la luz del sol y la luna que llega al suelo. 0 % dibuja nubes que no proyectan sombra alguna; 100 % permite que una nube sólida tape el sol por completo. No cuesta rayos extra.",

@@ -866,6 +866,13 @@ public final class CausticaConfig {
             public static final BooleanSetting FAST_VOLUMETRIC_CLOUDS =
                     bool("caustica.rt.fastVolumetricClouds", "composite.fast-volumetric-clouds", true);
             /**
+             * Volumetric clouds the camera sees directly, marched once per 2x2 block of the render (in
+             * pass A) and blended for each pixel, instead of once per pixel. Reflections and bounced light
+             * still march their own. Off by default until it has been measured and looked at.
+             */
+            public static final BooleanSetting HALF_RES_CAMERA_CLOUDS =
+                    bool("caustica.rt.halfResCameraClouds", "composite.half-res-camera-clouds", false);
+            /**
              * Classic cloud thickness, 0..1, as a fraction of {@code RtComposite}'s declared maximum.
              *
              * <p>This is the CLASSIC deck's box height: the slider scales the height of vanilla's

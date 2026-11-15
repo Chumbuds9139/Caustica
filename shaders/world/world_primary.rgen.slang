@@ -262,6 +262,23 @@ void main() {
             skyCache[texel] = traceSkyCacheTexel(worldPush.camOffset, skyCacheTexelDir(texel));
         }
     }
+    // Fill the camera cloud buffer (FEATURE_HALF_RES_CAMERA_CLOUDS) the same way: the leading threads each
+    // march the deck along the camera ray through the shared corner of one 2x2 pixel block, with this
+    // frame's jitter, so pass B's camera-ray misses can blend instead of marching. Under water the camera
+    // rays never reach the deck before world.rgen leaves the water, so there is nothing to fill.
+    if (cameraCloudBufferActive(worldPush) && !cameraSubmerged()) {
+        uint2 cloudDims = cameraCloudBufferDims(dimensions);
+        DevicePtr<float4> cloudBuffer = DevicePtr<float4>(worldPush.cloudBufferAddr);
+        for (uint texel = pixelIndex; texel < cloudDims.x * cloudDims.y; texel += baseRecordCount) {
+            float2 corner = float2(float(texel % cloudDims.x), float(texel / cloudDims.x)) * 2.0 + 1.0;
+            float2 tndc = ((corner + worldPush.jitter) / size) * 2.0 - 1.0;
+            float4 tNearH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 1.0, 1.0));
+            float4 tFarH = mul(worldPush.invViewProj, float4(tndc.x, tndc.y, 0.0, 1.0));
+            float3 tNear = tNearH.xyz / tNearH.w;
+            cloudBuffer[texel] = traceCameraCloudTexel(tNear + worldPush.camOffset,
+                    normalize(tFarH.xyz / tFarH.w - tNear));
+        }
+    }
     uint splitRecord = baseRecordCount + pixelIndex;
     DevicePtr<PackedPathSegment> queue = DevicePtr<PackedPathSegment>(pc.pathQueueAddr);
 
