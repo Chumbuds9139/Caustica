@@ -368,8 +368,8 @@ public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
 public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
 //   REFLECTION_SKY_CACHE: rays mirrored at least once (clear reflections off water, glass and smooth
 //   blocks; not straight-through refraction) take the cheap tier, so their sky misses read the sky cache
-//   (FEATURE_SKY_CACHE) instead of marching the atmosphere and the clouds (a candidate scheme, not a
-//   removal: reflected clouds are blurrier).
+//   (FEATURE_SKY_CACHE) instead of marching the atmosphere and the clouds, toward where each ray meets
+//   the deck (skyCacheDeckDir) (a candidate scheme, not a removal: reflected clouds are blurrier).
 public static const uint FEATURE_PROBE_REFLECTION_SKY_CACHE = 268435456u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
@@ -430,6 +430,24 @@ public float3 skyCacheTexelDir(uint texel) {
 
 // Bilinear read of the cache along `dir`: azimuth wraps, the polar angle clamps at the poles.
 // rgb = sky radiance without the discs, a = the cloud deck's transmittance.
+/**
+ * The direction from the camera to where a ray from camera-relative `origin` along `dir` meets the cloud
+ * deck's mid-plane (no farther than the cloud view limit), for reading the camera's sky cache on behalf
+ * of a ray that starts elsewhere. A ray that never meets the plane keeps its own direction.
+ */
+public float3 skyCacheDeckDir(WorldPush push, float3 origin, float3 dir) {
+    if (abs(dir.y) < 1.0e-4) {
+        return dir;
+    }
+    float t = (push.clouds.w - origin.y) / dir.y;
+    if (t <= 0.0) {
+        return dir;
+    }
+    float3 deckPoint = origin + dir * min(t, push.cloudAnchor.w);
+    float len = length(deckPoint);
+    return len > 1.0e-3 ? deckPoint / len : dir;
+}
+
 public float4 skyCacheSample(uint64_t addr, float3 dir) {
     float u = atan2(dir.z, dir.x) * (1.0 / 6.28318530718) + 0.5;
     float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / 3.14159265359);

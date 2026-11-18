@@ -345,7 +345,12 @@ void main(inout Payload payload) {
     // cached this frame from the camera with this same code. What pass A leaves out is added live: the
     // lightning, and for a rough reflection the sun/moon disc, behind the cached cloud transmittance.
     if (!mediaFull && !rayInWater && !skyCacheBuild && skyCacheActive(worldPush)) {
-        float4 cached = skyCacheSample(worldPush.skyCacheAddr, dir);
+        // The cache is the sky seen from the camera. Under the F8 REFLECTION_SKY_CACHE probe a miss reads
+        // it toward where its own ray meets the cloud deck, so a reflection off water far from the camera
+        // shows the clouds above that water, not the ones in the same direction from the camera.
+        float3 cacheDir = worldFeature(worldPush, FEATURE_PROBE_REFLECTION_SKY_CACHE)
+                ? skyCacheDeckDir(worldPush, WorldRayOrigin() - worldPush.camOffset, dir) : dir;
+        float4 cached = skyCacheSample(worldPush.skyCacheAddr, cacheDir);
         float3 sky = cached.rgb;
         float rain = worldFeature(worldPush, FEATURE_WEATHER_LIGHTING)
                 ? clamp(worldPush.weather.x, 0.0, 1.0) : 0.0;
