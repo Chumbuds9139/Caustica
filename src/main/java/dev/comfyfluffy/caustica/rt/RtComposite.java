@@ -303,7 +303,7 @@ public final class RtComposite {
     static final int FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432;
     static final int FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864;
     static final int FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728;
-    static final int FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456;
+    static final int FEATURE_PROBE_REFLECTION_SKY_CACHE = 268435456;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.

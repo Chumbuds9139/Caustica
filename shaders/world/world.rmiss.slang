@@ -454,7 +454,7 @@ void main(inout Payload payload) {
         }
         if (!blocksRead) {
             deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
-                                skyAmbient, cloudFullTier(worldPush, cameraRay, mediaFull));
+                                skyAmbient, mediaFull);
         }
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;

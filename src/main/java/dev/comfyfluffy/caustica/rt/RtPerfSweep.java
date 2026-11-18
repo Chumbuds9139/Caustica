@@ -157,26 +157,20 @@ public final class RtPerfSweep {
         // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, fast
         // clouds, the fog and atmosphere probes, the clouds in reflections, in bounced light and their
         // shadow, and the 3D noise and 2D coverage inside the density (2.5 and about 0 ms).
-        // Also answered: the march toward the sun (3.5 ms, but fewer samples visibly flatten the clouds).
-        // This round: the half-resolution camera clouds (now marched only near sky) against the camera
-        // clouds ceiling, and the clouds in clear reflections against a cheaper march for them.
-        boolean marching = clouds && volumetric;
-        if (marching) {
-            tests.add(new Variant(halfResClouds ? "half-res camera clouds off" : "half-res camera clouds on",
-                    false, () -> CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(!halfResClouds)));
-        }
+        // Also answered: the march toward the sun (3.5 ms, but fewer samples visibly flatten the clouds),
+        // the half-resolution camera clouds marched only near sky (about 0 with little sky, 0.3 to 2 ms
+        // with open sky) and reflection clouds at the cheap march (1.1 of the 3.9 ms they cost).
+        // This round: the clouds in clear reflections against reading the sky cache for reflections.
         // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
-        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The cheap
-        // reflection row is a candidate scheme instead: the image changes a little.
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The sky
+        // cache row is a candidate scheme instead: the image changes a little.
         if (clouds) {
-            tests.add(new Variant("probe: clouds on camera rays skipped", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CAMERA_CLOUDS));
             tests.add(new Variant("probe: clouds in reflections skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
         }
-        if (marching) {
-            tests.add(new Variant("probe: reflection clouds at the cheap march", false,
-                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
+        if (skyCache) {
+            tests.add(new Variant("probe: reflections read the sky cache", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_REFLECTION_SKY_CACHE));
         }
         // The most anything further could win: the clouds switched off outright.
         if (clouds) {

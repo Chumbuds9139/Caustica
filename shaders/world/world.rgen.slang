@@ -174,6 +174,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // has already blurred away the detail the full tier resolves. Off, mediaFull below is showCelestial.
     bool simpleRoughSky = worldFeature(worldPush, FEATURE_SIMPLE_ROUGH_REFLECTION_SKY);
     bool scatteredRough = !seg.showCelestial;
+    // Mirrored at least once (see PathSegment.reflected); the F8 REFLECTION_SKY_CACHE probe sends these
+    // rays to the cheap tier, whose sky misses read the sky cache.
+    bool mirrored = seg.reflected;
+    bool reflectionSkyCacheProbe = worldFeature(worldPush, FEATURE_PROBE_REFLECTION_SKY_CACHE);
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -187,7 +191,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         uint secondaryCull = (showCelestial || bounce <= entityGiBounces)
                 ? CULL_SECONDARY : CULL_SECONDARY_FAR;
         // Quality tier of the sky, clouds and fog this ray sees (see simpleRoughSky above).
-        bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough);
+        bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough)
+                && !(reflectionSkyCacheProbe && mirrored);
         gv_cheapMedia = showCelestial && !mediaFull;
         bool cameraRay = bounce == 0 && seg.bounce == 0;
         gv_cameraRay = cameraRay;
@@ -354,7 +359,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             // so it selects the full march; diffuse continuations take the cheap one — see cloudSegment.
             CloudVolume segCloud = cloudSegment(worldPush, ro - worldPush.camOffset, rd,
                                                 payload.hitT, cloudSkyAmbient(worldPush),
-                                                cloudFullTier(worldPush, cameraRay, mediaFull));
+                                                mediaFull);
             L += throughput * segCloud.scatter;
             if (channel == 2) {
                 Lspec += throughput * segCloud.scatter;
@@ -423,6 +428,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
+                mirrored = true;
                 rd = reflect(rd, n);
                 ro = isWater && waterWaves
                         ? waterWaveContinueOrigin(waterSurf, rd, SURF_BIAS)
@@ -1027,6 +1033,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
+            mirrored = true;
             if (rough > MIRROR_MEDIA_MAX_ALPHA) {
                 scatteredRough = true; // a lobe this wide blurs the sky's detail away (see simpleRoughSky)
             }

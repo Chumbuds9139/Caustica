@@ -25,6 +25,9 @@ public struct PathSegment {
     public uint seed;
     public int bounce;          // interfaces already consumed, so RR start and the bounce cap stay global
     public bool showCelestial;
+    // The ray has been mirrored at least once on its way here (a dielectric reflection or a specular lobe),
+    // so what it sees is a reflection. Read only by the F8 REFLECTION_SKY_CACHE probe.
+    public bool reflected;
     // Fresnel probability of the camera-to-first-interface prefix. Pass A's throughput already contains
     // water transmittance, which can underflow on long grazing rays; keeping the branch weight in its own
     // lane lets Pass B restore the missing prefix in-scatter without dividing by a clamped transmittance.
@@ -44,6 +47,7 @@ public PathSegment makePathSegment(float3 ro, float3 rd, float3 throughput, Medi
     s.seed = seed;
     s.bounce = bounce;
     s.showCelestial = showCelestial;
+    s.reflected = false;
     s.prefixScatterWeight = 0.0;
     return s;
 }
@@ -122,6 +126,7 @@ public PackedPathSegment packPathSegment(PathSegment seg, uint nextRecord) {
     p.rayCone = packHalf2(float2(seg.rayConeWidth, seg.rayConeSpread));
     p.seed = seg.seed;
     p.pathFlags = (uint(seg.bounce) & 15u)
+            | (seg.reflected ? 1u << 4u : 0u)
             | (seg.showCelestial ? 1u << 8u : 0u)
             | (seg.medium.current.water ? 1u << 9u : 0u)
             | (seg.medium.outer.water ? 1u << 10u : 0u)
@@ -148,6 +153,7 @@ public PathSegment unpackPathSegment(PackedPathSegment p) {
     PathSegment seg = makePathSegment(p.ro, octDecode(unpackUnorm16x2(p.rd)),
             unpackRgb9e5(p.throughput), medium, cone.x, cone.y, p.seed,
             int(p.pathFlags & 15u), (p.pathFlags & (1u << 8u)) != 0u);
+    seg.reflected = (p.pathFlags & (1u << 4u)) != 0u;
     seg.prefixScatterWeight = float((p.pathFlags >> 11u) & 0xffffu) / 65535.0;
     return seg;
 }

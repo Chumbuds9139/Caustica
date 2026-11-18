@@ -199,6 +199,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
                     true);
             reflected.prefixScatterWeight = F;
+            reflected.reflected = true;
             return reflected;
         }
 
@@ -212,6 +213,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
                     true);
             continuation.prefixScatterWeight = F;
+            continuation.reflected = true;
         } else {
             float3 deferredDir = normalize(transmittedDir);
             if (entering) {

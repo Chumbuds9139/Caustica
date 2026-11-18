@@ -366,9 +366,11 @@ public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
 public static const uint FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432u;
 public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
 public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
-//   CHEAP_REFLECTION_CLOUDS: later full-tier rays (clear reflections and refractions) march the deck at
-//   the cheap tier, as bounced light does (a candidate scheme, not a removal: the image changes a little).
-public static const uint FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456u;
+//   REFLECTION_SKY_CACHE: rays mirrored at least once (clear reflections off water, glass and smooth
+//   blocks; not straight-through refraction) take the cheap tier, so their sky misses read the sky cache
+//   (FEATURE_SKY_CACHE) instead of marching the atmosphere and the clouds (a candidate scheme, not a
+//   removal: reflected clouds are blurrier).
+public static const uint FEATURE_PROBE_REFLECTION_SKY_CACHE = 268435456u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -404,12 +406,6 @@ public bool cloudProbeSkips(WorldPush push, bool cameraRay, bool fullTier) {
     uint probe = cameraRay ? FEATURE_PROBE_NO_CAMERA_CLOUDS
             : (fullTier ? FEATURE_PROBE_NO_REFLECTION_CLOUDS : FEATURE_PROBE_NO_BOUNCE_CLOUDS);
     return worldFeature(push, probe);
-}
-
-// Whether this ray marches the deck at the full tier: what the caller chose, except for the reflections
-// and refractions the F8 CHEAP_REFLECTION_CLOUDS row demotes.
-public bool cloudFullTier(WorldPush push, bool cameraRay, bool fullTier) {
-    return fullTier && (cameraRay || !worldFeature(push, FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
 }
 
 // Sky cache layout: an equirectangular map, x = azimuth (wraps), y = polar angle from straight up. At
