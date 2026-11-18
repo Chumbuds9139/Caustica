@@ -101,6 +101,8 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "以較少的取樣繪製體積雲：每條視線最多 24 次（原為 44 次），朝太陽方向 3 次（原為 5 次）。雲的形狀和光影不變；只有地平線附近很長的斜向視線取樣會變粗。約省下十分之一的幀時間。",
 	"caustica.options.rt.halfResCameraClouds": "半解析度相機雲",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "直接看到的體積雲改為每 2×2 個像素計算一次再混合，而不是每個像素各算一次。反射和反彈光中的雲不受影響。雲的邊緣可能稍微變柔。實驗性功能：請用效能測試（F8）量測效果。",
+	"caustica.options.rt.reflectionCloudMap": "反射雲貼圖",
+	"caustica.options.rt.reflectionCloudMap.tooltip": "清晰反射（水面、玻璃、光滑方塊）中的體積雲改為每個方向計算一次存進貼圖並跨幀混合，而不是每個反射像素各算一次。只計算反射用到的方向。反射中的雲可能稍微變柔。實驗性功能：請用效能測試（F8）量測效果。",
 	"caustica.options.rt.cloudThickness.blocks": "%s 方塊",
 	"caustica.options.rt.cloudShadowStrength": "雲影",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "雲層對射向下方地面的日光與月光的調暗程度。0% 繪製完全不投影的雲；100% 讓濃雲能完全遮住太陽。不耗額外的光線。",

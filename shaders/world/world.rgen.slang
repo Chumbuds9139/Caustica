@@ -174,10 +174,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
     // has already blurred away the detail the full tier resolves. Off, mediaFull below is showCelestial.
     bool simpleRoughSky = worldFeature(worldPush, FEATURE_SIMPLE_ROUGH_REFLECTION_SKY);
     bool scatteredRough = !seg.showCelestial;
-    // Mirrored at least once (see PathSegment.reflected); the F8 REFLECTION_SKY_CACHE probe sends these
-    // rays to the cheap tier, whose sky misses read the sky cache.
+    // Mirrored at least once (see PathSegment.reflected): a clear reflection's sky misses read the
+    // reflection cloud map when it is on (FEATURE_REFLECTION_CLOUD_MAP, PAYLOAD_MIRRORED).
     bool mirrored = seg.reflected;
-    bool reflectionSkyCacheProbe = worldFeature(worldPush, FEATURE_PROBE_REFLECTION_SKY_CACHE);
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -191,11 +190,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         uint secondaryCull = (showCelestial || bounce <= entityGiBounces)
                 ? CULL_SECONDARY : CULL_SECONDARY_FAR;
         // Quality tier of the sky, clouds and fog this ray sees (see simpleRoughSky above).
-        bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough)
-                && !(reflectionSkyCacheProbe && mirrored);
+        bool mediaFull = showCelestial && !(simpleRoughSky && scatteredRough);
         gv_cheapMedia = showCelestial && !mediaFull;
         bool cameraRay = bounce == 0 && seg.bounce == 0;
         gv_cameraRay = cameraRay;
+        gv_mirrored = mirrored;
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
@@ -224,6 +223,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
 #endif
         gv_cameraRay = false;
+        gv_mirrored = false;
         // The point this ray reaches is shaded with the same view of the scene it was found with.
         gv_secondaryCull = secondaryCull;
 

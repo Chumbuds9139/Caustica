@@ -279,6 +279,8 @@ public final class RtVideoOptions {
                     CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS));
             options.add(bool("caustica.options.rt.halfResCameraClouds",
                     CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS));
+            options.add(bool("caustica.options.rt.reflectionCloudMap",
+                    CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP));
         }
         options.add(cloudHeight());
         if (classic) {

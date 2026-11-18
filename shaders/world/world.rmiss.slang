@@ -341,16 +341,12 @@ void main(inout Payload payload) {
     bool skyCacheBuild = (payload.flags & PAYLOAD_SKY_CACHE_BUILD) != 0u;
     bool cloudBufferBuild = (payload.flags & PAYLOAD_CLOUD_BUFFER_BUILD) != 0u;
     bool cameraRay = (payload.flags & PAYLOAD_CAMERA_RAY) != 0u;
+    bool mirrored = (payload.flags & PAYLOAD_MIRRORED) != 0u;
     // Cheap-tier misses out of the water (bounced light, and rough reflections) read the sky pass A
     // cached this frame from the camera with this same code. What pass A leaves out is added live: the
     // lightning, and for a rough reflection the sun/moon disc, behind the cached cloud transmittance.
     if (!mediaFull && !rayInWater && !skyCacheBuild && skyCacheActive(worldPush)) {
-        // The cache is the sky seen from the camera. Under the F8 REFLECTION_SKY_CACHE probe a miss reads
-        // it toward where its own ray meets the cloud deck, so a reflection off water far from the camera
-        // shows the clouds above that water, not the ones in the same direction from the camera.
-        float3 cacheDir = worldFeature(worldPush, FEATURE_PROBE_REFLECTION_SKY_CACHE)
-                ? skyCacheDeckDir(worldPush, WorldRayOrigin() - worldPush.camOffset, dir) : dir;
-        float4 cached = skyCacheSample(worldPush.skyCacheAddr, cacheDir);
+        float4 cached = skyCacheSample(worldPush.skyCacheAddr, dir);
         float3 sky = cached.rgb;
         float rain = worldFeature(worldPush, FEATURE_WEATHER_LIGHTING)
                 ? clamp(worldPush.weather.x, 0.0, 1.0) : 0.0;
@@ -454,6 +450,22 @@ void main(inout Payload payload) {
             if (blended.a >= 0.0) {
                 deck.scatter = blended.rgb;
                 deck.transmittance = blended.a;
+                blocksRead = true;
+            }
+        } else if (mirrored && mediaFull && !cloudBufferBuild && reflectionCloudMapActive(worldPush)) {
+            // A clear reflection: pass A marched the deck once per direction from the camera
+            // (FEATURE_REFLECTION_CLOUD_MAP). Read it toward where this ray meets the deck and mark that tile
+            // for the next frame; an empty texel (a direction no reflection used last frame) falls through
+            // to this ray's own march.
+            uint2 renderDims = DispatchRaysDimensions().xy;
+            float2 mapCoord = reflectionCloudCoord(
+                    cloudDeckDir(worldPush, WorldRayOrigin() - worldPush.camOffset, dir));
+            reflectionCloudMarkSky(worldPush.cloudBufferAddr, renderDims, mapCoord);
+            float4 mapped = reflectionCloudBilinear(
+                    reflectionCloudHalf(worldPush.cloudBufferAddr, renderDims, true), mapCoord);
+            if (mapped.a >= 0.0) {
+                deck.scatter = mapped.rgb;
+                deck.transmittance = mapped.a;
                 blocksRead = true;
             }
         }
