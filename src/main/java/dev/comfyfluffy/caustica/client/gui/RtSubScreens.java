@@ -397,7 +397,6 @@ public final class RtSubScreens {
                 CausticaConfig.Rt.Composite.CLOUD_MAX_THICKNESS,
                 CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS,
                 CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS,
-                CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP,
                 CausticaConfig.Rt.Composite.CLOUD_SHADOW_STRENGTH,
                 CausticaConfig.Rt.Composite.CLOUD_OPACITY,
                 CausticaConfig.Rt.Composite.RAIN_CLOUD_RESPONSE,

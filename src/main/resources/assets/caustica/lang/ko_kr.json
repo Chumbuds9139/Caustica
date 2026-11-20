@@ -101,8 +101,6 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "볼류메트릭 구름을 더 적은 샘플로 그립니다. 시선 방향은 최대 44회에서 24회로, 태양 방향은 5회에서 3회로 줄입니다. 구름의 모양과 명암은 그대로이며, 지평선 근처의 아주 긴 비스듬한 시선만 더 거칠게 샘플링됩니다. 프레임 시간의 약 10분의 1을 절약합니다.",
 	"caustica.options.rt.halfResCameraClouds": "절반 해상도 카메라 구름",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "직접 보이는 볼류메트릭 구름을 픽셀마다가 아니라 2×2 픽셀마다 한 번 계산해 섞습니다. 반사와 반사광 속 구름은 그대로입니다. 구름 가장자리가 조금 부드러워 보일 수 있습니다. 실험적 기능: 성능 테스트(F8)로 효과를 측정하세요.",
-	"caustica.options.rt.reflectionCloudMap": "반사 구름 맵",
-	"caustica.options.rt.reflectionCloudMap.tooltip": "선명한 반사(물, 유리, 매끄러운 블록)에 보이는 볼류메트릭 구름을 반사 픽셀마다가 아니라 방향마다 한 번 계산해 맵에 저장하고 프레임 간에 섞습니다. 반사가 사용하는 방향만 계산합니다. 반사된 구름이 조금 부드러워 보일 수 있습니다. 실험적 기능: 성능 테스트(F8)로 측정하세요.",
 	"caustica.options.rt.cloudThickness.blocks": "%s 블록",
 	"caustica.options.rt.cloudShadowStrength": "구름 그림자",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "구름 층이 아래 지면에 닿는 햇빛과 달빛을 얼마나 어둡게 하는지. 0%는 전혀 그림자를 드리우지 않는 구름을 그리고, 100%는 짙은 구름이 태양을 완전히 가릴 수 있습니다. 추가 레이는 들지 않습니다.",

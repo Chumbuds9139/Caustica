@@ -101,8 +101,6 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "ボリュメトリック雲を少ないサンプルで描きます。視線方向は最大 44 回から 24 回に、太陽方向は 5 回から 3 回にします。雲の形と陰影は変わらず、地平線付近の非常に長い斜めの視線だけが粗くサンプリングされます。フレーム時間の約 10 分の 1 を節約します。",
 	"caustica.options.rt.halfResCameraClouds": "ハーフ解像度のカメラ雲",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "直接見えるボリュメトリック雲を、ピクセルごとではなく 2×2 ピクセルごとに 1 回計算してブレンドします。反射や反射光の中の雲は変わりません。雲の輪郭が少し柔らかく見えることがあります。実験的機能：パフォーマンステスト（F8）で効果を測定してください。",
-	"caustica.options.rt.reflectionCloudMap": "反射雲マップ",
-	"caustica.options.rt.reflectionCloudMap.tooltip": "鮮明な反射（水面、ガラス、滑らかなブロック）に映るボリュメトリック雲を、反射ピクセルごとではなく方向ごとに一度だけ計算してマップに保存し、フレーム間でブレンドします。反射が使う方向だけを計算します。反射の雲が少し柔らかく見えることがあります。実験的機能：パフォーマンステスト（F8）で効果を測定してください。",
 	"caustica.options.rt.cloudThickness.blocks": "%s ブロック",
 	"caustica.options.rt.cloudShadowStrength": "雲の影",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "雲のレイヤーが真下の地面に届く日光・月光をどれだけ弱めるか。0% は影を一切落とさない雲を描き、100% では厚い雲が太陽を完全に遮れます。追加のレイは不要です。",

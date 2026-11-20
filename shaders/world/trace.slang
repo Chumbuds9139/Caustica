@@ -29,8 +29,6 @@ public static uint gv_secondaryCull = CULL_SECONDARY;
 public static bool gv_cheapMedia = false;
 // Raygen sets this for pass B's trace of a camera ray; it travels as PAYLOAD_CAMERA_RAY (F8 probes only).
 public static bool gv_cameraRay = false;
-// Raygen sets this for a ray mirrored at least once on its way; it travels as PAYLOAD_MIRRORED.
-public static bool gv_mirrored = false;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither
@@ -142,17 +140,6 @@ public float4 traceCameraCloudTexel(float3 origin, float3 dir) {
     return float4(float3(payload.albedo), float(payload.normal.x));
 }
 
-// Pass A: the clouds of one reflection cloud map texel (FEATURE_REFLECTION_CLOUD_MAP), marched from the
-// camera like traceCameraCloudTexel but not marked as a camera ray, so the F8 reflection-clouds probe
-// leaves it out instead.
-public float4 traceReflectionCloudTexel(float3 origin, float3 dir) {
-    payload = makeRadiancePayload(PAYLOAD_SHOW_CELESTIAL | PAYLOAD_CLOUD_BUFFER_BUILD, 0u);
-    TraceRay(topLevelAS, RAY_FLAG_NONE, 0u,
-            SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
-            makeRay(origin, 0.0, dir, 1.0e9), payload);
-    return float4(float3(payload.albedo), float(payload.normal.x));
-}
-
 void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                     bool showCelestial, bool rayInWater, float rayConeWidth, float rayConeSpread) {
     // `rayInWater` is the CURRENT medium's water state: the miss shader uses it to keep the above-water
@@ -160,8 +147,7 @@ void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, flo
     uint flags = (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
             | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
             | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u)
-            | (gv_cameraRay ? PAYLOAD_CAMERA_RAY : 0u)
-            | (gv_mirrored ? PAYLOAD_MIRRORED : 0u);
+            | (gv_cameraRay ? PAYLOAD_CAMERA_RAY : 0u);
     payload = makeRadiancePayload(flags, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, missIndex,

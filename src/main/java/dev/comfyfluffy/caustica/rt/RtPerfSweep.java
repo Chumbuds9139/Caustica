@@ -130,7 +130,6 @@ public final class RtPerfSweep {
         boolean sharc = CausticaConfig.Rt.Sharc.ENABLED.value();
         boolean restir = CausticaConfig.Rt.Lights.RESTIR_SAMPLING.value();
         boolean halfResClouds = CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.value();
-        boolean reflectionMap = CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP.value();
         boolean ser = CausticaConfig.Rt.Reorder.ENABLED.value();
         int sharcStart = CausticaConfig.Rt.Sharc.START_BOUNCE.value();
         String cloudText = clouds ? (volumetric ? "volumetric" : "classic") : "off";
@@ -151,7 +150,6 @@ public final class RtPerfSweep {
             CausticaConfig.Rt.Sharc.ENABLED.set(sharc);
             CausticaConfig.Rt.Lights.RESTIR_SAMPLING.set(restir);
             CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(halfResClouds);
-            CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP.set(reflectionMap);
             RtComposite.perfProbes = 0;
         };
         List<Variant> tests = new ArrayList<>();
@@ -159,21 +157,26 @@ public final class RtPerfSweep {
         // rough-reflection sky, early path termination, bounces, RIS candidates, ReSTIR, SHaRC, fast
         // clouds, the fog and atmosphere probes, the clouds in reflections, in bounced light and their
         // shadow, and the 3D noise and 2D coverage inside the density (2.5 and about 0 ms).
-        // Also answered: the march toward the sun (3.5 ms, but fewer samples visibly flatten the clouds),
-        // the half-resolution camera clouds marched only near sky (about 0 with little sky, 0.3 to 2 ms
-        // with open sky), reflection clouds at the cheap march (1.1 of the 3.9 ms they cost) and
-        // reflections reading the sky cache (7.1 ms, but flickering and visibly wrong).
-        // This round: the reflection cloud map against the clouds-in-reflections ceiling.
+        // Also answered: the march toward the sun (3.5 ms, but fewer samples visibly flatten the clouds).
+        // This round: the half-resolution camera clouds (now marched only near sky) against the camera
+        // clouds ceiling, and the clouds in clear reflections against a cheaper march for them.
         boolean marching = clouds && volumetric;
         if (marching) {
-            tests.add(new Variant(reflectionMap ? "reflection cloud map off" : "reflection cloud map on",
-                    false, () -> CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP.set(!reflectionMap)));
+            tests.add(new Variant(halfResClouds ? "half-res camera clouds off" : "half-res camera clouds on",
+                    false, () -> CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(!halfResClouds)));
         }
         // Probes: one piece of work removed (the image is wrong for that row), so the report shows what a
-        // cheaper scheme for exactly that piece could save at most, before anyone builds one.
+        // cheaper scheme for exactly that piece could save at most, before anyone builds one. The cheap
+        // reflection row is a candidate scheme instead: the image changes a little.
         if (clouds) {
+            tests.add(new Variant("probe: clouds on camera rays skipped", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_CAMERA_CLOUDS));
             tests.add(new Variant("probe: clouds in reflections skipped", false,
                     () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_NO_REFLECTION_CLOUDS));
+        }
+        if (marching) {
+            tests.add(new Variant("probe: reflection clouds at the cheap march", false,
+                    () -> RtComposite.perfProbes = RtComposite.FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
         }
         // The most anything further could win: the clouds switched off outright.
         if (clouds) {

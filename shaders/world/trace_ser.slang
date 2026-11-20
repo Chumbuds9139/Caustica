@@ -61,7 +61,6 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
             | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
             | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u)
             | (gv_cameraRay ? PAYLOAD_CAMERA_RAY : 0u)
-            | (gv_mirrored ? PAYLOAD_MIRRORED : 0u)
             | PAYLOAD_REORDERED;
     uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
     Payload tracePayload = makeRadiancePayload(flags, rayCone);

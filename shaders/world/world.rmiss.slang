@@ -341,7 +341,6 @@ void main(inout Payload payload) {
     bool skyCacheBuild = (payload.flags & PAYLOAD_SKY_CACHE_BUILD) != 0u;
     bool cloudBufferBuild = (payload.flags & PAYLOAD_CLOUD_BUFFER_BUILD) != 0u;
     bool cameraRay = (payload.flags & PAYLOAD_CAMERA_RAY) != 0u;
-    bool mirrored = (payload.flags & PAYLOAD_MIRRORED) != 0u;
     // Cheap-tier misses out of the water (bounced light, and rough reflections) read the sky pass A
     // cached this frame from the camera with this same code. What pass A leaves out is added live: the
     // lightning, and for a rough reflection the sun/moon disc, behind the cached cloud transmittance.
@@ -452,26 +451,10 @@ void main(inout Payload payload) {
                 deck.transmittance = blended.a;
                 blocksRead = true;
             }
-        } else if (mirrored && mediaFull && !cloudBufferBuild && reflectionCloudMapActive(worldPush)) {
-            // A clear reflection: pass A marched the deck once per direction from the camera
-            // (FEATURE_REFLECTION_CLOUD_MAP). Read it toward where this ray meets the deck and mark that tile
-            // for the next frame; an empty texel (a direction no reflection used last frame) falls through
-            // to this ray's own march.
-            uint2 renderDims = DispatchRaysDimensions().xy;
-            float2 mapCoord = reflectionCloudCoord(
-                    cloudDeckDir(worldPush, WorldRayOrigin() - worldPush.camOffset, dir));
-            reflectionCloudMarkSky(worldPush.cloudBufferAddr, renderDims, mapCoord);
-            float4 mapped = reflectionCloudBilinear(
-                    reflectionCloudHalf(worldPush.cloudBufferAddr, renderDims, true), mapCoord);
-            if (mapped.a >= 0.0) {
-                deck.scatter = mapped.rgb;
-                deck.transmittance = mapped.a;
-                blocksRead = true;
-            }
         }
         if (!blocksRead) {
             deck = cloudSegment(worldPush, WorldRayOrigin() - worldPush.camOffset, dir, 1.0e9,
-                                skyAmbient, mediaFull);
+                                skyAmbient, cloudFullTier(worldPush, cameraRay, mediaFull));
         }
         col = col * deck.transmittance + deck.scatter;
         cloudTransmittance = deck.transmittance;

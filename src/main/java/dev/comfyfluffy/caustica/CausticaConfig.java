@@ -876,15 +876,6 @@ public final class CausticaConfig {
             public static final BooleanSetting HALF_RES_CAMERA_CLOUDS =
                     bool("caustica.rt.halfResCameraClouds", "composite.half-res-camera-clouds", false);
             /**
-             * Volumetric clouds seen in clear reflections (water, glass, smooth blocks), marched in pass A
-             * once per direction of a 1024 x 512 map seen from the camera and blended over frames, instead
-             * of once per reflecting pixel; each reflection reads it toward the point where its own ray
-             * meets the deck. Only the directions last frame's reflections used are marched. Off by
-             * default: the clouds in reflections were 5.2 ms of a 38 ms frame by water (2026-11-18).
-             */
-            public static final BooleanSetting REFLECTION_CLOUD_MAP =
-                    bool("caustica.rt.reflectionCloudMap", "composite.reflection-cloud-map", false);
-            /**
              * Classic cloud thickness, 0..1, as a fraction of {@code RtComposite}'s declared maximum.
              *
              * <p>This is the CLASSIC deck's box height: the slider scales the height of vanilla's

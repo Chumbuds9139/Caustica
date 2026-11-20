@@ -295,7 +295,6 @@ public final class RtComposite {
     private static final int FEATURE_FAST_VOLUMETRIC_CLOUDS = 262144;
     private static final int FEATURE_SKY_CACHE = 524288;
     private static final int FEATURE_HALF_RES_CAMERA_CLOUDS = 16777216;
-    private static final int FEATURE_REFLECTION_CLOUD_MAP = 1073741824;
     // F8 probes (world_common.slang): RtPerfSweep sets one per row through perfProbes, never a setting.
     static final int FEATURE_PROBE_NO_CAMERA_CLOUDS = 1048576;
     static final int FEATURE_PROBE_NO_REFLECTION_CLOUDS = 2097152;
@@ -304,6 +303,7 @@ public final class RtComposite {
     static final int FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432;
     static final int FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864;
     static final int FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728;
+    static final int FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456;
     /** FEATURE_PROBE_* bits the F8 performance test has switched on for the row it is measuring. */
     static volatile int perfProbes;
     // The sky cache's buffer: world_common.slang's SKY_CACHE_W x SKY_CACHE_H float4 texels.
@@ -348,10 +348,6 @@ public final class RtComposite {
         if (CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.value()
                 && CausticaConfig.Rt.Composite.cloudStyleIndex() == 1) {
             flags |= FEATURE_HALF_RES_CAMERA_CLOUDS;
-        }
-        if (CausticaConfig.Rt.Composite.REFLECTION_CLOUD_MAP.value()
-                && CausticaConfig.Rt.Composite.cloudStyleIndex() == 1) {
-            flags |= FEATURE_REFLECTION_CLOUD_MAP;
         }
         if (CausticaConfig.Rt.Composite.WEATHER_LIGHTING.value()) {
             flags |= FEATURE_WEATHER_LIGHTING;
@@ -779,10 +775,7 @@ public final class RtComposite {
     private RtBuffer cameraClouds;
     // Its two halves alternate as this frame's blocks and last frame's history; see cameraCloudsAddress.
     private boolean cameraCloudsParity;
-    // REFLECTION_CLOUD_W x _H (1024 x 512) float4 texels twice, then two masks of one uint per 32 x 32 tile.
-    private static final long REFLECTION_CLOUD_MAP_BYTES = 1024L * 512L * 32L + (1024L / 32L) * (512L / 32L) * 8L;
     private boolean cameraCloudsFilledLastFrame;
-    private boolean reflectionCloudsFilledLastFrame;
     private ClientLevel cameraCloudsLevel;
     private int cameraCloudsDimension;
     // ReSTIR DI/GI history is a strict two-buffer ping-pong: a dispatch reads only `previous` and writes
@@ -1665,7 +1658,6 @@ public final class RtComposite {
             cameraClouds = null;
         }
         cameraCloudsFilledLastFrame = false;
-        reflectionCloudsFilledLastFrame = false;
         destroyRestirResources();
         destroyGuideImages();
 
@@ -1715,16 +1707,11 @@ public final class RtComposite {
         // Tiles of 16 x 16 blocks (CAMERA_CLOUD_TILE in world_common.slang), one uint each in the sky masks.
         long cloudTiles = (long) (((renderW + 1) / 2 + 15) / 16) * (((renderH + 1) / 2 + 15) / 16);
         // Two halves (this frame's blocks and last frame's, alternating; see cameraCloudsAddress), then the
-        // two sky masks that alternate with them, then (from the next 16-byte boundary) the reflection cloud
-        // map's two halves and two masks (REFLECTION_CLOUD_* in world_common.slang).
-        long cameraCloudBytes = (Math.addExact(Math.multiplyExact(cloudTexels, 32L), cloudTiles * 8L) + 15L)
-                / 16L * 16L;
+        // two sky masks that alternate with them.
         cameraCloudsFilledLastFrame = false;
-        reflectionCloudsFilledLastFrame = false;
-        cameraClouds = ctx.createBuffer(Math.addExact(cameraCloudBytes, REFLECTION_CLOUD_MAP_BYTES),
+        cameraClouds = ctx.createBuffer(Math.addExact(Math.multiplyExact(cloudTexels, 32L), cloudTiles * 8L),
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
-                "half-res camera clouds " + (renderW + 1) / 2 + "x" + (renderH + 1) / 2
-                        + " and reflection cloud map");
+                "half-res camera clouds " + (renderW + 1) / 2 + "x" + (renderH + 1) / 2);
         syncRestirResources(ctx);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
@@ -2847,31 +2834,26 @@ public final class RtComposite {
      * or the End's type still renders as the Overworld unless it really is that dimension.
      */
     /**
-     * WorldPush.cloudBufferAddr for this frame, or 0 when neither the half-resolution camera clouds nor the
-     * reflection cloud map is on. The buffer holds, for each, two halves (pass A writes one while it reads
-     * last frame's from the other, and pass B reads the one just written) and two per-tile sky masks (pass B
-     * sets this frame's, the next pass A reads it). The address is 16-byte aligned, so its low bits carry the
-     * frame's state: bit 0 = which half and mask are this frame's (both share it), bit 1 = the camera
-     * clouds' other half and mask are valid, bit 2 = the reflection map's are (each: pass A and B used them
-     * last frame, in this same world and buffer).
+     * WorldPush.cloudBufferAddr for this frame, or 0 when the half-resolution camera clouds are off. The
+     * buffer holds two halves of one texel per 2x2 render block: pass A writes one while it reads last
+     * frame's from the other, and pass B reads the one just written. Two per-tile sky masks follow, which
+     * pass B sets and the next pass A reads. The address is 16-byte aligned, so its low bits carry the
+     * frame's state: bit 0 = which half (and mask) is this frame's, bit 1 = the other half and mask are
+     * valid (pass A and B used them last frame, in this same world and buffer).
      */
     private long cameraCloudsAddress(int features, ClientLevel level, int dimension) {
-        boolean usable = cameraClouds != null && (cameraClouds.deviceAddress & 15L) == 0L;
-        boolean camera = usable && (features & FEATURE_HALF_RES_CAMERA_CLOUDS) != 0;
-        boolean reflection = usable && (features & FEATURE_REFLECTION_CLOUD_MAP) != 0;
-        boolean sameWorld = level == cameraCloudsLevel && dimension == cameraCloudsDimension;
-        boolean cameraHistory = camera && cameraCloudsFilledLastFrame && sameWorld;
-        boolean reflectionHistory = reflection && reflectionCloudsFilledLastFrame && sameWorld;
-        cameraCloudsFilledLastFrame = camera;
-        reflectionCloudsFilledLastFrame = reflection;
+        boolean fill = (features & FEATURE_HALF_RES_CAMERA_CLOUDS) != 0 && cameraClouds != null
+                && (cameraClouds.deviceAddress & 15L) == 0L;
+        boolean historyValid = fill && cameraCloudsFilledLastFrame && level == cameraCloudsLevel
+                && dimension == cameraCloudsDimension;
+        cameraCloudsFilledLastFrame = fill;
         cameraCloudsLevel = level;
         cameraCloudsDimension = dimension;
-        if (!camera && !reflection) {
+        if (!fill) {
             return 0L;
         }
         cameraCloudsParity = !cameraCloudsParity;
-        return cameraClouds.deviceAddress | (cameraCloudsParity ? 1L : 0L) | (cameraHistory ? 2L : 0L)
-                | (reflectionHistory ? 4L : 0L);
+        return cameraClouds.deviceAddress | (cameraCloudsParity ? 1L : 0L) | (historyValid ? 2L : 0L);
     }
 
     private static int dimensionId(ClientLevel level) {
@@ -3333,7 +3315,6 @@ public final class RtComposite {
             cameraClouds = null;
         }
         cameraCloudsFilledLastFrame = false;
-        reflectionCloudsFilledLastFrame = false;
         destroyRestirResources();
         destroyGuideImages();
         exposure.destroy();

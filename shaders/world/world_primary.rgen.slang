@@ -199,7 +199,6 @@ public PathSegment tracePrimary(PathSegment seg,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
                     true);
             reflected.prefixScatterWeight = F;
-            reflected.reflected = true;
             return reflected;
         }
 
@@ -213,7 +212,6 @@ public PathSegment tracePrimary(PathSegment seg,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
                     true);
             continuation.prefixScatterWeight = F;
-            continuation.reflected = true;
         } else {
             float3 deferredDir = normalize(transmittedDir);
             if (entering) {
@@ -325,48 +323,6 @@ void main() {
                 }
             }
             cloudBuffer[texel] = fresh;
-        }
-    }
-    // Fill the reflection cloud map (FEATURE_REFLECTION_CLOUD_MAP): one direction per texel, marched from the
-    // camera, only in the tiles last frame's clear-reflection misses read (and their neighbours). Without a
-    // valid history last frame's mask is not trusted either, so nothing is marched: that one frame's
-    // reflections march their own, as with the map off, and mark what the next frame needs.
-    if (reflectionCloudMapActive(worldPush)) {
-        DevicePtr<float4> map = DevicePtr<float4>(reflectionCloudHalf(worldPush.cloudBufferAddr,
-                                                                      dimensions, true));
-        uint64_t mapHistory = reflectionCloudHalf(worldPush.cloudBufferAddr, dimensions, false);
-        bool mapHistoryValid = reflectionCloudHistoryValid(worldPush.cloudBufferAddr);
-        if (pixelIndex < REFLECTION_CLOUD_TILES_X * REFLECTION_CLOUD_TILES_Y) {
-            DevicePtr<uint>(reflectionCloudMask(worldPush.cloudBufferAddr, dimensions, true))[pixelIndex] = 0u;
-        }
-        uint64_t lastMapMask = reflectionCloudMask(worldPush.cloudBufferAddr, dimensions, false);
-        for (uint texel = pixelIndex; texel < REFLECTION_CLOUD_W * REFLECTION_CLOUD_H;
-             texel += baseRecordCount) {
-            uint2 mapTexel = uint2(texel % REFLECTION_CLOUD_W, texel / REFLECTION_CLOUD_W);
-            if (!mapHistoryValid
-                    || !reflectionCloudTileWanted(lastMapMask, mapTexel / REFLECTION_CLOUD_TILE)) {
-                map[texel] = float4(0.0, 0.0, 0.0, -1.0);
-                continue;
-            }
-            float3 mapDir = reflectionCloudTexelDir(mapTexel);
-            float4 fresh = traceReflectionCloudTexel(worldPush.camOffset, mapDir);
-            // Blend into last frame's texel at the same piece of deck, as the camera clouds do: the point
-            // where this direction meets the deck's mid-plane, seen from where the camera was. A still camera
-            // reads back exactly its own texel, so the history is not resampled frame after frame.
-            float3 prevDir = mapDir;
-            if (abs(mapDir.y) > 1.0e-4) {
-                float deckT = worldPush.clouds.w / mapDir.y;
-                if (deckT > 0.0) {
-                    float3 prevPoint = mapDir * min(deckT, worldPush.cloudAnchor.w) + worldPush.camDelta;
-                    float prevLen = length(prevPoint);
-                    prevDir = prevLen > 1.0e-3 ? prevPoint / prevLen : mapDir;
-                }
-            }
-            float4 history = reflectionCloudBilinear(mapHistory, reflectionCloudCoord(prevDir));
-            if (all(isfinite(history)) && history.a >= 0.0 && history.a <= 1.0) {
-                fresh = lerp(history, fresh, CAMERA_CLOUD_BLEND);
-            }
-            map[texel] = fresh;
         }
     }
     uint splitRecord = baseRecordCount + pixelIndex;

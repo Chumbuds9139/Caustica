@@ -101,8 +101,6 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Berechnet die volumetrischen Wolken mit weniger Abtastungen: höchstens 24 statt 44 entlang jedes Sichtstrahls und 3 statt 5 zur Sonne. Form und Beleuchtung der Wolken bleiben erhalten; nur sehr lange, flache Blicke nahe dem Horizont werden gröber abgetastet. Spart etwa ein Zehntel der Bildzeit.",
 	"caustica.options.rt.halfResCameraClouds": "Kamerawolken in halber Auflösung",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "Berechnet die direkt sichtbaren Volumenwolken einmal pro 2×2-Pixelblock und mischt sie, statt einmal pro Pixel. Wolken in Spiegelungen und im indirekten Licht bleiben unverändert. Wolkenränder können etwas weicher wirken. Experimentell: mit dem Leistungstest (F8) messen.",
-	"caustica.options.rt.reflectionCloudMap": "Reflexions-Wolkenkarte",
-	"caustica.options.rt.reflectionCloudMap.tooltip": "Berechnet die Volumenwolken in klaren Spiegelungen (Wasser, Glas, glatte Blöcke) einmal pro Richtung in eine Karte und mischt sie über mehrere Frames, statt einmal pro spiegelndem Pixel. Nur die von Spiegelungen genutzten Richtungen werden berechnet. Gespiegelte Wolken können etwas weicher wirken. Experimentell: mit dem Leistungstest (F8) messen.",
 	"caustica.options.rt.cloudThickness.blocks": "%s Blöcke",
 	"caustica.options.rt.cloudShadowStrength": "Wolkenschatten",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "Wie stark die Wolkendecke das darunter auftreffende Sonnen- und Mondlicht abdunkelt. 0 % zeichnet Wolken ganz ohne Schatten; 100 % lässt eine massive Wolke die Sonne komplett blockieren. Kostet keine zusätzlichen Strahlen.",

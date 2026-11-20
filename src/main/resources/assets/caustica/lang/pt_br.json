@@ -101,8 +101,6 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Desenha as nuvens volumétricas com menos amostras: no máximo 24 em vez de 44 ao longo de cada raio de visão e 3 em vez de 5 em direção ao sol. As nuvens mantêm forma e iluminação; só visões muito longas e rasantes perto do horizonte são amostradas de forma mais grosseira. Economiza cerca de um décimo do tempo de quadro.",
 	"caustica.options.rt.halfResCameraClouds": "Nuvens da câmera em meia resolução",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "Calcula as nuvens volumétricas vistas diretamente uma vez por bloco de 2×2 pixels e as mistura, em vez de uma vez por pixel. As nuvens em reflexos e na luz rebatida não mudam. As bordas das nuvens podem parecer um pouco mais suaves. Experimental: meça com o teste de desempenho (F8).",
-	"caustica.options.rt.reflectionCloudMap": "Mapa de nuvens refletidas",
-	"caustica.options.rt.reflectionCloudMap.tooltip": "Calcula as nuvens volumétricas dos reflexos nítidos (água, vidro, blocos lisos) uma vez por direção em um mapa e o mistura entre quadros, em vez de uma vez por pixel refletor. Só as direções usadas pelos reflexos são calculadas. As nuvens refletidas podem parecer um pouco mais suaves. Experimental: meça com o teste de desempenho (F8).",
 	"caustica.options.rt.cloudThickness.blocks": "%s blocos",
 	"caustica.options.rt.cloudShadowStrength": "Sombras das nuvens",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "Quanto o deck de nuvens escurece a luz do sol e da lua que chega ao chão embaixo. 0% desenha nuvens sem sombra nenhuma; 100% permite que uma nuvem sólida bloqueie o sol por completo. Não custa raios extras.",

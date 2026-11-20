@@ -101,8 +101,6 @@
 	"caustica.options.rt.fastVolumetricClouds.tooltip": "Dessine les nuages volumétriques avec moins d'échantillons : au plus 24 au lieu de 44 le long de chaque rayon de vue, et 3 au lieu de 5 vers le soleil. Les nuages gardent leur forme et leur éclairage ; seules les vues très longues et rasantes près de l'horizon sont échantillonnées plus grossièrement. Économise environ un dixième du temps d'image.",
 	"caustica.options.rt.halfResCameraClouds": "Nuages de caméra en demi-résolution",
 	"caustica.options.rt.halfResCameraClouds.tooltip": "Calcule les nuages volumétriques vus directement une fois par bloc de 2×2 pixels puis les mélange, au lieu d'une fois par pixel. Les nuages dans les reflets et la lumière rebondie ne changent pas. Les bords des nuages peuvent paraître un peu plus doux. Expérimental : mesurez-le avec le test de performance (F8).",
-	"caustica.options.rt.reflectionCloudMap": "Carte des nuages réfléchis",
-	"caustica.options.rt.reflectionCloudMap.tooltip": "Calcule les nuages volumétriques des reflets nets (eau, verre, blocs lisses) une fois par direction dans une carte, mélangée d'une image à l'autre, au lieu d'une fois par pixel réfléchissant. Seules les directions utilisées par les reflets sont calculées. Les nuages réfléchis peuvent paraître un peu plus doux. Expérimental : mesurez-le avec le test de performance (F8).",
 	"caustica.options.rt.cloudThickness.blocks": "%s blocs",
 	"caustica.options.rt.cloudShadowStrength": "Ombres des nuages",
 	"caustica.options.rt.cloudShadowStrength.tooltip": "Combien le plafond de nuages atténue la lumière du soleil et de la lune qui atteint le sol. 0 % dessine des nuages sans aucune ombre ; 100 % laisse un nuage solide bloquer complètement le soleil. Ne coûte aucun rayon supplémentaire.",

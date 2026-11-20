@@ -346,11 +346,6 @@ public static const uint FEATURE_SKY_CACHE = 524288u;
 // into cloudBufferAddr, and pass B's camera-ray sky misses blend the four nearest blocks instead of
 // marching their own (see cameraCloudBufferSample).
 public static const uint FEATURE_HALF_RES_CAMERA_CLOUDS = 16777216u;
-// Reflection cloud map (a video option): pass A marches the cloud deck once per direction of a map seen from
-// the camera, blended over frames, and pass B's clear-reflection sky misses read it toward the point where
-// their own ray meets the deck, instead of marching their own (see reflectionCloudSample). Bit 31 stays
-// clear: it is the sign bit of the Java int this is mirrored in.
-public static const uint FEATURE_REFLECTION_CLOUD_MAP = 1073741824u;
 
 // F8 performance-test probes (RtPerfSweep sets them for one row each, never a setting): each removes one
 // piece of work so the test can show what a cheaper scheme for it could save at most. The image is wrong
@@ -371,6 +366,9 @@ public static const uint FEATURE_PROBE_NO_CLOUD_SHADOWS = 8388608u;
 public static const uint FEATURE_PROBE_NO_CLOUD_LIGHT_MARCH = 33554432u;
 public static const uint FEATURE_PROBE_CLOUD_3D_NOISE_TWICE = 67108864u;
 public static const uint FEATURE_PROBE_CLOUD_COVERAGE_TWICE = 134217728u;
+//   CHEAP_REFLECTION_CLOUDS: later full-tier rays (clear reflections and refractions) march the deck at
+//   the cheap tier, as bounced light does (a candidate scheme, not a removal: the image changes a little).
+public static const uint FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS = 268435456u;
 
 // How far a full thunderstorm pulls the sky and the fog toward their own luminance, in 0..1. One shared
 // number on purpose: world.rmiss desaturates the sky with it and fog.slang desaturates the scattered
@@ -406,6 +404,12 @@ public bool cloudProbeSkips(WorldPush push, bool cameraRay, bool fullTier) {
     uint probe = cameraRay ? FEATURE_PROBE_NO_CAMERA_CLOUDS
             : (fullTier ? FEATURE_PROBE_NO_REFLECTION_CLOUDS : FEATURE_PROBE_NO_BOUNCE_CLOUDS);
     return worldFeature(push, probe);
+}
+
+// Whether this ray marches the deck at the full tier: what the caller chose, except for the reflections
+// and refractions the F8 CHEAP_REFLECTION_CLOUDS row demotes.
+public bool cloudFullTier(WorldPush push, bool cameraRay, bool fullTier) {
+    return fullTier && (cameraRay || !worldFeature(push, FEATURE_PROBE_CHEAP_REFLECTION_CLOUDS));
 }
 
 // Sky cache layout: an equirectangular map, x = azimuth (wraps), y = polar angle from straight up. At
@@ -450,12 +454,10 @@ public float4 skyCacheSample(uint64_t addr, float3 dir) {
 }
 public bool worldFlag(WorldPush push, uint flag) { return (push.flags & flag) != 0u; }
 
-// WorldPush.cloudBufferAddr's low bits (the buffer is 16-byte aligned): which half (and sky mask) is this
-// frame's, for both the camera clouds and the reflection cloud map, and for each of the two whether the
-// other half holds last frame's for this same world and buffer.
+// WorldPush.cloudBufferAddr's low bits (the buffer is 16-byte aligned): which half is this frame's, and
+// whether the other half holds last frame's blocks for this same world and buffer.
 public static const uint CAMERA_CLOUD_PARITY = 1u;
 public static const uint CAMERA_CLOUD_HISTORY_VALID = 2u;
-public static const uint REFLECTION_CLOUD_HISTORY_VALID = 4u;
 // How much of each frame's fresh march goes into a block. The rest is last frame's, reprojected, which is
 // what averages away the per-frame step dither a 2x2 block would otherwise show as moving blotches.
 public static const float CAMERA_CLOUD_BLEND = 0.2;
@@ -554,138 +556,6 @@ public float4 cameraCloudBilinear(uint64_t half, uint2 dims, float2 u) {
         result.w = -1.0;
     }
     return result;
-}
-
-// ---- Reflection cloud map (FEATURE_REFLECTION_CLOUD_MAP). It follows the camera clouds' halves and masks
-// in the same buffer: two halves of REFLECTION_CLOUD_W x REFLECTION_CLOUD_H float4 (premultiplied scatter,
-// transmittance), an equirectangular map seen from the camera (x = azimuth, wraps; y = polar angle from
-// straight up), then two sky masks of one uint per REFLECTION_CLOUD_TILE-square tile of it. A texel spans
-// 0.35 degrees, about three render pixels at a normal field of view. Clear-reflection misses mark the
-// tiles they read; pass A next frame marches only tiles within one tile of a marked one and writes the rest
-// as empty, so the map costs next to nothing with no water or mirror in view.
-public static const uint REFLECTION_CLOUD_W = 1024u;
-public static const uint REFLECTION_CLOUD_H = 512u;
-public static const uint REFLECTION_CLOUD_TILE = 32u;
-public static const uint REFLECTION_CLOUD_TILES_X = REFLECTION_CLOUD_W / REFLECTION_CLOUD_TILE;
-public static const uint REFLECTION_CLOUD_TILES_Y = REFLECTION_CLOUD_H / REFLECTION_CLOUD_TILE;
-
-public bool reflectionCloudMapActive(WorldPush push) {
-    return worldFeature(push, FEATURE_REFLECTION_CLOUD_MAP) && push.cloudBufferAddr != 0u;
-}
-
-public bool reflectionCloudHistoryValid(uint64_t tagged) {
-    return (uint(tagged) & REFLECTION_CLOUD_HISTORY_VALID) != 0u;
-}
-
-// Where the map starts: after the camera clouds' two halves and two masks, rounded up to 16 bytes.
-uint64_t reflectionCloudBase(uint64_t tagged, uint2 renderDims) {
-    uint2 dims = cameraCloudBufferDims(renderDims);
-    uint2 tiles = cameraCloudTileDims(renderDims);
-    uint64_t cameraBytes = uint64_t(dims.x * dims.y) * 32u + uint64_t(tiles.x * tiles.y) * 8u;
-    return ((tagged >> 4u) << 4u) + ((cameraBytes + 15u) / 16u) * 16u;
-}
-
-/** Address of one half of the map: this frame's (current = true) or last frame's. */
-public uint64_t reflectionCloudHalf(uint64_t tagged, uint2 renderDims, bool current) {
-    uint64_t base = reflectionCloudBase(tagged, renderDims);
-    bool upper = ((uint(tagged) & CAMERA_CLOUD_PARITY) != 0u) == current;
-    return upper ? base + uint64_t(REFLECTION_CLOUD_W * REFLECTION_CLOUD_H) * 16u : base;
-}
-
-/** Address of one of the map's sky masks: this frame's (cleared by pass A, set by pass B) or last frame's. */
-public uint64_t reflectionCloudMask(uint64_t tagged, uint2 renderDims, bool current) {
-    uint64_t base = reflectionCloudBase(tagged, renderDims)
-            + uint64_t(REFLECTION_CLOUD_W * REFLECTION_CLOUD_H) * 32u;
-    bool upper = ((uint(tagged) & CAMERA_CLOUD_PARITY) != 0u) == current;
-    return upper ? base + uint64_t(REFLECTION_CLOUD_TILES_X * REFLECTION_CLOUD_TILES_Y) * 4u : base;
-}
-
-/** The direction through the centre of map texel `texel`. */
-public float3 reflectionCloudTexelDir(uint2 texel) {
-    float phi = ((float(texel.x) + 0.5) / float(REFLECTION_CLOUD_W) - 0.5) * 6.28318530718;
-    float theta = (float(texel.y) + 0.5) / float(REFLECTION_CLOUD_H) * 3.14159265359;
-    float s = sin(theta);
-    return float3(s * cos(phi), cos(theta), s * sin(phi));
-}
-
-/** Map texel coordinate of `dir` (texel t centred at t), x not yet wrapped. */
-public float2 reflectionCloudCoord(float3 dir) {
-    float u = atan2(dir.z, dir.x) * (1.0 / 6.28318530718) + 0.5;
-    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / 3.14159265359);
-    return float2(u * float(REFLECTION_CLOUD_W) - 0.5, v * float(REFLECTION_CLOUD_H) - 0.5);
-}
-
-/**
- * Bilinear read of one half at map coordinate `f`: azimuth wraps, the polar angle clamps. w is negative
- * when any of the four texels is empty, so a reader never blends a march with an empty texel.
- */
-public float4 reflectionCloudBilinear(uint64_t half, float2 f) {
-    f.y = clamp(f.y, 0.0, float(REFLECTION_CLOUD_H - 1u));
-    float x0 = floor(f.x);
-    float y0 = floor(f.y);
-    float2 w = f - float2(x0, y0);
-    uint xa = uint(int(x0) % int(REFLECTION_CLOUD_W) + int(REFLECTION_CLOUD_W)) % REFLECTION_CLOUD_W;
-    uint xb = (xa + 1u) % REFLECTION_CLOUD_W;
-    uint ya = min(uint(y0), REFLECTION_CLOUD_H - 1u);
-    uint yb = min(ya + 1u, REFLECTION_CLOUD_H - 1u);
-    ConstPtr<float4> map = ConstPtr<float4>(half);
-    float4 t00 = map[ya * REFLECTION_CLOUD_W + xa];
-    float4 t10 = map[ya * REFLECTION_CLOUD_W + xb];
-    float4 t01 = map[yb * REFLECTION_CLOUD_W + xa];
-    float4 t11 = map[yb * REFLECTION_CLOUD_W + xb];
-    float4 result = lerp(lerp(t00, t10, w.x), lerp(t01, t11, w.x), w.y);
-    if (min(min(t00.w, t10.w), min(t01.w, t11.w)) < 0.0) {
-        result.w = -1.0;
-    }
-    return result;
-}
-
-/** Pass B: a clear-reflection miss read the map at `f`; mark that tile for next frame's fill. */
-public void reflectionCloudMarkSky(uint64_t tagged, uint2 renderDims, float2 f) {
-    uint x = uint(int(floor(f.x)) % int(REFLECTION_CLOUD_W) + int(REFLECTION_CLOUD_W)) % REFLECTION_CLOUD_W;
-    uint y = uint(clamp(f.y, 0.0, float(REFLECTION_CLOUD_H - 1u)));
-    uint index = (y / REFLECTION_CLOUD_TILE) * REFLECTION_CLOUD_TILES_X + x / REFLECTION_CLOUD_TILE;
-    DevicePtr<uint> mask = DevicePtr<uint>(reflectionCloudMask(tagged, renderDims, true));
-    // As cameraCloudMarkSky: every writer stores the same value.
-    if (mask[index] == 0u) {
-        mask[index] = 1u;
-    }
-}
-
-/** Pass A: whether last frame's map mask marks tile `tile` or a neighbour (azimuth wraps). */
-public bool reflectionCloudTileWanted(uint64_t lastMask, uint2 tile) {
-    ConstPtr<uint> mask = ConstPtr<uint>(lastMask);
-    uint y0 = tile.y > 0u ? tile.y - 1u : 0u;
-    uint y1 = min(tile.y + 1u, REFLECTION_CLOUD_TILES_Y - 1u);
-    for (uint y = y0; y <= y1; y++) {
-        for (uint i = 0u; i < 3u; i++) {
-            uint x = (tile.x + REFLECTION_CLOUD_TILES_X - 1u + i) % REFLECTION_CLOUD_TILES_X;
-            if (mask[y * REFLECTION_CLOUD_TILES_X + x] != 0u) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/**
- * The direction from the camera to where a ray from camera-relative `origin` along `dir` meets the cloud
- * deck's mid-plane (no farther than the cloud view limit). That is where a reflection's clouds are, so the
- * map, seen from the camera, is read along it. For flat water every reflected ray comes from the camera's
- * mirror image a few blocks below the camera, so this is off by only about twice the camera's height above
- * the water over the distance to the deck. A ray that never meets the plane keeps its own direction.
- */
-public float3 cloudDeckDir(WorldPush push, float3 origin, float3 dir) {
-    if (abs(dir.y) < 1.0e-4) {
-        return dir;
-    }
-    float t = (push.clouds.w - origin.y) / dir.y;
-    if (t <= 0.0) {
-        return dir;
-    }
-    float3 deckPoint = origin + dir * min(t, push.cloudAnchor.w);
-    float len = length(deckPoint);
-    return len > 1.0e-3 ? deckPoint / len : dir;
 }
 
 /**
@@ -862,9 +732,6 @@ public static const uint PAYLOAD_CAMERA_RAY = 262144u;
 // world.rmiss: this miss fills a camera cloud buffer texel (world_primary.rgen): it returns the cloud deck
 // alone, scatter in albedo and transmittance in normal.x, instead of the sky.
 public static const uint PAYLOAD_CLOUD_BUFFER_BUILD = 524288u;
-// Set by raygen on a ray mirrored at least once on its way (PathSegment.reflected): world.rmiss reads the
-// reflection cloud map for it when the ray is also full-tier (FEATURE_REFLECTION_CLOUD_MAP).
-public static const uint PAYLOAD_MIRRORED = 1048576u;
 // WorldPush.hitFault.w: bits 0-23 instance custom index, bits 24-25 geometry index, bit 31 reordered trace.
 public static const uint HIT_FAULT_REORDERED = 0x80000000u;
 // Bits 26-27: where the index was refused. 0 = inside a hit shader; the other two are the indirect
