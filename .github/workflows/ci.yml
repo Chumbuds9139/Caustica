@@ -503,7 +503,19 @@ jobs:
           name: caustica-bundled-jar
           path: |
             build/libs/*.jar
-            build/libs/variants/*.jar
             !build/libs/*-sources.jar
             build-output.log
+          if-no-files-found: error
+      # The slim JARs get artifacts of their own, so downloading one is not downloading all three.
+      - name: Upload the Windows lite JAR (no XeSS)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caustica-windows-lite-jar
+          path: build/libs/variants/*-windows-lite.jar
+          if-no-files-found: error
+      - name: Upload the Linux JAR
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caustica-linux-jar
+          path: build/libs/variants/*-linux.jar
           if-no-files-found: error
