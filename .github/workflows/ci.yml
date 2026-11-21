@@ -357,7 +357,7 @@ jobs:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
         run: |
           set -o pipefail
-          ./gradlew --no-daemon build verifyModJar \
+          ./gradlew --no-daemon build verifyModJar slimJars \
             -PngxPlatforms=windows-x64,linux-x64 \
             -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }} \
             -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }} \
@@ -398,6 +398,69 @@ jobs:
           if problems:
               raise SystemExit("\n".join(problems))
           print("ok: every requested native is bundled")
+          PYTHON
+      - name: Verify the slim per-platform JARs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON' 2>&1 | tee -a build-output.log
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          full = [p for p in Path("build/libs").glob("*.jar")
+                  if not p.name.endswith(("-sources.jar", "-javadoc.jar"))]
+          if len(full) != 1:
+              raise SystemExit(f"error: expected exactly one mod JAR, found {full}")
+          with ZipFile(full[0]) as archive:
+              full_entries = {i.filename: i.CRC for i in archive.infolist()}
+
+          def dropped(name, platform_dirs, files):
+              return (any(name.startswith(f"caustica/natives/{d}/") for d in platform_dirs)
+                      or name in files)
+
+          # Each variant is the full JAR minus whole entries: everything else must match byte for byte
+          # (CRC), and the natives it keeps must still be there.
+          variants = {
+              "windows-lite": dict(
+                  drop_dirs=["linux-x64"],
+                  drop_files={"caustica/natives/windows-x64/xessshim.dll",
+                              "caustica/natives/windows-x64/libxess.dll"},
+                  keep=["ngxshim.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll", "fsrshim.dll",
+                        "amd_fidelityfx_vk.dll", "nrdshim.dll"],
+                  keep_dir="windows-x64"),
+              "linux": dict(
+                  drop_dirs=["windows-x64"], drop_files=set(),
+                  keep=["libngxshim.so", "libnvidia-ngx-dlssd.so", "libnvidia-ngx-dlssg.so"],
+                  keep_dir="linux-x64"),
+          }
+          problems = []
+          for classifier, rule in variants.items():
+              jars = list(Path("build/libs/variants").glob(f"*-{classifier}.jar"))
+              if len(jars) != 1:
+                  problems.append(f"error: expected one {classifier} JAR, found {jars}")
+                  continue
+              with ZipFile(jars[0]) as archive:
+                  entries = {i.filename: i.CRC for i in archive.infolist()}
+              expected = {n: c for n, c in full_entries.items()
+                          if not dropped(n, rule["drop_dirs"], rule["drop_files"])}
+              # Directory entries for a dropped platform may or may not be kept; ignore them.
+              expected = {n: c for n, c in expected.items() if not n.endswith("/")}
+              actual = {n: c for n, c in entries.items() if not n.endswith("/")}
+              if expected != actual:
+                  missing = sorted(set(expected) - set(actual))[:10]
+                  extra = sorted(set(actual) - set(expected))[:10]
+                  changed = sorted(n for n in set(expected) & set(actual) if expected[n] != actual[n])[:10]
+                  problems.append(f"error: {classifier} differs from the full JAR: missing={missing} "
+                                  f"extra={extra} changed={changed}")
+              prefix = f"caustica/natives/{rule['keep_dir']}/"
+              present = [n[len(prefix):] for n in actual if n.startswith(prefix)]
+              for name in rule["keep"]:
+                  if not any(entry == name or entry.startswith(name) for entry in present):
+                      problems.append(f"error: {classifier} is missing {name}")
+              print(f"{jars[0].name}: {jars[0].stat().st_size} bytes, natives {sorted(present)}")
+          if problems:
+              raise SystemExit("\n".join(problems))
+          print(f"ok: slim JARs match the full JAR ({full[0].stat().st_size} bytes)")
           PYTHON
       - name: Inspect the actual mod JAR
         shell: bash
@@ -440,6 +503,7 @@ jobs:
           name: caustica-bundled-jar
           path: |
             build/libs/*.jar
+            build/libs/variants/*.jar
             !build/libs/*-sources.jar
             build-output.log
           if-no-files-found: error

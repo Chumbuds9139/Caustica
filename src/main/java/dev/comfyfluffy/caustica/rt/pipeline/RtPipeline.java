@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.List;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtContext;
@@ -71,6 +72,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
  */
 public final class RtPipeline {
     private static final String SHADER_DIR = "/caustica/rt/";
+    private static final String LABEL = "world RT pipeline";
     /** Set 1: entity albedo plus three independently indexed canonical material-page arrays. */
     private static final int BINDLESS_BINDINGS = 4;
     private static final int ENTITY_ALBEDO_BINDING = 0;
@@ -161,9 +163,104 @@ public final class RtPipeline {
                                     String rahit, String rahitEntity, int pushConstantSize,
                                     boolean withBlockAlbedoAtlas,
                                     int extraStorageImages, int bindlessTextures, boolean skyAtlas) {
+        return create(ctx, new Spec(rgen, rmiss, rchit, rchitEntity, rahit, rahitEntity, pushConstantSize,
+                withBlockAlbedoAtlas, extraStorageImages, bindlessTextures, skyAtlas));
+    }
+
+    /**
+     * Builds the pipeline {@code spec} describes, taking it from {@link RtPipelinePrewarm} when the
+     * background compile made exactly this pipeline, and compiling it here otherwise.
+     */
+    public static RtPipeline create(RtContext ctx, Spec spec) {
+        Compiled compiled = RtPipelinePrewarm.take(ctx, spec);
+        if (compiled == null) {
+            compiled = compile(ctx, spec, false);
+        } else {
+            compiled.name(ctx);
+        }
+        return finish(ctx, compiled);
+    }
+
+    /**
+     * Everything that decides what {@link #compile} builds: two equal specs on one device give the same
+     * pipeline, so a pipeline compiled ahead of time is only used for an equal spec.
+     */
+    public record Spec(List<String> rgen, List<String> rmiss, String rchit, String rchitEntity, String rahit,
+                       String rahitEntity, int pushConstantSize, boolean withBlockAlbedoAtlas,
+                       int extraStorageImages, int bindlessTextures, boolean skyAtlas, boolean omm) {
+        public Spec(String[] rgen, String[] rmiss, String rchit, String rchitEntity, String rahit,
+                    String rahitEntity, int pushConstantSize, boolean withBlockAlbedoAtlas,
+                    int extraStorageImages, int bindlessTextures, boolean skyAtlas) {
+            this(List.of(rgen), List.of(rmiss), rchit, rchitEntity, rahit, rahitEntity, pushConstantSize,
+                    withBlockAlbedoAtlas, extraStorageImages, bindlessTextures, skyAtlas,
+                    RtDeviceBringup.ommEnabled());
+        }
+    }
+
+    /**
+     * The Vulkan objects {@link #compile} made: layouts, descriptor sets and the pipeline itself, before
+     * the shader binding table. Plain handles, so they can be made on one thread and used on another.
+     */
+    record Compiled(VkDevice vk, Spec spec, long dsl, long pool, long[] sets, long bindlessLayout,
+                    long bindlessPool, long bindlessSet, long layout, long pipeline, int groupCount,
+                    int raygenCount, int missCount, int hitGroupCount, int pcStages, int firstExtraBinding,
+                    int skyBinding) {
+        /** Destroys a compile nobody took. */
+        void destroy() {
+            VK10.vkDestroyPipeline(vk, pipeline, null);
+            VK10.vkDestroyPipelineLayout(vk, layout, null);
+            VK10.vkDestroyDescriptorPool(vk, pool, null);
+            VK10.vkDestroyDescriptorSetLayout(vk, dsl, null);
+            if (bindlessPool != 0L) {
+                VK10.vkDestroyDescriptorPool(vk, bindlessPool, null);
+            }
+            if (bindlessLayout != 0L) {
+                VK10.vkDestroyDescriptorSetLayout(vk, bindlessLayout, null);
+            }
+        }
+
+        /** Debug names for a background compile, which leaves its objects unnamed. */
+        void name(RtContext ctx) {
+            String label = LABEL;
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            for (int i = 0; i < sets.length; i++) {
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
+            }
+            if (bindlessLayout != 0L) {
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, bindlessLayout,
+                        label + " bindless descriptor set layout");
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, bindlessPool,
+                        label + " bindless descriptor pool");
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, bindlessSet,
+                        label + " bindless descriptor set");
+            }
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
+        }
+    }
+
+    /**
+     * Creates the layouts, descriptor sets and pipeline for {@code spec}. Only device-level Vulkan
+     * creation calls, so it is safe off the render thread; {@code background} also leaves the objects
+     * unnamed (debug names go through the game's debug wrapper) and leaves a core free for the game.
+     */
+    static Compiled compile(RtContext ctx, Spec spec, boolean background) {
+        String[] rgen = spec.rgen().toArray(String[]::new);
+        String[] rmiss = spec.rmiss().toArray(String[]::new);
+        String rchit = spec.rchit();
+        String rchitEntity = spec.rchitEntity();
+        String rahit = spec.rahit();
+        String rahitEntity = spec.rahitEntity();
+        int pushConstantSize = spec.pushConstantSize();
+        boolean withBlockAlbedoAtlas = spec.withBlockAlbedoAtlas();
+        int extraStorageImages = spec.extraStorageImages();
+        int bindlessTextures = spec.bindlessTextures();
+        boolean skyAtlas = spec.skyAtlas();
+        RtContext labels = background ? null : ctx;
         VkDevice vk = ctx.vk();
         boolean hasAhit = rahit != null;
-        String label = "world RT pipeline";
+        String label = LABEL;
         if (bindlessTextures > 0) {
             long requiredCombinedSamplers = Math.addExact(
                     Math.multiplyExact((long) bindlessTextures, BINDLESS_BINDINGS),
@@ -205,7 +302,7 @@ public final class RtPipeline {
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
             long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
             int combinedSamplers = (withBlockAlbedoAtlas ? 1 : 0) + skySamplers;
             int poolSizeCount = 2 + (combinedSamplers > 0 ? 1 : 0);
@@ -219,7 +316,7 @@ public final class RtPipeline {
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(RING).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool");
             long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
             LongBuffer layouts = stack.mallocLong(RING);
             for (int i = 0; i < RING; i++) {
                 layouts.put(i, dsl);
@@ -231,7 +328,7 @@ public final class RtPipeline {
             long[] sets = new long[RING];
             pSet.get(sets);
             for (int i = 0; i < RING; i++) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
             }
 
             // Optional bindless set (set 1): entity albedo plus canonical material page arrays.
@@ -257,20 +354,20 @@ public final class RtPipeline {
                         .pNext(bf.address()).flags(VK12.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT).pBindings(bl);
                 check(VK10.vkCreateDescriptorSetLayout(vk, bdslci, null, p), "vkCreateDescriptorSetLayout(bindless)");
                 bindlessLayout = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, bindlessLayout, label + " bindless descriptor set layout");
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, bindlessLayout, label + " bindless descriptor set layout");
                 VkDescriptorPoolSize.Buffer bps = VkDescriptorPoolSize.calloc(1, stack);
                 bps.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(bindlessTextures * nb);
                 VkDescriptorPoolCreateInfo bdpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                         .flags(VK12.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT).maxSets(1).pPoolSizes(bps);
                 check(VK10.vkCreateDescriptorPool(vk, bdpci, null, p), "vkCreateDescriptorPool(bindless)");
                 bindlessPool = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, bindlessPool, label + " bindless descriptor pool");
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, bindlessPool, label + " bindless descriptor pool");
                 VkDescriptorSetAllocateInfo bdsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
                         .descriptorPool(bindlessPool).pSetLayouts(stack.longs(bindlessLayout));
                 LongBuffer bpSet = stack.mallocLong(1);
                 check(VK10.vkAllocateDescriptorSets(vk, bdsai, bpSet), "vkAllocateDescriptorSets(bindless)");
                 bindlessSet = bpSet.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, bindlessSet, label + " bindless descriptor set");
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, bindlessSet, label + " bindless descriptor set");
             }
 
             VkPipelineLayoutCreateInfo plci = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
@@ -289,7 +386,7 @@ public final class RtPipeline {
             }
             check(VK10.vkCreatePipelineLayout(vk, plci, null, p), "vkCreatePipelineLayout");
             long layout = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
+            RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
 
             // Stages: one per rgen entry, one miss per rmiss entry, the closest-hit, then (optionally)
             // the any-hit. Groups are N raygen + M miss + the hit records selected by traceRayEXT's SBT
@@ -312,26 +409,26 @@ public final class RtPipeline {
             long[] mGen = new long[raygenCount];
             for (int g = 0; g < raygenCount; g++) {
                 mGen[g] = loadModule(vk, stack, rgen[g]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g], label + " " + rgen[g]);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g], label + " " + rgen[g]);
             }
             long[] mMiss = new long[missCount];
             for (int m = 0; m < missCount; m++) {
                 mMiss[m] = loadModule(vk, stack, rmiss[m]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m], label + " " + rmiss[m]);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m], label + " " + rmiss[m]);
             }
             long mHit = loadModule(vk, stack, rchit);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit, label + " " + rchit);
+            RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit, label + " " + rchit);
             long mAhit = hasAhit ? loadModule(vk, stack, rahit) : 0L;
             long mHitEntity = splitHit ? loadModule(vk, stack, rchitEntity) : 0L;
             long mAhitEntity = splitAnyHit ? loadModule(vk, stack, rahitEntity) : 0L;
             if (splitAnyHit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhitEntity, label + " " + rahitEntity);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhitEntity, label + " " + rahitEntity);
             }
             if (splitHit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHitEntity, label + " " + rchitEntity);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHitEntity, label + " " + rchitEntity);
             }
             if (hasAhit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit, label + " " + rahit);
+                RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit, label + " " + rahit);
             }
             ByteBuffer entry = stack.UTF8("main");
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
@@ -377,13 +474,14 @@ public final class RtPipeline {
             // Depth 1: secondary shadow/visibility rays are issued sequentially from raygen (not
             // nested in closest-hit), so each traceRayEXT is depth 1 — no recursion budget needed.
             rtpci.get(0).sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(layout);
-            if (RtDeviceBringup.ommEnabled()) {
+            if (spec.omm()) {
                 rtpci.get(0).flags(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
             }
             LongBuffer pPipeline = stack.mallocLong(1);
-            createRayTracingPipeline(vk, rtpci, pPipeline, label);
+            createRayTracingPipeline(vk, rtpci, pPipeline, background ? label + " (title screen)" : label,
+                    background);
             long pipeline = pPipeline.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
+            RtDebugLabels.name(labels, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
 
             for (int g = 0; g < raygenCount; g++) {
                 VK10.vkDestroyShaderModule(vk, mGen[g], null);
@@ -402,6 +500,19 @@ public final class RtPipeline {
                 VK10.vkDestroyShaderModule(vk, mAhitEntity, null);
             }
 
+            return new Compiled(vk, spec, dsl, pool, sets, bindlessLayout, bindlessPool, bindlessSet, layout,
+                    pipeline, groupCount, raygenCount, missCount, hitGroupCount, pcStages, firstExtraBinding,
+                    skyBinding);
+        }
+    }
+
+    /** Builds the shader binding table for a compiled pipeline and wraps it. Render thread. */
+    private static RtPipeline finish(RtContext ctx, Compiled compiled) {
+        VkDevice vk = compiled.vk();
+        String label = LABEL;
+        long pipeline = compiled.pipeline();
+        int groupCount = compiled.groupCount();
+        try (MemoryStack stack = MemoryStack.stackPush()) {
             // SBT: one record per group. Over-align the stride so every region start is base-aligned and
             // every individual record satisfies shaderGroupHandleAlignment.
             int handleSize = ctx.shaderGroupHandleSize();
@@ -420,8 +531,11 @@ public final class RtPipeline {
                 MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) g * handleSize, sbt.mapped + g * stride, handleSize);
             }
             sbt.flush();
-            return new RtPipeline(ctx, dsl, pool, sets, layout, pipeline, sbt, stride, raygenCount, missCount, hitGroupCount, pushConstantSize, pcStages, firstExtraBinding,
-                    bindlessLayout, bindlessPool, bindlessSet, skyBinding);
+            return new RtPipeline(ctx, compiled.dsl(), compiled.pool(), compiled.sets(), compiled.layout(), pipeline,
+                    sbt, stride, compiled.raygenCount(), compiled.missCount(), compiled.hitGroupCount(),
+                    compiled.spec().pushConstantSize(), compiled.pcStages(), compiled.firstExtraBinding(),
+                    compiled.bindlessLayout(), compiled.bindlessPool(), compiled.bindlessSet(),
+                    compiled.skyBinding());
         }
     }
 
@@ -667,7 +781,7 @@ public final class RtPipeline {
      * the driver declines to defer, it is the plain blocking call it always was.
      */
     private static void createRayTracingPipeline(VkDevice vk, VkRayTracingPipelineCreateInfoKHR.Buffer rtpci,
-                                                 LongBuffer pPipeline, String label) {
+                                                 LongBuffer pPipeline, String label, boolean background) {
         long start = System.nanoTime();
         long operation = VK10.VK_NULL_HANDLE;
         if (vk.getCapabilities().vkCreateDeferredOperationKHR != 0L) {
@@ -686,7 +800,9 @@ public final class RtPipeline {
                 result = VK10.VK_SUCCESS;
             } else if (result == VK_OPERATION_DEFERRED_KHR) {
                 int concurrency = Math.max(1, vkGetDeferredOperationMaxConcurrencyKHR(vk, operation));
-                int helpers = Math.max(0, Math.min(concurrency, Runtime.getRuntime().availableProcessors()) - 1);
+                // A background compile leaves one core to the game, which is still running the menu.
+                int helpers = Math.max(0, Math.min(concurrency, Runtime.getRuntime().availableProcessors())
+                        - (background ? 2 : 1));
                 threads = helpers + 1;
                 long deferred = operation;
                 Thread[] pool = new Thread[helpers];

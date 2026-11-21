@@ -100,6 +100,8 @@ public final class CausticaClient implements ClientModInitializer {
 	}
 
 	private static void shutdownRt() {
+		// A world pipeline still compiling at the title screen holds the device; let it finish first.
+		dev.comfyfluffy.caustica.rt.pipeline.RtPipelinePrewarm.discard();
 		WorldRenderScaler.INSTANCE.destroy();
 		RtUiOverlay.destroy(); // GUI redirect is not gated by rtInitDone; always release its TextureTarget
 		if (!rtInitDone) {

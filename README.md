@@ -61,6 +61,10 @@ Vendor upscaler runtimes (NGX/DLSS, FidelityFX, NRD, XeSS) are **not committed**
 from the official SDKs in CI into `build/native/<shim>/release/` and bundled from there; without
 them the build still succeeds and the corresponding option is simply not offered at runtime.
 
+`./gradlew slimJars` also writes two smaller JARs to `build/libs/variants/`, cut from the full JAR:
+`-windows-lite` (Windows natives without Intel XeSS, whose runtime is over half the full JAR) and
+`-linux` (Linux natives only).
+
 
 ## Compatibility
 

@@ -585,6 +585,44 @@ tasks.named("jar", Jar).configure {
 	}
 }
 
+// ===== Slim per-platform JARs =====
+// The full JAR carries every platform's natives and every upscaler. Most of its size is Intel's XeSS
+// runtime and the Linux copies of the DLSS runtimes, which a Windows NVIDIA or AMD player never loads.
+// These variants repackage the full JAR's bytes for one platform, leaving out whole entries only.
+// Every native runtime probes its bundled resource first, so an upscaler that is left out just hides
+// its option. They go to build/libs/variants so build/libs still holds exactly one mod JAR.
+def slimJarVariants = [
+	[task: "windowsLiteJar", classifier: "windows-lite",
+	 description: "Windows natives without Intel XeSS",
+	 excludes: ["caustica/natives/linux-x64/**",
+				"caustica/natives/windows-x64/xessshim.dll",
+				"caustica/natives/windows-x64/libxess.dll"]],
+	[task: "linuxJar", classifier: "linux",
+	 description: "Linux natives only",
+	 excludes: ["caustica/natives/windows-x64/**"]]
+]
+def slimJarTasks = slimJarVariants.collect { variant ->
+	tasks.register(variant.task, Zip) {
+		group = "build"
+		description = "Repackages the mod JAR with ${variant.description}."
+		def modJar = tasks.named("jar", Jar)
+		dependsOn modJar
+		archiveBaseName = modJar.flatMap { it.archiveBaseName }
+		archiveVersion = modJar.flatMap { it.archiveVersion }
+		archiveClassifier = variant.classifier
+		archiveExtension = "jar"
+		destinationDirectory = layout.buildDirectory.dir("libs/variants")
+		from(modJar.flatMap { it.archiveFile }.map { zipTree(it) }) {
+			exclude variant.excludes
+		}
+	}
+}
+tasks.register("slimJars") {
+	group = "build"
+	description = "Builds the slim per-platform JARs next to the full mod JAR."
+	dependsOn slimJarTasks
+}
+
 publishing {
 	publications {
 		create("mavenJava", MavenPublication) {

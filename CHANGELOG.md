@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Performance
+
+- **The world ray-tracing pipeline is compiled in the background at the title screen.** After an update
+  the driver has to turn the new shaders into GPU code once, which took about 30 s on a laptop RTX 4050.
+  That used to freeze the first frame in a world; it now runs while you are in the menu and the world is
+  loading, and the world picks up the finished pipeline. If you join before it is done, the game waits
+  only for the part that is left.
+
+### Downloads
+
+- **Smaller JARs.** Besides the full JAR, each build now has two smaller ones:
+  - `-windows-lite`: Windows only, without Intel XeSS. XeSS's runtime is more than half of the full JAR.
+    DLSS, FSR and NRD are all still included.
+  - `-linux`: Linux only.
+
+  An upscaler that is left out simply does not appear in the options.
+
 ## 0.4.1 — 2026-11-20
 
 ### Performance

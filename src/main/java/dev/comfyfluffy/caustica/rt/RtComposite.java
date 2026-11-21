@@ -85,6 +85,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtPipelinePrewarm;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
 import java.nio.ByteBuffer;
@@ -1255,10 +1256,14 @@ public final class RtComposite {
      * deliberately not built at the menu — only once a world is entered.
      */
     public void ensureResourcesReady(RtContext ctx) {
-        if (failed || worldPipeline != null || reloadRebindRequested) {
+        if (failed || worldPipeline != null) {
             return;
         }
-        if (Minecraft.getInstance().level == null || blockAlbedoAtlasView() == 0L) {
+        if (Minecraft.getInstance().level == null) {
+            startWorldPipelinePrewarm(ctx);
+            return;
+        }
+        if (reloadRebindRequested || blockAlbedoAtlasView() == 0L) {
             return;
         }
         try {
@@ -1269,18 +1274,39 @@ public final class RtComposite {
         }
     }
 
+    /**
+     * The world pipeline's inputs. None of them depend on the world, which is what lets
+     * {@link #startWorldPipelinePrewarm} compile it at the title screen.
+     */
+    private static RtPipeline.Spec worldPipelineSpec(int bindlessCapacity) {
+        String[] raygens = RtDeviceBringup.serEnabled()
+                ? new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader(),
+                        RtDeviceBringup.worldPlainRaygenShader()}
+                : new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader()};
+        return new RtPipeline.Spec(raygens,
+                new String[]{"world.rmiss.spv", "world_guide.rmiss.spv"},
+                "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv", "world_entity.rahit.spv",
+                WorldPushConstantsData.BYTE_SIZE, true, GUIDE_COUNT, bindlessCapacity, true);
+    }
+
+    /**
+     * Before the first world, compile the world pipeline in the background (see
+     * {@link RtPipelinePrewarm}); {@link #ensureWorld} then takes it instead of compiling on the join.
+     */
+    private void startWorldPipelinePrewarm(RtContext ctx) {
+        try {
+            RtPipelinePrewarm.start(ctx, worldPipelineSpec(RtEntityTextures.maxTextures()));
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.warn("Could not start the background RT pipeline compile", t);
+        }
+    }
+
     private RtPipeline ensureWorld(RtContext ctx) {
         if (worldPipeline == null) {
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
-            String[] raygens = RtDeviceBringup.serEnabled()
-                    ? new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader(),
-                            RtDeviceBringup.worldPlainRaygenShader()}
-                    : new String[]{RtDeviceBringup.worldPrimaryRaygenShader(), RtDeviceBringup.worldRaygenShader()};
-            worldPipeline = RtPipeline.create(ctx, raygens,
-                    new String[]{"world.rmiss.spv", "world_guide.rmiss.spv"},
-                    "world.rchit.spv", "world_entity.rchit.spv", "world.rahit.spv", "world_entity.rahit.spv",
-                    WorldPushConstantsData.BYTE_SIZE, true, GUIDE_COUNT, bindlessTextureCapacity, true);
-            plainIndirectRaygen = raygens.length > 2 ? 2 : -1;
+            RtPipeline.Spec spec = worldPipelineSpec(bindlessTextureCapacity);
+            worldPipeline = RtPipeline.create(ctx, spec);
+            plainIndirectRaygen = spec.rgen().size() > 2 ? 2 : -1;
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
                 pushRing = new PushSlot[PUSH_RING];
