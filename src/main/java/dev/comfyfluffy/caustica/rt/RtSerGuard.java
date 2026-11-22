@@ -32,12 +32,15 @@ import net.minecraft.client.multiplayer.ClientLevel;
  *     the four losses that followed such a refusal came within 4 to 21 s of it. The hold is not for the
  *     rest of the session because the reorder is worth about 40% of the indirect pass on the hardware
  *     it was measured on; one loss did come ten minutes after its refusal, which this does not cover.</li>
- * <li>For {@link #WORLD_CHANGE_HOLD_NANOS} after rendering resumes from a gap of at least
- *     {@link #RESUME_GAP_NANOS} with no world frame (the window minimized or put away, a reload), extended
- *     like a world change while the distant terrain rebuilds. A loss came 3 s after a 7 s gap, an hour
- *     into a session, with the guard otherwise idle; the LOD-refresh loss above also came after a
- *     refocus. The evidence is thin: a 14 s gap earlier in that same session passed without one. Ordinary
- *     hitches, even joining a world, stayed under 2 s in that session's log.</li>
+ * <li>For {@link #WORLD_CHANGE_HOLD_NANOS} after rendering resumes: after the unfocused-window pause
+ *     ({@link #renderingResumed}), however short, or after any other gap of at least
+ *     {@link #RESUME_GAP_NANOS} with no world frame (a minimized window, a reload). It is extended like a
+ *     world change while the distant terrain rebuilds. An hour into a session with the guard idle,
+ *     rendering resumed from a 7 s unfocused pause and the device was lost within the next four frames,
+ *     in the reordering raygen, with a hit that changed across the reorder; the LOD-refresh loss above
+ *     also came after a refocus. The only other pause in that session (14 s) fell inside a world-change
+ *     hold, so reordering was not running across it. Ordinary hitches, even joining a world, stayed under
+ *     2 s in that session's log.</li>
  * </ul>
  *
  * A hold that is already running is only ever extended, never shortened. Render thread only.
@@ -64,6 +67,8 @@ public final class RtSerGuard {
     private static long seenLargeRefreshes;
     /** When the last world frame asked for its bounce count; 0 before the first. */
     private static long lastFrameNanos;
+    /** Set by {@link #renderingResumed}, taken by the next world frame. */
+    private static boolean resumePending;
 
     private RtSerGuard() {
     }
@@ -78,7 +83,8 @@ public final class RtSerGuard {
             return configured;
         }
         long now = System.nanoTime();
-        boolean resumed = lastFrameNanos != 0L && now - lastFrameNanos >= RESUME_GAP_NANOS;
+        boolean resumed = resumePending || (lastFrameNanos != 0L && now - lastFrameNanos >= RESUME_GAP_NANOS);
+        resumePending = false;
         lastFrameNanos = now;
         if (level == null) {
             lastLevel = null;
@@ -125,6 +131,14 @@ public final class RtSerGuard {
             CausticaMod.LOGGER.info("Shader Execution Reordering back on");
         }
         return holding ? 0 : configured;
+    }
+
+    /**
+     * The unfocused-window pause has ended; the next world frame starts a hold. Render thread, like the
+     * frames that read it.
+     */
+    public static void renderingResumed() {
+        resumePending = true;
     }
 
     /** True while a hold is running: the indirect pass should run the raygen built without reordering. */

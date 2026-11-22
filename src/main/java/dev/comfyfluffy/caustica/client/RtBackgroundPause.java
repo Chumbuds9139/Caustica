@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtSerGuard;
 import net.minecraft.client.Minecraft;
 
 import java.util.concurrent.locks.LockSupport;
@@ -42,6 +43,8 @@ public final class RtBackgroundPause {
             if (paused) {
                 paused = false;
                 CausticaMod.LOGGER.info("Game window focused again: rendering resumed");
+                // The reordered trace has lost the device in the first frames after such a resume.
+                RtSerGuard.renderingResumed();
             }
             return;
         }

@@ -12,10 +12,10 @@
 
 ### Stability
 
-- **The SER guard also holds after a pause in rendering.** When no world frame has been drawn for 3 s or
-  more (the window minimized or put away, for example), the indirect pass runs without reordering for
-  30 s after rendering resumes, longer while the distant terrain rebuilds. A device loss came 3 s after
-  such a pause. This only costs the reordering speed-up for that time.
+- **The SER guard also holds after a pause in rendering.** When rendering resumes after the window was
+  out of focus (Pause When Unfocused), or after any other 3 s or more without a world frame, the indirect
+  pass runs without reordering for 30 s, longer while the distant terrain rebuilds. A device loss came
+  within four frames of such a resume. This only costs the reordering speed-up for that time.
 
 ### Downloads
 
