@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 — 2026-11-22
+
+### Downloads
+
+- **Smaller JARs.** Besides the full JAR (about 104 MB), each release now has two smaller ones:
+  - `-windows-lite` (about 26 MB): Windows only, without Intel XeSS, whose runtime is more than half of
+    the full JAR. DLSS, FSR and NRD are all still included. Pick this one unless you use XeSS.
+  - `-linux` (about 22 MB): Linux only.
+
+  An upscaler that is left out simply does not appear in the options.
 
 ### Performance
 
@@ -16,15 +25,6 @@
   out of focus (Pause When Unfocused), or after any other 3 s or more without a world frame, the indirect
   pass runs without reordering for 30 s, longer while the distant terrain rebuilds. A device loss came
   within four frames of such a resume. This only costs the reordering speed-up for that time.
-
-### Downloads
-
-- **Smaller JARs.** Besides the full JAR, each build now has two smaller ones:
-  - `-windows-lite`: Windows only, without Intel XeSS. XeSS's runtime is more than half of the full JAR.
-    DLSS, FSR and NRD are all still included.
-  - `-linux`: Linux only.
-
-  An upscaler that is left out simply does not appear in the options.
 
 ## 0.4.1 — 2026-11-20
 
