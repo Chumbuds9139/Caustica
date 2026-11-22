@@ -10,6 +10,13 @@
   loading, and the world picks up the finished pipeline. If you join before it is done, the game waits
   only for the part that is left.
 
+### Stability
+
+- **The SER guard also holds after a pause in rendering.** When no world frame has been drawn for 3 s or
+  more (the window minimized or put away, for example), the indirect pass runs without reordering for
+  30 s after rendering resumes, longer while the distant terrain rebuilds. A device loss came 3 s after
+  such a pause. This only costs the reordering speed-up for that time.
+
 ### Downloads
 
 - **Smaller JARs.** Besides the full JAR, each build now has two smaller ones:

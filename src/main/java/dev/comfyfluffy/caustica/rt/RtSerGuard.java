@@ -32,6 +32,12 @@ import net.minecraft.client.multiplayer.ClientLevel;
  *     the four losses that followed such a refusal came within 4 to 21 s of it. The hold is not for the
  *     rest of the session because the reorder is worth about 40% of the indirect pass on the hardware
  *     it was measured on; one loss did come ten minutes after its refusal, which this does not cover.</li>
+ * <li>For {@link #WORLD_CHANGE_HOLD_NANOS} after rendering resumes from a gap of at least
+ *     {@link #RESUME_GAP_NANOS} with no world frame (the window minimized or put away, a reload), extended
+ *     like a world change while the distant terrain rebuilds. A loss came 3 s after a 7 s gap, an hour
+ *     into a session, with the guard otherwise idle; the LOD-refresh loss above also came after a
+ *     refocus. The evidence is thin: a 14 s gap earlier in that same session passed without one. Ordinary
+ *     hitches, even joining a world, stayed under 2 s in that session's log.</li>
  * </ul>
  *
  * A hold that is already running is only ever extended, never shortened. Render thread only.
@@ -41,8 +47,10 @@ public final class RtSerGuard {
     private static final long REFUSAL_HOLD_NANOS = 120_000_000_000L;
     private static final long LOD_SETTLE_NANOS = 5_000_000_000L;
     private static final long WORLD_CHANGE_MAX_HOLD_NANOS = 120_000_000_000L;
+    private static final long RESUME_GAP_NANOS = 3_000_000_000L;
     private static final String WORLD_CHANGED = "the world changed";
     private static final String LOD_REFRESH = "the distant terrain is being rebuilt";
+    private static final String RESUMED = "rendering resumed after a pause";
 
     private static ClientLevel lastLevel;
     private static int lastDimension;
@@ -54,6 +62,8 @@ public final class RtSerGuard {
     private static long lodHoldStartedAt;
     private static boolean lodExtensionLogged;
     private static long seenLargeRefreshes;
+    /** When the last world frame asked for its bounce count; 0 before the first. */
+    private static long lastFrameNanos;
 
     private RtSerGuard() {
     }
@@ -68,6 +78,8 @@ public final class RtSerGuard {
             return configured;
         }
         long now = System.nanoTime();
+        boolean resumed = lastFrameNanos != 0L && now - lastFrameNanos >= RESUME_GAP_NANOS;
+        lastFrameNanos = now;
         if (level == null) {
             lastLevel = null;
         } else if (level != lastLevel || dimension != lastDimension) {
@@ -76,18 +88,24 @@ public final class RtSerGuard {
             lodHoldStartedAt = now;
             lodExtensionLogged = false;
             hold(now, WORLD_CHANGE_HOLD_NANOS, WORLD_CHANGED);
+        } else if (resumed) {
+            // Called before this frame picks its indirect raygen, so the resuming frame is already held.
+            lodHoldStartedAt = now;
+            lodExtensionLogged = false;
+            hold(now, WORLD_CHANGE_HOLD_NANOS, RESUMED);
         }
         long largeRefreshes = RtDistantHorizonsTerrain.INSTANCE.largeRefreshesStarted();
         if (largeRefreshes != seenLargeRefreshes) {
             seenLargeRefreshes = largeRefreshes;
-            if (!holding || !WORLD_CHANGED.equals(holdReason)) {
+            if (!holding || !(WORLD_CHANGED.equals(holdReason) || RESUMED.equals(holdReason))) {
                 // Held only while it streams in (the extension below), not for a fixed time.
                 lodHoldStartedAt = now;
                 lodExtensionLogged = false;
                 hold(now, LOD_SETTLE_NANOS, LOD_REFRESH);
             }
         }
-        boolean lodHold = WORLD_CHANGED.equals(holdReason) || LOD_REFRESH.equals(holdReason);
+        boolean lodHold = WORLD_CHANGED.equals(holdReason) || LOD_REFRESH.equals(holdReason)
+                || RESUMED.equals(holdReason);
         if (holding && lodHold && holdUntil - now < LOD_SETTLE_NANOS
                 && now - lodHoldStartedAt < WORLD_CHANGE_MAX_HOLD_NANOS
                 && RtDistantHorizonsTerrain.INSTANCE.rebuilding()) {
