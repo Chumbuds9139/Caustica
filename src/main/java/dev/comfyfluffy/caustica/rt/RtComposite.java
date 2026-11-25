@@ -4371,9 +4371,10 @@ public final class RtComposite {
      * decided before the cut bookkeeping so a skipped tick leaves a gap the way a menu does.
      *
      * <p>While a loading overlay is up (a resource reload: F3+T, a pack change) the RT pipeline and the
-     * materials are rebuilt under frame generation, and one log shows the black generated frames starting
-     * right after an F3+T and lasting until frame generation was switched off and on. So nothing is
-     * evaluated under the overlay, and the first evaluate after it gets a fresh feature.
+     * materials are rebuilt under frame generation. In one log of the black generated frames an F3+T
+     * comes shortly before frame generation was switched off and on, so the reload is a suspect (not a
+     * confirmed cause). Nothing is evaluated under the overlay, and the first evaluate after it gets a
+     * fresh feature, which costs nothing when the reload was harmless.
      */
     private boolean holdDlssFgBeforeCuts() {
         Minecraft mc = Minecraft.getInstance();
