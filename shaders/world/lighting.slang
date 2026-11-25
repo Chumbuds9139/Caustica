@@ -812,9 +812,10 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
 //
 // A uniform term alone would give every face of a block the same radiance, so a cave lit only by night
 // vision would lose all sense of shape. Vanilla's floor is still multiplied by its per-face shade, so
-// weight by the normal the same way: up 1.0, down 0.5, north/south 0.8, east/west 0.6. The weights sum
-// over the squared normal components, so an axis-aligned face gets the exact vanilla value and a tilted
-// one blends between them.
+// weight by the normal the same way, with vanilla's default face shades (CardinalLighting.DEFAULT): up 1.0,
+// down 0.5, north/south 0.8, east/west 0.6. The Nether's set (0.9 up and down) is not mirrored. The weights
+// sum over the squared normal components, so an axis-aligned face gets the vanilla value and a tilted one
+// blends between them.
 public float3 nightVisionIrradiance(float3 n) {
     if (worldPush.nightVision.w <= 0.0) {
         return float3(0.0, 0.0, 0.0);
