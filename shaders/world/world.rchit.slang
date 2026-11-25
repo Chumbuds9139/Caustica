@@ -948,6 +948,18 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float3 n = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
 
+    // Spectator inside a solid block: a camera ray that reached the back of a terrain face reports only
+    // where, so trace.slang can carry on beyond it the way vanilla's back-face culling would. Block faces
+    // are wound outward (the mesher's coplanar resolve depends on that too); fluids are left out because
+    // their faces come in coincident front/back pairs. See PAYLOAD_SKIP_TERRAIN_BACK_FACES.
+    if ((payload.flags & PAYLOAD_SKIP_TERRAIN_BACK_FACES) != 0u
+            && (pr.flags & TERRAIN_PRIM_FLUID) == 0u
+            && dot(WorldRayDirection(), n) > 0.0) {
+        payload.hitT = RayTCurrent();
+        payload.flags |= PAYLOAD_TERRAIN_BACK_FACE;
+        return;
+    }
+
     // Water prims are single-sided, wound outward from the fluid volume (RtFluidMesher), so the
     // UNFLIPPED geometric normal is a reliable "which side of the dielectric" signal: a ray travelling
     // against it is entering the volume, one travelling with it is exiting. Captured before the

@@ -87,6 +87,7 @@ public bool restirEnabled() {
 public bool waterWavesEnabled() { return worldFlag(worldPush, WORLD_FLAG_WAVES); }
 public bool sharcEnabled() { return worldFeature(worldPush, FEATURE_SHARC); }
 public bool cameraSubmerged() { return worldFlag(worldPush, WORLD_FLAG_SUBMERGED); }
+public bool cameraInSolidBlock() { return worldFlag(worldPush, WORLD_FLAG_CAMERA_IN_SOLID); }
 /**
  * True when the host published the blue-noise dither tile (WorldPush.blueNoiseAddr). Its absence is
  * a hard fallback rather than a quality knob: every consumer keeps the PCG draw it always used, so a

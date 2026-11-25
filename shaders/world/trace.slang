@@ -29,6 +29,13 @@ public static uint gv_secondaryCull = CULL_SECONDARY;
 public static bool gv_cheapMedia = false;
 // Raygen sets this for pass B's trace of a camera ray; it travels as PAYLOAD_CAMERA_RAY (F8 probes only).
 public static bool gv_cameraRay = false;
+// Raygen sets this around a camera ray's trace while a spectator's eye is inside a solid block
+// (cameraInSolidBlock): the trace then skips terrain back faces, as vanilla's culling does.
+public static bool gv_skipTerrainBackFaces = false;
+// How many back faces one camera ray may step through before it takes whatever it hits. A ray out of
+// stone usually passes one (the near wall of the first cave, or the underside of the ground); a few more
+// cover grass overlays and stacked caves.
+public static const int TERRAIN_BACK_FACE_MAX_SKIPS = 8;
 // Shadow-ray mask for the analytic held-item light: ordinary occluders MINUS the first-person
 // viewmodel. Instance masks in play: terrain/entities/block entities 0xF7, DH LOD 0x03, particles
 // 0x02, the first-person player 0x01. Bits 2 and 4..7 keep every 0xF7 occluder while matching neither
@@ -148,10 +155,35 @@ void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, flo
             | (rayInWater && worldPush.underwaterEffects.w > 0.0 ? PAYLOAD_RAY_IN_WATER : 0u)
             | (gv_cheapMedia ? PAYLOAD_CHEAP_MEDIA : 0u)
             | (gv_cameraRay ? PAYLOAD_CAMERA_RAY : 0u);
-    payload = makeRadiancePayload(flags, packHalf2(float2(rayConeWidth, rayConeSpread)));
+    uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
+    bool skipBackFaces = gv_skipTerrainBackFaces;
+    payload = makeRadiancePayload(flags | (skipBackFaces ? PAYLOAD_SKIP_TERRAIN_BACK_FACES : 0u), rayCone);
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, missIndex,
             makeRay(ro, tmin, rd, tmax), payload);
+    if (skipBackFaces) {
+        traceBeyondTerrainBackFaces(missIndex, cullMask, ro, rd, tmax, flags, rayCone);
+    }
+}
+
+// The spectator back-face skip (PAYLOAD_SKIP_TERRAIN_BACK_FACES): while the last trace stopped on the back
+// of a terrain face, trace again from just beyond it, along the same ray from the same origin, so hitT keeps
+// measuring from the eye and the guides, motion and shading all see the surface vanilla would draw. The step
+// stays well under the mesher's 2e-4 coplanar offsets (an inset glass face, a grass overlay) so it cannot
+// jump a face sitting just behind the one skipped, and grows with t so it still advances far away. A ray
+// out of skips takes one last trace without the request, so it always ends on a real hit or a miss.
+void traceBeyondTerrainBackFaces(uint missIndex, uint cullMask, float3 ro, float3 rd, float tmax,
+                                 uint flags, uint rayCone) {
+    for (int i = 0; i < TERRAIN_BACK_FACE_MAX_SKIPS && payload.hitT >= 0.0
+            && (payload.flags & PAYLOAD_TERRAIN_BACK_FACE) != 0u; i++) {
+        // tmin may equal tmax (an empty interval just misses), never exceed it.
+        float next = min(payload.hitT + 5.0e-5 + payload.hitT * 2.4e-7, tmax);
+        bool last = i == TERRAIN_BACK_FACE_MAX_SKIPS - 1;
+        payload = makeRadiancePayload(flags | (last ? 0u : PAYLOAD_SKIP_TERRAIN_BACK_FACES), rayCone);
+        TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
+                SBT_RADIANCE, SBT_STRIDE_BUCKET, missIndex,
+                makeRay(ro, next, rd, tmax), payload);
+    }
 }
 
 // Auxiliary RR probes deliberately use ordinary TraceRay. They are one-off, incoherent rays whose

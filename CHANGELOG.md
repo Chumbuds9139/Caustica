@@ -26,6 +26,11 @@
   like vanilla (tops brightest, undersides darkest), using the dimension's night-vision colour. Caves
   and nights become visible while daylight barely changes, and the effect flickers out over its last
   ten seconds like vanilla. Conduit Power gives the same light underwater.
+- **Spectators inside blocks see into caves again.** Vanilla hides the back faces of blocks, which is
+  what lets a spectator inside stone see the caves around them. Caustica drew every face from both
+  sides, so the view showed the back of each cave's nearest wall instead. While a spectator's eye is
+  inside a solid block, camera rays now pass through the back faces of blocks as in vanilla. Water and
+  lava are left as they were, and Distant Horizons/Voxy terrain is not changed yet.
 
 ## 0.4.2 — 2026-11-22
 

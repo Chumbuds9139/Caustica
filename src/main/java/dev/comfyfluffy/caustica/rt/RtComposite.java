@@ -1971,6 +1971,12 @@ public final class RtComposite {
                 if (fs.is(FluidTags.WATER) && camY < cameraBlockPos.getY() + fs.getHeight(level, cameraBlockPos)) {
                     flags |= 0b01;
                 }
+                // bit6: a spectator's eye inside a solid block, by vanilla's own test (Camera's smartCull
+                // rule). Camera rays then see past terrain back faces, as vanilla's culling lets them.
+                var player = Minecraft.getInstance().player;
+                if (player != null && player.isSpectator() && level.getBlockState(cameraBlockPos).isSolidRender()) {
+                    flags |= 0b1000000;
+                }
             }
             if (waterWaves()) {
                 flags |= 0b10000; // W1: animated geometric water waves

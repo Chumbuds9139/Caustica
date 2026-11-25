@@ -42,8 +42,12 @@ public PathSegment tracePrimary(PathSegment seg,
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
                                                showCelestial);
+        // A spectator inside stone sees past the back faces of terrain, as in vanilla. Pass B's trace of
+        // this same camera ray skips them too, so both passes land on the same surface.
+        gv_skipTerrainBackFaces = bounce == 0 && cameraInSolidBlock();
         tracePrimarySurface(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
                       showCelestial, medium.current.water, rayConeWidth, rayConeSpread);
+        gv_skipTerrainBackFaces = false;
         // The hand has to be layered over the world here, before the miss/guide branches below read the
         // hit: any primary ray may really be a viewmodel pixel — including one that hit a block nearer than
         // the arm, which the hand still draws over. See traceViewmodelOverlay in trace.slang.
