@@ -79,11 +79,6 @@ final class RtTerrainMesher {
      * border. A snow biome next to a rainy one is meshed at the same time and each keeps its own answer.
      */
     static final int TERRAIN_PRIM_RAIN_BIOME = 64;
-    /**
-     * A water or lava face from {@link FluidCapture}. Vanilla emits most fluid faces with a reversed copy on
-     * the same corners, so the spectator back-face skip in {@code world.rchit} leaves these prims alone.
-     */
-    static final int TERRAIN_PRIM_FLUID = 128;
 
     /** Sprite classification for the two portal blocks. */
     private static final int PORTAL_NONE = 0;
@@ -963,10 +958,9 @@ final class RtTerrainMesher {
                 prim.add(tb);
                 prim.add(0f);
                 prim.add(Float.intBitsToFloat(materialId));
-                // Fluid faces carry two terrain-prim bits: what they are, and (water only) rain exposure,
-                // for rain-impact ripple gating.
-                prim.add(Float.intBitsToFloat(TERRAIN_PRIM_FLUID
-                        | (water && rainExposed ? TERRAIN_PRIM_RAIN_EXPOSED : 0)));
+                // The only terrain-prim bit water carries: rain exposure, for rain-impact ripple gating.
+                prim.add(Float.intBitsToFloat(
+                        water && rainExposed ? TERRAIN_PRIM_RAIN_EXPOSED : 0));
                 prim.add(0f);
                 prim.add(0f);
                 g.ommSprites.add(null);

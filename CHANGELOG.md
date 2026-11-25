@@ -29,8 +29,8 @@
 - **Spectators inside blocks see into caves again.** Vanilla hides the back faces of blocks, which is
   what lets a spectator inside stone see the caves around them. Caustica drew every face from both
   sides, so the view showed the back of each cave's nearest wall instead. While a spectator's eye is
-  inside a solid block, camera rays now pass through the back faces of blocks as in vanilla. Water and
-  lava are left as they were, and Distant Horizons/Voxy terrain is not changed yet.
+  inside a solid block, camera rays now pass through the back faces of blocks and fluids as in vanilla.
+  Distant Horizons/Voxy terrain is not changed yet.
 
 ## 0.4.2 — 2026-11-22
 

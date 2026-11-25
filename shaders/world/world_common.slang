@@ -639,11 +639,6 @@ public static const uint TERRAIN_PRIM_TRANSLUCENT = 32u;
 // the transition radius, while "is this a rainy biome" must change exactly at the biome border — blending
 // it would put impact rings several blocks inside a snow biome, which is the bug this bit exists to fix.
 public static const uint TERRAIN_PRIM_RAIN_BIOME = 64u;
-// Bit 7: a water or lava face from RtTerrainMesher's fluid capture. Vanilla's FluidRenderer emits most
-// fluid faces together with a reversed copy on the same four corners, so for fluids "the back of a face"
-// is not "the far side of a solid": the spectator back-face skip (PAYLOAD_SKIP_TERRAIN_BACK_FACES) leaves
-// them alone, or it could step past both copies of the pair at once.
-public static const uint TERRAIN_PRIM_FLUID = 128u;
 // Prim.flags (entity prims): a vanilla rain/snow sheet captured by RtWeatherCapture, or one of
 // vanilla's little rain-impact/splash billboards. Shares the flags lane the portal tags use on terrain —
 // particles never carry portal tags, so the bit is unambiguous. It selects the weather COVERAGE rules:
@@ -755,7 +750,7 @@ public static const uint PAYLOAD_CLOUD_BUFFER_BUILD = 524288u;
 // Spectator inside a solid block (WORLD_FLAG_CAMERA_IN_SOLID), camera rays only: vanilla culls the back
 // faces of terrain, which is what lets a spectator inside stone see into the caves around them; ray tracing
 // treats every face as two-sided, so the camera saw the back of each cave's near wall instead. Set by
-// raygen on the trace; world.rchit answers a back-facing, non-fluid terrain hit with only its distance and
+// raygen on the trace; world.rchit answers a back-facing terrain hit with only its distance and
 // PAYLOAD_TERRAIN_BACK_FACE, and trace.slang re-traces from just beyond it. See traceRadianceMiss.
 public static const uint PAYLOAD_SKIP_TERRAIN_BACK_FACES = 1048576u;
 public static const uint PAYLOAD_TERRAIN_BACK_FACE = 2097152u;

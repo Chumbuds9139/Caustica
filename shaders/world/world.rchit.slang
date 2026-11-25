@@ -950,11 +950,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
     // Spectator inside a solid block: a camera ray that reached the back of a terrain face reports only
     // where, so trace.slang can carry on beyond it the way vanilla's back-face culling would. Block faces
-    // are wound outward (the mesher's coplanar resolve depends on that too); fluids are left out because
-    // their faces come in coincident front/back pairs. See PAYLOAD_SKIP_TERRAIN_BACK_FACES.
-    if ((payload.flags & PAYLOAD_SKIP_TERRAIN_BACK_FACES) != 0u
-            && (pr.flags & TERRAIN_PRIM_FLUID) == 0u
-            && dot(WorldRayDirection(), n) > 0.0) {
+    // are wound outward (the mesher's coplanar resolve depends on that too), and so are fluid faces:
+    // RtFluidMesher drops vanilla's reversed copies. Skipping a fluid's back face also keeps a ray that
+    // came out of stone into a lake from reading the lake's surface as an exit it never entered.
+    // See PAYLOAD_SKIP_TERRAIN_BACK_FACES.
+    if ((payload.flags & PAYLOAD_SKIP_TERRAIN_BACK_FACES) != 0u && dot(WorldRayDirection(), n) > 0.0) {
         payload.hitT = RayTCurrent();
         payload.flags |= PAYLOAD_TERRAIN_BACK_FACE;
         return;
