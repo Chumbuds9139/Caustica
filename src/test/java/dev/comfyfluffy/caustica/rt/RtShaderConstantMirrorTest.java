@@ -150,7 +150,7 @@ final class RtShaderConstantMirrorTest {
         // record just loses a component) but would silently drop a feature, so pin them here.
         for (String field : new String[] {"weather", "dimension", "featureFlags",
                 "surfaceWetness", "rainEffects", "underwaterEffects", "lightning", "viewmodel",
-                "viewmodelCull"}) {
+                "viewmodelCull", "nightVision"}) {
             assertTrue(Pattern.compile("^\\s*public\\s+\\S+\\s+" + field + "\\s*;", Pattern.MULTILINE)
                             .matcher(slang).find(),
                     "WorldPush is missing the '" + field + "' field");

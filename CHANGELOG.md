@@ -21,6 +21,11 @@
 - **Hurt mobs flash red again**, and a creeper about to explode flashes white. The colour is mixed into
   the mob's surface the way vanilla mixes it, before lighting, so the flash is lit by the scene like the
   rest of the mob. Armour does not flash, as in vanilla.
+- **Night vision works.** Vanilla applies night vision by raising the floor of its lightmap, which ray
+  tracing does not use, so the effect did nothing. It now adds a dim, even fill light, shaded per face
+  like vanilla (tops brightest, undersides darkest), using the dimension's night-vision colour. Caves
+  and nights become visible while daylight barely changes, and the effect flickers out over its last
+  ten seconds like vanilla. Conduit Power gives the same light underwater.
 
 ## 0.4.2 — 2026-11-22
 

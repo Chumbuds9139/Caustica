@@ -575,11 +575,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
 
             // Same analytic held-item light as surfaces. Billboards are two-sided receivers; bias
             // the shadow origin toward the light's side, exactly like the celestial NEE above does.
-            if (worldPush.handLight.w > 0.0 || worldPush.lightning.w > 0.0) {
+            // Night vision's fill too, unweighted: vanilla particles take the lightmap floor with no per-face shade.
+            if (worldPush.handLight.w > 0.0 || worldPush.lightning.w > 0.0 || worldPush.nightVision.w > 0.0) {
                 float3 toHand = worldPush.handLight.xyz - hitPos;
                 float3 handOrigin = hitPos + (dot(n, toHand) >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 particleSpecialIrr = handLightIrradiance(handOrigin, hitPos, n, true)
-                        + lightningIrradiance(handOrigin, hitPos, n, true);
+                        + lightningIrradiance(handOrigin, hitPos, n, true)
+                        + max(worldPush.nightVision.xyz, float3(0.0, 0.0, 0.0));
                 if (max(particleSpecialIrr.x, max(particleSpecialIrr.y, particleSpecialIrr.z)) > 0.0) {
                     float3 particleSpecial = throughput * albedo * INV_PI * particleSpecialIrr;
                     L += particleSpecial;
@@ -843,9 +845,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // term their captured flame lights the scene through rare indirect bounce hits only —
         // a torch in hand would barely brighten the blocks in front of it. Lambertian only; the
         // flame itself still gathers as ordinary emissive geometry on direct hit. Two-sided for
-        // dynamic entities, mirroring the celestial NDL convention above.
+        // dynamic entities, mirroring the celestial NDL convention above. Night vision's fill light rides
+        // the same term: it is unshadowed, so it needs no ray of its own (see nightVisionIrradiance).
         float3 specialIrr = handLightIrradiance(p, hitPos, n, isDynamicEntityEarly)
-                + lightningIrradiance(p, hitPos, n, isDynamicEntityEarly);
+                + lightningIrradiance(p, hitPos, n, isDynamicEntityEarly)
+                + nightVisionIrradiance(n);
         if (max(specialIrr.x, max(specialIrr.y, specialIrr.z)) > 0.0) {
             float3 specialNee = throughput * diffAlb * INV_PI * specialIrr;
             L += specialNee;

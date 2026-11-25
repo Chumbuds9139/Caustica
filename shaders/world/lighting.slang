@@ -804,6 +804,26 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
     return vis * (worldPush.handLightColor.xyz * ndl * intensity / max(d2, 0.25));
 }
 
+// Night vision's fill light (WorldPush.nightVision). Vanilla lifts every lightmap value to at least
+// NIGHT_VISION_COLOR * intensity, so nothing in view falls below a dim grey however dark it is. Ray tracing
+// never samples the lightmap, so this adds the same lift as a uniform, unshadowed irradiance at each
+// shading vertex instead. Daylight is effectively unchanged (the sun alone is about twenty times this),
+// while caves and night scenes get enough light for auto exposure to bring them up.
+//
+// A uniform term alone would give every face of a block the same radiance, so a cave lit only by night
+// vision would lose all sense of shape. Vanilla's floor is still multiplied by its per-face shade, so
+// weight by the normal the same way: up 1.0, down 0.5, north/south 0.8, east/west 0.6. The weights sum
+// over the squared normal components, so an axis-aligned face gets the exact vanilla value and a tilted
+// one blends between them.
+public float3 nightVisionIrradiance(float3 n) {
+    if (worldPush.nightVision.w <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 n2 = n * n;
+    float shade = n2.x * 0.6 + n2.z * 0.8 + n2.y * (n.y > 0.0 ? 1.0 : 0.5);
+    return worldPush.nightVision.xyz * shade;
+}
+
 // Brief local point light from a lightning strike. It is zero outside the short flash window, so the
 // extra visibility query only runs for a few frames per storm. The smooth radius falloff prevents an
 // inverse-square singularity while keeping terrain close to the strike dramatically illuminated.

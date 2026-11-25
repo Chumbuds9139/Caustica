@@ -23,6 +23,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.ModelBakery;
@@ -33,6 +34,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
@@ -123,6 +125,9 @@ public final class RtComposite {
     private static final int READY_MASK_OFFSET = (WORLD_PUSH_SIZE + 15) & ~15;
     // Covers a 257x257x48-section window (render distance 128) with room to spare.
     private static final int READY_MASK_CAPACITY = 512 * 1024;
+    // Night vision's fill irradiance per unit of linearised NIGHT_VISION_COLOR at full intensity. The default
+    // colour (0.6 grey, about 0.32 linear) comes out near 0.9: see nightVisionPush.
+    private static final float NIGHT_VISION_FILL_IRRADIANCE = 2.8f;
     // Vanilla's authored classic cloud shape (RtCloudCells): a bit-packed clouds.png occupancy bitmap
     // riding the same ring slot, addressed from WorldPush.cloudCellsAddr exactly like the ready mask
     // above is addressed from the push constants — no extra binding, one flush covers all three.
@@ -2164,6 +2169,8 @@ public final class RtComposite {
                     // ...and the cone that decides which pixels are even candidates for it, so the re-trace
                     // stays off the majority of the screen instead of off "pixels where the world is far".
                     RtViewmodel.INSTANCE.frameOverlayCull(),
+                    // WorldPush.nightVision: the fill light night vision (or Conduit Power underwater) adds.
+                    nightVisionPush(),
                     // Entry counts of the tables the hit shaders index with traversal-supplied values
                     // (WorldPush.hitTableLimits): terrain sections, LOD batches, entity geometries.
                     // WorldPush.skyCacheAddr: pass A fills it, pass B's cheap-tier misses read it.
@@ -3112,6 +3119,42 @@ public final class RtComposite {
      * would be light arriving from nothing. The raygen skips the whole NEE block — shadow ray included —
      * when the radiance is zero, so those dimensions also stop paying for a light they do not have.
      */
+    /**
+     * WorldPush.nightVision: xyz = the uniform fill irradiance the raygen adds at every shading vertex, w = the
+     * effect's intensity (0 = off). Intensity and colour follow vanilla's LightmapRenderStateExtractor exactly:
+     * Night Vision gives 1.0, pulsing over its last ten seconds via {@link GameRenderer#nightVisionScale};
+     * otherwise Conduit Power gives the player's water vision while underwater. Vanilla turns that into a floor
+     * of NIGHT_VISION_COLOR * intensity under the lightmap (lightmap.fsh: max(AmbientColor, NightVisionColor *
+     * NightVisionFactor)); ray tracing has no lightmap, so the raygen adds it as light instead.
+     *
+     * <p>{@link #NIGHT_VISION_FILL_IRRADIANCE} sets how bright that light is next to the scene's real lights. The
+     * default colour (0.6 grey) comes out at about 0.9 once linearised, a dim fill: enough to see a cave by, while the sun's
+     * irradiance (around 21 at noon) leaves daylight scenes practically unchanged.
+     */
+    private static Float4 nightVisionPush() {
+        Minecraft mc = Minecraft.getInstance();
+        var player = mc.player;
+        if (player == null) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+        float intensity;
+        if (player.hasEffect(MobEffects.NIGHT_VISION)) {
+            intensity = GameRenderer.nightVisionScale(player, partial);
+        } else {
+            float waterVision = player.getWaterVision();
+            intensity = waterVision > 0.0f && player.hasEffect(MobEffects.CONDUIT_POWER) ? waterVision : 0.0f;
+        }
+        if (!(intensity > 0.0f)) {
+            return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        var color = mc.gameRenderer.mainCamera().attributeProbe()
+                .getValue(EnvironmentAttributes.NIGHT_VISION_COLOR, partial);
+        float scale = NIGHT_VISION_FILL_IRRADIANCE * intensity;
+        return new Float4(srgbToLinear(color.x()) * scale, srgbToLinear(color.y()) * scale,
+                srgbToLinear(color.z()) * scale, intensity);
+    }
+
     private SkyPush skyPush(int dimension, WeatherState weather) {
         float sunX, sunY, sunZ, dayFactor, lx, ly, lz, rr, rg, rb, lightRadius;
         float moonX, moonY, moonZ, moonPhase, starAngle, starBrightness;
