@@ -36,8 +36,8 @@
 - **DLSS Frame Generation recovers from black generated frames by itself.** Every generated frame
   could come out black, flickering against the real ones until frame generation was switched off and
   on. In the one log that shows it, the only unusual event just before was a hit the hit guards had to
-  drop (`[HitGuard]` in the log). Frame generation now restarts after any such frame, the way switching
-  it off and on does. It also pauses while resources reload (F3+T) and starts over with a fresh DLSS-G
+  drop (`[HitGuard]` in the log), though a later one in the same session caused nothing. As a
+  precaution, frame generation now restarts after any such frame, the way switching it off and on does. It also pauses while resources reload (F3+T) and starts over with a fresh DLSS-G
   feature afterwards. Whatever the cause, it also compares a small sample of each generated frame with
   its real frame. If the generated frames stay black for about half a second, Caustica restarts frame
   generation. If they turn black again soon after, it creates a fresh feature. If that fails too, it
