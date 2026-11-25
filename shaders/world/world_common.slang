@@ -650,6 +650,13 @@ public static const uint PRIM_WEATHER_SNOW = 32u;
 // alpha cutout (discard texels below 0.1), so the armour/body shows where the texture has no streak.
 // Entity-only bit: terrain never sets it, and the weather bit (16) is unambiguous there.
 public static const uint PRIM_GLINT = 8u;
+// Prim.flags (entity prims): vanilla's overlay texture (OverlayTexture), which its entity shader mixes
+// into the surface colour before lighting. PRIM_OVERLAY_RED is the hurt/death flash (rows 0-7 of the
+// texture: red at alpha 178/255, so the surface keeps 70% of its colour); bits 8-11 hold the white-flash
+// level u of a swelling creeper (rows 8-15: white, the surface keeping 1 - u/15 * 0.75). Red wins, as it
+// does in vanilla, whose red rows ignore u. Entity-only: terrain's bit 7 and up are not these.
+public static const uint PRIM_OVERLAY_RED = 128u;
+public static const uint PRIM_OVERLAY_WHITE_SHIFT = 8u;
 // Vanilla's glint shader scrolls its sample UV diagonally over time via a per-frame TextureMat; the
 // hit shaders apply the same drift so the whole streak pattern moves (a static any-hit mask over a
 // scrolling colour would freeze the streak shapes). Texture widths per second, matched to the old

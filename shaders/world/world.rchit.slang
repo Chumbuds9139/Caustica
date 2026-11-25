@@ -474,6 +474,21 @@ Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float
 // whichever axis pair the normal is most aligned with (same idea as vanilla's
 // SheetedDecalTextureGenerator) and multiply-blends the matching destroy-stage crack texture in,
 // mirroring vanilla's crumbling blend (DST_COLOR*SRC_COLOR, doubled).
+// Vanilla's hurt/death red flash and creeper white flash (PRIM_OVERLAY_*): entity.fsh mixes the overlay
+// into the display-space colour, color = mix(overlay, color, overlayAlpha), before the lightmap. Mixed in
+// sRGB here too, so the flash reads as vanilla's tint, and before lighting, so the scene lights it.
+float3 applyEntityOverlay(float3 albedo, uint flags) {
+    uint white = (flags >> PRIM_OVERLAY_WHITE_SHIFT) & 15u;
+    bool red = (flags & PRIM_OVERLAY_RED) != 0u;
+    if (!red && white == 0u) {
+        return albedo;
+    }
+    float3 overlay = red ? float3(1.0, 0.0, 0.0) : float3(1.0, 1.0, 1.0);
+    // OverlayTexture's alpha bytes: 178 for the red rows, (int)((1 - u/15 * 0.75) * 255) for the white.
+    float keep = red ? 178.0 / 255.0 : floor((1.0 - float(white) / 15.0 * 0.75) * 255.0) / 255.0;
+    return srgbToLinear(lerp(overlay, linearToSrgb(saturate(albedo)), keep));
+}
+
 float3 applyBreaking(float3 albedo, uint rayCone, float3 rayOrigin, float3 rayDir, float hitT, float3 n) {
     ConstPtr<WorldPush> pcRef = ConstPtr<WorldPush>(pc.worldPushAddr);
     uint breakCount = pcRef[0].breakCount;
@@ -876,7 +891,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             euvCoord = entityParallax.uv;
         }
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(safeTextureSlot(texSlot, pc.debugViewPacked))].SampleLevel(euvCoord, entityLod);
-        float3 baseAlbedo = srgbToLinear(entityTexel.rgb) * pr.tint.rgb;
+        float3 baseAlbedo = applyEntityOverlay(srgbToLinear(entityTexel.rgb) * pr.tint.rgb, pr.flags);
         float3 albedo = material == MATERIAL_DIELECTRIC
                 ? lerp(float3(1.0, 1.0, 1.0), baseAlbedo, entityTexel.a) : baseAlbedo;
         Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, n,

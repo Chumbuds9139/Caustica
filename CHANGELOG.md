@@ -18,6 +18,9 @@
   Each light block now adds a small invisible light at its centre, as bright and as warm as the same
   block held in hand, scaled by its level. It needs emitter sampling on (the default), and a light block
   in a 16×16×16 section that contains nothing else does not light yet.
+- **Hurt mobs flash red again**, and a creeper about to explode flashes white. The colour is mixed into
+  the mob's surface the way vanilla mixes it, before lighting, so the flash is lit by the scene like the
+  rest of the mob. Armour does not flash, as in vanilla.
 
 ## 0.4.2 — 2026-11-22
 

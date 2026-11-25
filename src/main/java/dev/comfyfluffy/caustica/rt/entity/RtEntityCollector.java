@@ -292,7 +292,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // Reset the per-submission tags (portal + weather/glint): they are set only by the paths that own
         // them, so an ordinary model after a tagged layer in the same capture cannot inherit them.
         capture.currentPortalFlags = 0;
-        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : 0;
+        capture.currentPrimFlags = glint ? RtEntityCapture.PRIM_FLAG_GLINT : overlayFlags(renderType, overlayCoords);
         // The armour layer's texture (submitted immediately before this) gates the glint to the armour
         // surface — see lastArmorTexSlot. Non-glint submissions carry no armour context.
         capture.currentGlintArmorSlot = glint ? lastArmorTexSlot : 0;
@@ -584,6 +584,32 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         } else {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
         }
+    }
+
+    /**
+     * Prim flags for vanilla's overlay texture (OverlayTexture): the red flash of a hurt or dying mob and
+     * the white flash of a swelling creeper. Vanilla's entity shader mixes the overlay into the surface
+     * colour before lighting; world.rchit applies the same mix to the albedo, so the flash is lit by the
+     * scene like the rest of the mob. Render types whose pipeline defines NO_OVERLAY (armour) ignore it,
+     * as vanilla does; NO_OVERLAY coordinates encode no flash at all.
+     */
+    private static int overlayFlags(RenderType renderType, int overlayCoords) {
+        int u = overlayCoords & 0xFFFF;
+        int v = overlayCoords >>> 16;
+        boolean red = v < 8; // OverlayTexture rows 0-7 are the red flash, rows 8-15 the white ramp
+        if (!red && u == 0) {
+            return 0;
+        }
+        if (renderType != null) {
+            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+            RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+            if (pipeline.getShaderDefines().flags().contains("NO_OVERLAY")
+                    || pipeline.getShaderDefines().values().containsKey("NO_OVERLAY")) {
+                return 0;
+            }
+        }
+        return red ? RtEntityCapture.PRIM_FLAG_OVERLAY_RED
+                : Math.min(u, 15) << RtEntityCapture.PRIM_OVERLAY_WHITE_SHIFT;
     }
 
     /** Whether a render type is alpha-blended (translucent) — its pipeline's color target has a blend

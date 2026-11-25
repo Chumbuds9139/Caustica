@@ -229,6 +229,14 @@ public float3 sampleGGXVNDF(float3 n, float3 ve, float alpha, inout uint s) {
     return sampleGGXVNDF(n, ve, alpha, rndf(s), rndf(s));
 }
 
+public float3 linearToSrgb(float3 c) {
+    float3 v = max(c, float3(0.0, 0.0, 0.0));
+    float3 lo = v * 12.92;
+    float3 hi = 1.055 * pow(v, float3(1.0 / 2.4, 1.0 / 2.4, 1.0 / 2.4)) - 0.055;
+    float3 isHi = step(float3(0.0031308, 0.0031308, 0.0031308), v);
+    return lerp(lo, hi, isHi);
+}
+
 public float3 srgbToLinear(float3 c) {
     float3 lo = c / 12.92;
     float3 hi = pow((c + 0.055) / 1.055, float3(2.4, 2.4, 2.4));

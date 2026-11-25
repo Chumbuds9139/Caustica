@@ -69,6 +69,10 @@ public final class RtEntityCapture implements VertexConsumer {
     // so world.rchit shades them with an animated self-lit branch). Particles share the flags lane but
     // never carry portal tags, so these bits are unambiguous there.
     int currentPrimFlags;
+    /** Mirrors world_common.slang's PRIM_OVERLAY_RED: vanilla's hurt/death red flash. */
+    static final int PRIM_FLAG_OVERLAY_RED = 128;
+    /** Mirrors world_common.slang's PRIM_OVERLAY_WHITE_SHIFT: the white-flash level (0..15) lives here. */
+    static final int PRIM_OVERLAY_WHITE_SHIFT = 8;
     /** Mirrors world_common.slang's PRIM_WEATHER. */
     static final int PRIM_FLAG_WEATHER = 16;
     /**
