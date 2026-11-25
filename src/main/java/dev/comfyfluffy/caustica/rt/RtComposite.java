@@ -736,6 +736,7 @@ public final class RtComposite {
             return;
         }
         hitFaultFrames++;
+        fgDlssHitFaultCut = true;
         int value = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 4);
         int limit = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 8);
         int tag = MemoryUtil.memGetInt(mappedPush + HIT_FAULT_OFFSET + 12);
@@ -879,6 +880,11 @@ public final class RtComposite {
     private long fgDlssDuplicatingLastFrame = -1;
     // A loading overlay (resource reload: F3+T, a pack change) was up; start over with a fresh feature.
     private boolean fgDlssReloadCut;
+    // A frame had a hit dropped or refused by the hit guards (see reportHitFault): restart frame
+    // generation as a precaution, at most once per FG_HIT_FAULT_RESTART_GAP_NANOS.
+    private boolean fgDlssHitFaultCut;
+    private long fgDlssHitFaultRestartNanos;
+    private static final long FG_HIT_FAULT_RESTART_GAP_NANOS = 5_000_000_000L;
     // Caustica native frame generation: the motion-vector interpolation pipeline plus the previous
     // presented frame it interpolates from. fgPrevFrame holds last tick's final image (same
     // format/size as fgBackbufferCopy / the HDR backbuffer); the current frame is copied into it
@@ -3983,7 +3989,7 @@ public final class RtComposite {
                 if (fgReset) {
                     fgWatchdog.invalidate();
                 }
-                fgDlssHeldThisTick = applyFgWatchdog(judgeFgProbe());
+                fgDlssHeldThisTick = restartDlssFgAfterHitFault() || applyFgWatchdog(judgeFgProbe());
             }
             if (fgDlssHeldThisTick) {
                 return null;
@@ -4371,10 +4377,10 @@ public final class RtComposite {
      * decided before the cut bookkeeping so a skipped tick leaves a gap the way a menu does.
      *
      * <p>While a loading overlay is up (a resource reload: F3+T, a pack change) the RT pipeline and the
-     * materials are rebuilt under frame generation. In one log of the black generated frames an F3+T
-     * comes shortly before frame generation was switched off and on, so the reload is a suspect (not a
-     * confirmed cause). Nothing is evaluated under the overlay, and the first evaluate after it gets a
-     * fresh feature, which costs nothing when the reload was harmless.
+     * materials are rebuilt under frame generation. It is not what started the black generated frames
+     * (the player pressed F3+T only after seeing them, and it did not cure them, since a reload did not
+     * reset DLSS-G then), so this is a precaution: nothing is evaluated under the overlay, and the first
+     * evaluate after it gets a fresh feature, which is also one more chance to clear a stuck history.
      */
     private boolean holdDlssFgBeforeCuts() {
         Minecraft mc = Minecraft.getInstance();
@@ -4398,6 +4404,31 @@ public final class RtComposite {
             }
         }
         return false;
+    }
+
+    /**
+     * The hit guards dropped or refused a hit in a recent frame. In the one log that brackets the black
+     * generated frames, a dropped hit (a hit object that changed across the thread reorder) is the only
+     * unusual event in the seconds before the player noticed them, and only switching frame generation
+     * off and on cured them. Such frames are rare (a few per session at most), so restarting frame
+     * generation the same way after each one costs a quarter-second of plain frames and nothing else.
+     */
+    private boolean restartDlssFgAfterHitFault() {
+        if (!fgDlssHitFaultCut) {
+            return false;
+        }
+        fgDlssHitFaultCut = false;
+        long now = System.nanoTime();
+        if (fgDlssHitFaultRestartNanos != 0L && now - fgDlssHitFaultRestartNanos < FG_HIT_FAULT_RESTART_GAP_NANOS) {
+            return false;
+        }
+        fgDlssHitFaultRestartNanos = now;
+        RtFramePresenter.INSTANCE.suspendFor(FG_RESTART_SUSPEND_PRESENTS);
+        fgReset = true;
+        fgWatchdog.invalidate();
+        CausticaMod.LOGGER.info("DLSS-FG: the hit guards dropped a hit in a recent frame; restarting frame "
+                + "generation as a precaution, the way switching it off and on does");
+        return true;
     }
 
     /** Act on the watchdog's verdict; true when this tick's evaluate is skipped because of it. */

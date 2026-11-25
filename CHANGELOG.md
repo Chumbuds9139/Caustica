@@ -35,11 +35,13 @@
   Distant Horizons/Voxy terrain is not changed yet.
 - **DLSS Frame Generation recovers from black generated frames by itself.** Every generated frame
   could come out black, flickering against the real ones until frame generation was switched off and
-  on. A resource reload (F3+T) is one possible trigger, so frame generation now pauses while resources
-  reload and starts over with a fresh DLSS-G feature afterwards. Whatever the cause, it also compares a
-  small sample of each generated frame with its real frame. If the generated frames stay black for about
-  half a second, Caustica restarts frame generation the way switching it off and on does. If they turn black again soon after, it creates a fresh feature. If that fails too, it shows
-  each real frame twice until frame generation restarts. The log records every step, and the
+  on. In the one log that shows it, the only unusual event just before was a hit the hit guards had to
+  drop (`[HitGuard]` in the log). Frame generation now restarts after any such frame, the way switching
+  it off and on does. It also pauses while resources reload (F3+T) and starts over with a fresh DLSS-G
+  feature afterwards. Whatever the cause, it also compares a small sample of each generated frame with
+  its real frame. If the generated frames stay black for about half a second, Caustica restarts frame
+  generation. If they turn black again soon after, it creates a fresh feature. If that fails too, it
+  shows each real frame twice until frame generation restarts. The log records every step, and the
   `[FG present-rate]` line now includes the sampled brightness. The DLSS-FG present-mode line now shows
   the mode the swapchain really uses (FIFO) rather than the one Minecraft asked for.
 
