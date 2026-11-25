@@ -49,6 +49,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageBlit;
@@ -850,6 +851,34 @@ public final class RtComposite {
     private double prevDlssFgCamZ;
     private boolean dlssFgCamValid;
     private long fgDlssLastUseFrame = -1;
+    // DLSS-G black-frame watchdog (see RtFgWatchdog). Each evaluation downsamples its generated frame and
+    // the real frame into two tiny owned RGBA8 images and copies them into one slot of a host-visible
+    // ring; a slot is judged when the ring comes back round to it, FG_PROBE_SLOTS evaluations later, long
+    // after the GPU finished writing it.
+    private static final int FG_PROBE_W = 8;
+    private static final int FG_PROBE_H = 6;
+    private static final int FG_PROBE_TEXELS = FG_PROBE_W * FG_PROBE_H;
+    private static final int FG_PROBE_SLOTS = 8;
+    private static final int FG_PROBE_SLOT_BYTES = FG_PROBE_TEXELS * 4 * 2;
+    // Presents the presenter sits out on the watchdog's first rung: about as long as switching frame
+    // generation off and on by hand leaves it off.
+    private static final int FG_RESTART_SUSPEND_PRESENTS = 15;
+    private final RtFgWatchdog fgWatchdog = new RtFgWatchdog();
+    private RtImage fgProbeGen;
+    private RtImage fgProbeReal;
+    private RtBuffer fgProbeBuffer;
+    private final int[] fgProbeSlotEpoch = new int[FG_PROBE_SLOTS];
+    private final boolean[] fgProbeSlotValid = new boolean[FG_PROBE_SLOTS];
+    private int fgProbeCursor;
+    private boolean fgProbeFailed;
+    // This tick's DLSS-G evaluate is skipped and every generated frame duplicates the real one.
+    private boolean fgDlssHeldThisTick;
+    // The watchdog's last rung: duplicates until frame generation pauses (switched off and on, a menu,
+    // a loading screen) or the world changes.
+    private boolean fgDlssDuplicating;
+    private long fgDlssDuplicatingLastFrame = -1;
+    // A loading overlay (resource reload: F3+T, a pack change) was up; start over with a fresh feature.
+    private boolean fgDlssReloadCut;
     // Caustica native frame generation: the motion-vector interpolation pipeline plus the previous
     // presented frame it interpolates from. fgPrevFrame holds last tick's final image (same
     // format/size as fgBackbufferCopy / the HDR backbuffer); the current frame is copied into it
@@ -3434,6 +3463,7 @@ public final class RtComposite {
         fgInterpW = -1;
         fgInterpH = -1;
         fgInterpFormat = Integer.MIN_VALUE;
+        destroyFgProbe();
         if (fgBackbufferCopy != null) {
             fgBackbufferCopy.destroy();
             fgBackbufferCopy = null;
@@ -3922,7 +3952,7 @@ public final class RtComposite {
     }
 
     public RtImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
-            int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
+            int backbufferW, int backbufferH, int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
         if (failed || gDepth == null || gMotion == null || !frameCaptured) {
             return null;
         }
@@ -3938,10 +3968,35 @@ public final class RtComposite {
             return fgInterpolateFsr(ctx, enc, backbufferImage, swapW, swapH, index, count, hdrBackbuffer, fmt);
         }
         if (index == 1) {
-            noteDlssFgCuts();
+            fgDlssHeldThisTick = holdDlssFgBeforeCuts();
+            if (!fgDlssHeldThisTick) {
+                noteDlssFgCuts();
+                if (fgDlssReloadCut) {
+                    fgDlssReloadCut = false;
+                    if (RtDlssFg.INSTANCE.isReady()) {
+                        RtDlssFg.INSTANCE.releaseFeature();
+                        CausticaMod.LOGGER.info("DLSS-FG: resources were reloaded; frame generation starts over "
+                                + "with a fresh feature");
+                    }
+                    fgReset = true;
+                }
+                if (fgReset) {
+                    fgWatchdog.invalidate();
+                }
+                fgDlssHeldThisTick = applyFgWatchdog(judgeFgProbe());
+            }
+            if (fgDlssHeldThisTick) {
+                return null;
+            }
+            boolean creating = !RtDlssFg.INSTANCE.featureReadyFor(swapW, swapH, renderW, renderH, fmt);
             if (!ensureFgFeature(ctx, swapW, swapH, renderW, renderH, fmt)) {
                 throw new IllegalStateException("DLSSG feature not ready (ensureFgFeature failed)");
             }
+            if (creating) {
+                fgWatchdog.invalidate();
+                logDlssFgInputSizes(backbufferW, backbufferH, swapW, swapH, hdrBackbuffer);
+            }
+            fgWatchdog.onEvaluation();
             ensureFgInterp(ctx, count, swapW, swapH, fmt);
             // clipToPrevClip = prevVP * inverse(curVP); prevClipToClip = curVP * inverse(prevVP). Both from
             // the (rotation-only, camera-relative) MV view-projections, so jitter-free.
@@ -3949,12 +4004,23 @@ public final class RtComposite {
             fgClipToPrev.set(mvPrevProjView).mul(fgMatTmp);
             fgMatTmp.set(mvPrevProjView).invert();
             fgPrevToClip.set(mvCurProjView).mul(fgMatTmp);
+            // A singular view-projection (one odd frame) would hand DLSS-G non-finite matrices, the kind
+            // of bad input its history can stay stuck on. Feed identity and start its history over.
+            if (!fgClipToPrev.isFinite() || !fgPrevToClip.isFinite()) {
+                fgClipToPrev.identity();
+                fgPrevToClip.identity();
+                fgReset = true;
+                fgWatchdog.invalidate();
+            }
+        } else if (fgDlssHeldThisTick) {
+            return null;
         }
         if (index < 1 || index > fgInterp.length || fgInterp[index - 1] == null) {
             throw new IllegalStateException(
                     "fgInterpolate index " + index + " out of range for fgInterp[" + fgInterp.length + "]");
         }
         RtImage out = fgInterp[index - 1];
+        boolean resetThisEvaluate = fgReset;
         // Only feed hudless/ui when they exist AND match this frame's backbuffer size — a stale or mismatched
         // size (e.g. mid-resize) is worse than skipping, so fall back to 0/0/0 (DLSSG just does without).
         RtImage hudlessSrc = hdrBackbuffer ? fgHdrHudlessImage : fgHudlessImage;
@@ -3983,6 +4049,12 @@ public final class RtComposite {
                 true /* depthInverted (reversed-Z) */, hdrBackbuffer /* colorBuffersHDR */,
                 true /* cameraMotionIncluded (in mvecs) */, fgReset,
                 fgClipToPrev, fgPrevToClip);
+        if (index == 1) {
+            // The evaluate that restarts the history is not judged: what DLSS-G makes of its first frame
+            // says nothing about whether the history is stuck.
+            recordFgProbe(ctx, cmd, out, backbufferImage, backbufferW, backbufferH, hdrBackbuffer,
+                    ok && !resetThisEvaluate);
+        }
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(fg interpolate) failed");
         }
@@ -4274,6 +4346,7 @@ public final class RtComposite {
             fgDlssLevel = new java.lang.ref.WeakReference<>(level);
             dlssFgCamValid = false;
             fgReset = true;
+            fgWatchdog.clearEscalation();
         }
         if (fgDlssLastUseFrame >= 0 && frameCounter - fgDlssLastUseFrame > 2) {
             fgReset = true;
@@ -4291,6 +4364,212 @@ public final class RtComposite {
         prevDlssFgCamY = camY;
         prevDlssFgCamZ = camZ;
         dlssFgCamValid = true;
+    }
+
+    /**
+     * Whether this tick skips the DLSS-G evaluate (every generated frame then duplicates the real one),
+     * decided before the cut bookkeeping so a skipped tick leaves a gap the way a menu does.
+     *
+     * <p>While a loading overlay is up (a resource reload: F3+T, a pack change) the RT pipeline and the
+     * materials are rebuilt under frame generation, and one log shows the black generated frames starting
+     * right after an F3+T and lasting until frame generation was switched off and on. So nothing is
+     * evaluated under the overlay, and the first evaluate after it gets a fresh feature.
+     */
+    private boolean holdDlssFgBeforeCuts() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.gui.overlay() != null) {
+            fgDlssReloadCut = true;
+            return true;
+        }
+        if (fgDlssDuplicating) {
+            boolean paused = fgDlssDuplicatingLastFrame >= 0 && frameCounter - fgDlssDuplicatingLastFrame > 2;
+            if (paused || mc.level != fgDlssLevel.get()) {
+                // Frame generation stopped for a while (switched off and on, a menu, a loading screen) or
+                // the world changed: give DLSS-G another go with a clean history and a fresh ladder.
+                fgDlssDuplicating = false;
+                fgWatchdog.clearEscalation();
+                fgReset = true;
+                CausticaMod.LOGGER.info("DLSS-FG: frame generation restarted; generated frames are "
+                        + "interpolated again");
+            } else {
+                fgDlssDuplicatingLastFrame = frameCounter;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Act on the watchdog's verdict; true when this tick's evaluate is skipped because of it. */
+    private boolean applyFgWatchdog(RtFgWatchdog.Action action) {
+        switch (action) {
+            case RESTART -> {
+                // What switching frame generation off and on does: no generated presents for a moment
+                // (the gap rule also raises the reset when it comes back), then one evaluate with reset.
+                RtFramePresenter.INSTANCE.suspendFor(FG_RESTART_SUSPEND_PRESENTS);
+                fgReset = true;
+                CausticaMod.LOGGER.warn("DLSS-FG: generated frames came out black ({} in a row, generated luma "
+                        + "{} vs real {}); restarting frame generation the way switching it off and on does",
+                        RtFgWatchdog.BLACK_STREAK, fmtLuma(fgWatchdog.lastGenLuma()),
+                        fmtLuma(fgWatchdog.lastRealLuma()));
+                return true;
+            }
+            case FRESH_FEATURE -> {
+                RtDlssFg.INSTANCE.releaseFeature();
+                RtFramePresenter.INSTANCE.suspendFor(FG_RESTART_SUSPEND_PRESENTS);
+                fgReset = true;
+                CausticaMod.LOGGER.warn("DLSS-FG: generated frames are black again soon after a restart "
+                        + "(generated luma {} vs real {}); starting over with a fresh feature",
+                        fmtLuma(fgWatchdog.lastGenLuma()), fmtLuma(fgWatchdog.lastRealLuma()));
+                return true;
+            }
+            case DUPLICATE -> {
+                fgDlssDuplicating = true;
+                fgDlssDuplicatingLastFrame = frameCounter;
+                CausticaMod.LOGGER.warn("DLSS-FG: generated frames are still black after a fresh feature "
+                        + "(generated luma {} vs real {}); showing each real frame twice instead until frame "
+                        + "generation restarts (switch it off and on, or change worlds)",
+                        fmtLuma(fgWatchdog.lastGenLuma()), fmtLuma(fgWatchdog.lastRealLuma()));
+                return true;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    /** Read back and judge the probe slot this evaluate is about to reuse. */
+    private RtFgWatchdog.Action judgeFgProbe() {
+        int slot = fgProbeCursor;
+        if (fgProbeBuffer == null || !fgProbeSlotValid[slot]) {
+            return RtFgWatchdog.Action.NONE;
+        }
+        fgProbeSlotValid[slot] = false;
+        long base = (long) slot * FG_PROBE_SLOT_BYTES;
+        fgProbeBuffer.invalidate(base, FG_PROBE_SLOT_BYTES);
+        float gen = meanLumaRgba8(fgProbeBuffer.mapped + base);
+        float real = meanLumaRgba8(fgProbeBuffer.mapped + base + FG_PROBE_TEXELS * 4L);
+        return fgWatchdog.judge(fgProbeSlotEpoch[slot], gen, real);
+    }
+
+    private static float meanLumaRgba8(long address) {
+        double sum = 0.0;
+        for (int i = 0; i < FG_PROBE_TEXELS; i++) {
+            long p = address + i * 4L;
+            sum += RtFgWatchdog.luma(MemoryUtil.memGetByte(p) & 0xFF, MemoryUtil.memGetByte(p + 1) & 0xFF,
+                    MemoryUtil.memGetByte(p + 2) & 0xFF);
+        }
+        return (float) (sum / FG_PROBE_TEXELS);
+    }
+
+    /**
+     * Record this evaluate's probe into the slot at the cursor, in the evaluate's own command buffer:
+     * linear blits of the generated frame and of the real frame into tiny RGBA8 images (which also takes
+     * care of the SDR/HDR format and size differences), then a copy of both into the host-visible ring.
+     * A failure here only switches the probe off; it never touches frame generation itself.
+     */
+    private void recordFgProbe(RtContext ctx, VkCommandBuffer cmd, RtImage out, long backbufferImage,
+            int backbufferW, int backbufferH, boolean hdrBackbuffer, boolean judgeable) {
+        int slot = fgProbeCursor;
+        fgProbeCursor = (fgProbeCursor + 1) % FG_PROBE_SLOTS;
+        fgProbeSlotValid[slot] = false;
+        if (!judgeable || fgProbeFailed || backbufferImage == 0L || backbufferW <= 0 || backbufferH <= 0) {
+            return;
+        }
+        try {
+            if (fgProbeBuffer == null) {
+                fgProbeGen = ctx.createStorageImage(FG_PROBE_W, FG_PROBE_H, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                        "FG probe (generated)");
+                fgProbeReal = ctx.createStorageImage(FG_PROBE_W, FG_PROBE_H, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                        "FG probe (real)");
+                fgProbeBuffer = ctx.createBuffer((long) FG_PROBE_SLOTS * FG_PROBE_SLOT_BYTES,
+                        VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, "FG probe readback");
+            }
+        } catch (RuntimeException e) {
+            fgProbeFailed = true;
+            destroyFgProbe();
+            CausticaMod.LOGGER.warn("DLSS-FG: black-frame probe unavailable; frame generation runs without it", e);
+            return;
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            // DLSS-G's write of `out` (and the real frame's last write) visible to the blits.
+            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            blitFgProbe(cmd, stack, out.image, VK10.VK_IMAGE_LAYOUT_GENERAL, out.width, out.height, fgProbeGen.image);
+            // The SDR real frame is Minecraft's main target, still in the TRANSFER_SRC layout its own
+            // present blit left it in (the same assumption the FSR backbuffer copy makes); the HDR one is
+            // our own GENERAL image.
+            blitFgProbe(cmd, stack, backbufferImage,
+                    hdrBackbuffer ? VK10.VK_IMAGE_LAYOUT_GENERAL : VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    backbufferW, backbufferH, fgProbeReal.image);
+            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            long base = (long) slot * FG_PROBE_SLOT_BYTES;
+            copyFgProbe(cmd, stack, fgProbeGen.image, base);
+            copyFgProbe(cmd, stack, fgProbeReal.image, base + FG_PROBE_TEXELS * 4L);
+            VkMemoryBarrier2.Buffer toHost = VkMemoryBarrier2.calloc(1, stack).sType$Default();
+            toHost.get(0).srcStageMask(VK10.VK_PIPELINE_STAGE_TRANSFER_BIT)
+                    .srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
+                    .dstStageMask(VK10.VK_PIPELINE_STAGE_HOST_BIT)
+                    .dstAccessMask(VK10.VK_ACCESS_HOST_READ_BIT);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
+                    VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(toHost));
+        }
+        fgProbeSlotEpoch[slot] = fgWatchdog.epoch();
+        fgProbeSlotValid[slot] = true;
+    }
+
+    private static void blitFgProbe(VkCommandBuffer cmd, MemoryStack stack, long src, int srcLayout,
+            int srcW, int srcH, long dst) {
+        VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
+        region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+        region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
+        region.get(0).srcOffsets(1).set(srcW, srcH, 1); // srcOffsets[0] zeroed by calloc
+        region.get(0).dstOffsets(1).set(FG_PROBE_W, FG_PROBE_H, 1);
+        VK10.vkCmdBlitImage(cmd, src, srcLayout, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region, VK10.VK_FILTER_LINEAR);
+    }
+
+    private void copyFgProbe(VkCommandBuffer cmd, MemoryStack stack, long image, long offset) {
+        VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+        region.get(0).bufferOffset(offset);
+        region.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                .baseArrayLayer(0).layerCount(1);
+        region.get(0).imageExtent().set(FG_PROBE_W, FG_PROBE_H, 1);
+        VK10.vkCmdCopyImageToBuffer(cmd, image, VK10.VK_IMAGE_LAYOUT_GENERAL, fgProbeBuffer.handle, region);
+    }
+
+    private void destroyFgProbe() {
+        if (fgProbeGen != null) {
+            fgProbeGen.destroy();
+            fgProbeGen = null;
+        }
+        if (fgProbeReal != null) {
+            fgProbeReal.destroy();
+            fgProbeReal = null;
+        }
+        if (fgProbeBuffer != null) {
+            fgProbeBuffer.destroy();
+            fgProbeBuffer = null;
+        }
+        java.util.Arrays.fill(fgProbeSlotValid, false);
+        fgProbeCursor = 0;
+    }
+
+    /** Once per feature: which of DLSS-G's optional inputs match the swapchain size it is told about. */
+    private void logDlssFgInputSizes(int backbufferW, int backbufferH, int swapW, int swapH, boolean hdr) {
+        RtImage hudless = hdr ? fgHdrHudlessImage : fgHudlessImage;
+        CausticaMod.LOGGER.info("DLSS-FG inputs: swapchain {}x{}, real frame {}x{}, hudless {}, UI overlay {}x{}",
+                swapW, swapH, backbufferW, backbufferH,
+                hudless == null ? "none yet" : hudless.width + "x" + hudless.height,
+                RtUiOverlay.overlayWidth(), RtUiOverlay.overlayHeight());
+    }
+
+    private static String fmtLuma(float luma) {
+        return Float.isNaN(luma) ? "n/a" : String.format(java.util.Locale.ROOT, "%.3f", luma);
+    }
+
+    /** For the present-rate log line: the latest judged generated/real brightness pair and the ladder state. */
+    public String fgProbeSummary() {
+        return "probeGenLuma=" + fmtLuma(fgWatchdog.lastGenLuma()) + " probeRealLuma="
+                + fmtLuma(fgWatchdog.lastRealLuma()) + " watchdogRung=" + fgWatchdog.rung()
+                + (fgDlssDuplicating ? " duplicating" : "");
     }
 
     private boolean ensureFgFeature(RtContext ctx, int w, int h, int rw, int rh, int fmt) {

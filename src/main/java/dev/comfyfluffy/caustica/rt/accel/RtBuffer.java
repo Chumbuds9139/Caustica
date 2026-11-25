@@ -90,6 +90,18 @@ public final class RtBuffer {
         flush(0L, size);
     }
 
+    /** Make a device-written byte range visible to host reads (no-op on coherent memory). */
+    public void invalidate(long offset, long length) {
+        if (!hostVisible) {
+            throw new IllegalStateException("Cannot invalidate a non-host-visible buffer");
+        }
+        if (offset < 0L || length < 0L || offset > size || length > size - offset) {
+            throw new IndexOutOfBoundsException("Invalidate range " + offset + ".." + (offset + length)
+                    + " exceeds buffer size " + size);
+        }
+        Vma.vmaInvalidateAllocation(vma, allocation, offset, length);
+    }
+
     /** Flush a written byte range; VMA handles non-coherent atom alignment internally. */
     public void flush(long offset, long length) {
         if (!hostVisible) {

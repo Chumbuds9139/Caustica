@@ -58,6 +58,9 @@ public final class RtFramePresenter {
     private long[] acquireSemaphores = new long[0];
     private int acquireCursor;
     private boolean failed;
+    // Presents left to sit out (counted down at each present): frame generation is restarted the way
+    // switching it off and on does, without touching the setting. See RtFgWatchdog.
+    private int suspendedPresents;
 
     // Frames acquired + recorded this frame, awaiting present at present() HEAD (after MC's submit flush).
     private int[] pendingImageIndex = new int[0];
@@ -77,6 +80,11 @@ public final class RtFramePresenter {
     private RtFramePresenter() {
     }
 
+    /** Stop generated presents for the next {@code presents} real frames, as if FG were switched off. */
+    public void suspendFor(int presents) {
+        suspendedPresents = Math.max(suspendedPresents, presents);
+    }
+
     /**
      * Whether FG extra-present should run this frame (enabled, available, in a world). Backend
      * selection mirrors {@code RtComposite.fgInterpolate}: the Caustica native engine first (FSR 3
@@ -84,7 +92,7 @@ public final class RtFramePresenter {
      * fallback (needs the bundled runtime); then DLSS-G on capable hardware.
      */
     public boolean isActive() {
-        if (failed || Minecraft.getInstance().level == null) {
+        if (failed || Minecraft.getInstance().level == null || suspendedPresents > 0) {
             return false;
         }
         if (dev.comfyfluffy.caustica.rt.pipeline.RtNativeFrameGen.enabled()) {
@@ -134,7 +142,7 @@ public final class RtFramePresenter {
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
                 RtImage interp = RtComposite.INSTANCE.fgInterpolate(enc, backbufferView, srcImage,
-                        swapW, swapH, i + 1, generatedCount, hdrBackbuffer);
+                        srcW, srcH, swapW, swapH, i + 1, generatedCount, hdrBackbuffer);
                 if (interp != null) {
                     interpOkInWindow++;
                 } else {
@@ -184,6 +192,9 @@ public final class RtFramePresenter {
      * frame, giving generated-then-real order).
      */
     public void flushPendingPresents(long swapchain, VkQueue presentQueue) {
+        if (suspendedPresents > 0) {
+            suspendedPresents--;
+        }
         int presentedThisFrame = 0;
         if (!failed && pendingCount != 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -234,11 +245,11 @@ public final class RtFramePresenter {
         double totalFps = (realFramesInWindow + generatedFramesInWindow) / seconds;
         CausticaMod.LOGGER.info(
                 "[FG present-rate] real={} gen={} realFps={} totalPresentFps={} configuredMultiFrameCount={} "
-                        + "interpOk={} interpFallbackDuplicate={} acquireSkipped={}",
+                        + "interpOk={} interpFallbackDuplicate={} acquireSkipped={} {}",
                 realFramesInWindow, generatedFramesInWindow,
                 String.format("%.1f", realFps), String.format("%.1f", totalFps),
                 RtComposite.fgGeneratedCount(), interpOkInWindow, interpFallbackInWindow,
-                acquireSkippedInWindow);
+                acquireSkippedInWindow, RtComposite.INSTANCE.fgProbeSummary());
         logWindowStartNs = now;
         realFramesInWindow = 0;
         generatedFramesInWindow = 0;

@@ -211,6 +211,10 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Unique
 	private static final int caustica$FG_SWAPCHAIN_IMAGES = 8;
 
+	/** The present mode the swapchain was actually created with (after the FIFO forcing), -1 = unknown. */
+	@Unique
+	private int caustica$effectivePresentMode = -1;
+
 	@Unique
 	private void caustica$configureSwapchainForFg(VkSwapchainCreateInfoKHR pCreateInfo) {
 		// Applied UNCONDITIONALLY (not gated on the FG toggle): FG is flipped on/off at runtime from
@@ -230,6 +234,7 @@ public abstract class VulkanGpuSurfaceMixin {
 					+ "paced on vblanks instead of overwriting each other", pCreateInfo.presentMode());
 			pCreateInfo.presentMode(KHRSurface.VK_PRESENT_MODE_FIFO_KHR);
 		}
+		this.caustica$effectivePresentMode = pCreateInfo.presentMode();
 		// Deepen the image pool: each generated frame needs its own swapchain image on top of the
 		// real frame's and the one the display scans out — vanilla's ~3-image pool hard-caps FG
 		// at ~2x no matter the multiplier.
@@ -270,10 +275,24 @@ public abstract class VulkanGpuSurfaceMixin {
 		// only mode that guarantees every queued present gets its own vblank. Log once per (re)configure so
 		// this is checkable without guessing at the in-game V-Sync setting.
 		if (dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.enabled()) {
-			CausticaMod.LOGGER.info("DLSS-FG: swapchain present mode = {} (FIFO required for generated frames "
-					+ "to actually display; MAILBOX/IMMEDIATE will silently drop them — enable V-Sync if not FIFO)",
-					config.presentMode());
+			// config.presentMode() is what Minecraft asked for; the FIFO forcing above edits the create info, so
+			// report the mode the swapchain really got next to it.
+			CausticaMod.LOGGER.info("DLSS-FG: swapchain present mode = {} (Minecraft asked for {}; FIFO required "
+					+ "for generated frames to actually display; MAILBOX/IMMEDIATE will silently drop them)",
+					caustica$presentModeName(this.caustica$effectivePresentMode), config.presentMode());
 		}
+	}
+
+	@Unique
+	private static String caustica$presentModeName(int mode) {
+		return switch (mode) {
+			case KHRSurface.VK_PRESENT_MODE_IMMEDIATE_KHR -> "IMMEDIATE";
+			case KHRSurface.VK_PRESENT_MODE_MAILBOX_KHR -> "MAILBOX";
+			case KHRSurface.VK_PRESENT_MODE_FIFO_KHR -> "FIFO";
+			case KHRSurface.VK_PRESENT_MODE_FIFO_RELAXED_KHR -> "FIFO_RELAXED";
+			case -1 -> "unknown";
+			default -> Integer.toString(mode);
+		};
 	}
 
 	/**
