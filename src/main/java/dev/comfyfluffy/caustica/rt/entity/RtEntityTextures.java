@@ -85,6 +85,8 @@ public final class RtEntityTextures {
     // every frame. Cleared with the rest on reset.
     private final Map<RenderType, Boolean> unresolved = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
+    // GlintSampler texture of 26.x's combined base+glint render types (null for every other render type).
+    private final Map<RenderType, Identifier> glintLocationCache = new WeakHashMap<>();
     // Image-view handle → bindless slot, plus the descriptor writes those allocations still owe. The slot
     // identifies a *texture*, not a RenderType, so many render types that differ only by a texture
     // transform we don't replicate (the swirl's scroll) collapse to ONE slot — instead of leaking a slot
@@ -107,6 +109,7 @@ public final class RtEntityTextures {
     private boolean loggedMaterialFailure;
     private boolean loggedRetirement;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons); see whiteSlot().
+    private static final String GLINT_SAMPLER = "GlintSampler";
     private static final Identifier WHITE_LOCATION = Identifier.fromNamespaceAndPath("caustica", "rt_white");
     private boolean whiteRegistered;
 
@@ -324,6 +327,7 @@ public final class RtEntityTextures {
         viewCache.clear();
         unresolved.clear();
         locationCache.clear();
+        glintLocationCache.clear();
         slots.reset();
         atlasSlotCache.clear();
         atlasViewCache.clear();
@@ -334,20 +338,49 @@ public final class RtEntityTextures {
         return Math.min(capacity, maxTextures());
     }
 
-    /** Recover the resource Identifier of {@code renderType}'s primary texture (Sampler0), or null. The
-     *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
+    /**
+     * Whether {@code renderType} draws its own texture AND an enchantment glint in one pass. 26.x folded
+     * the glint into the base render type for foil armour ({@code armorCutoutNoCullGlint}: the armour
+     * texture in Sampler0, the glint in GlintSampler) and for enchanted tridents and plain shields
+     * ({@code entitySolidGlint}); only trimmed armour and patterned shields still draw the glint as a
+     * separate overlay whose Sampler0 is the glint texture itself.
+     */
+    public boolean hasGlintSampler(RenderType renderType) {
+        return samplerLocation(renderType, GLINT_SAMPLER, glintLocationCache) != null;
+    }
+
+    /** Bindless slot of a combined render type's glint texture (GlintSampler), or 0 if unresolvable. */
+    public int glintSlotFor(RenderType renderType) {
+        Identifier location = samplerLocation(renderType, GLINT_SAMPLER, glintLocationCache);
+        return location == null ? 0 : slotForTexture(location);
+    }
+
+    /** Material of a combined render type's glint texture, resolved like a standalone glint overlay's. */
+    public int glintMaterialIdFor(RenderType renderType) {
+        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+        return RtMaterialRegistry.INSTANCE.resolveEntityTexture(
+                samplerLocation(renderType, GLINT_SAMPLER, glintLocationCache), false);
+    }
+
+    /** Recover the resource Identifier of {@code renderType}'s primary texture (Sampler0), or null. */
     private Identifier textureLocation(RenderType renderType) {
+        return samplerLocation(renderType, "Sampler0", locationCache);
+    }
+
+    /** The resource Identifier bound to {@code sampler} in {@code renderType}'s setup, or null. The
+     *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
+    private Identifier samplerLocation(RenderType renderType, String sampler, Map<RenderType, Identifier> cache) {
         if (renderType == null) return null;
-        if (locationCache.containsKey(renderType)) return locationCache.get(renderType);
+        if (cache.containsKey(renderType)) return cache.get(renderType);
         Identifier result = null;
         try {
             // RenderSetup is final, so the accessor cast must go through Object (the interface is only
             // mixed in at runtime); RenderType is non-final so its cast is fine directly.
             Object setup = ((RenderTypeAccessor) renderType).caustica$state();
             Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
-            Object binding = textures.get("Sampler0");
+            Object binding = textures.get(sampler);
             if (binding == null) {
-                locationCache.put(renderType, null);
+                cache.put(renderType, null);
                 return null;
             }
             if (locationMethod == null) {
@@ -358,7 +391,7 @@ public final class RtEntityTextures {
         } catch (Throwable t) {
             warnMaterialOnce("RT entity texture Identifier resolution failed for " + renderType, t);
         }
-        locationCache.put(renderType, result);
+        cache.put(renderType, result);
         return result;
     }
 

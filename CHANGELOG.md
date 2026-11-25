@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Enchanted armour is visible again.** Minecraft 26.3 draws enchanted armour (without a trim), enchanted
+  tridents and enchanted shields without a banner in one pass that combines the item's texture with the
+  glint. Caustica took that whole pass for the glint alone, so the armour showed only as a faint,
+  moving shimmer. It now draws the armour, trident or shield itself, and the glint on top of it.
+
 ## 0.4.2 — 2026-11-22
 
 ### Downloads

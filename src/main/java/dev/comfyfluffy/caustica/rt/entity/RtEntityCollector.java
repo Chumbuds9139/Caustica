@@ -117,11 +117,21 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     // Push glint decals just above the armour surface so the any-hit shader sees the overlay first; when
     // its texture alpha passes the ray through, traversal continues to the base geometry behind it.
     private static final int ENCHANTMENT_GLINT_ORDER = 1;
+    // The glint split out of a combined base+glint render type (see submitModel) rides half a rank above
+    // its base: vanilla stacks the next armour layer (leather's undyed overlay) one whole rank up, over
+    // the glinting base, and a whole-rank glint would tie with it in the BVH.
+    private static final float COMBINED_GLINT_ORDER = 0.5f;
+    // What one captureModel pass draws: the submission's own texture, a standalone glint overlay
+    // (Sampler0 IS the glint texture), or the glint of a combined render type (GlintSampler).
+    private static final int PASS_BASE = 0;
+    private static final int PASS_GLINT_OVERLAY = 1;
+    private static final int PASS_COMBINED_GLINT = 2;
 
-    // Bindless texture slot of the most recent non-glint model submission (the armour layer, in the
-    // vanilla armour path: EquipmentLayerRenderer submits the armour model and, when the item has
-    // foil, the SAME model with armorEntityGlint() immediately after). The glint submission copies
-    // this into capture.currentGlintArmorSlot so world.rahit can gate the shimmer to the armour
+    // Bindless texture slot of the most recent non-glint model submission: the armour (or trident/shield)
+    // texture the next glint pass is drawn over. Foil armour without a trim arrives as ONE combined
+    // armorCutoutNoCullGlint submission, which submitModel captures as the armour followed by its glint;
+    // trimmed armour still submits armour, trim and a separate glint overlay. Either way the glint pass
+    // copies this into capture.currentGlintArmorSlot so world.rahit can gate the shimmer to the armour
     // surface (vanilla's EQUAL-depth semantics) instead of painting the bare body.
     private int lastArmorTexSlot;
 
@@ -238,14 +248,39 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (outlineColor != 0) {
             this.outlineColor = outlineColor;
         }
-        boolean glint = isGlint(renderType);
+        int order = pendingOrder;
+        pendingOrder = 0;
+        if (!isGlint(renderType)) {
+            captureModel(model, state, poseStack, renderType, lightCoords, overlayCoords, tintedColor, uvMapping,
+                    order, PASS_BASE);
+        } else if (!RtEntityTextures.INSTANCE.hasGlintSampler(renderType)) {
+            captureModel(model, state, poseStack, renderType, lightCoords, overlayCoords, tintedColor, uvMapping,
+                    order, PASS_GLINT_OVERLAY);
+        } else {
+            // 26.x draws foil armour (no trim), enchanted tridents and plain enchanted shields with ONE
+            // render type that samples the item's texture AND the glint (armorCutoutNoCullGlint,
+            // entitySolidGlint). Treated as a glint overlay, the whole piece was shaded as a faint,
+            // scrolling shimmer of its own texture and the armour itself all but vanished. Capture it as
+            // what it draws: the textured surface, then the glint over it.
+            captureModel(model, state, poseStack, renderType, lightCoords, overlayCoords, tintedColor, uvMapping,
+                    order, PASS_BASE);
+            captureModel(model, state, poseStack, renderType, lightCoords, overlayCoords, tintedColor, uvMapping,
+                    order, PASS_COMBINED_GLINT);
+        }
+    }
+
+    /** Capture one pass of a model submission; {@code pass} says which texture it draws (PASS_*). */
+    private <S> void captureModel(Model<? super S> model, S state, PoseStack poseStack, RenderType renderType,
+                                  int lightCoords, int overlayCoords, int tintedColor, UvMapping uvMapping,
+                                  int order, int pass) {
+        boolean glint = pass != PASS_BASE;
         // Vanilla gives the base-colour banner pass order 0 even though it is drawn after an uncoloured,
         // exactly coplanar cloth pass. Move every banner-pattern pass out one rank: base colour becomes 1,
         // and the explicitly ordered emblem layers become 2+. Otherwise the BVH can select white cloth.
         // Glint is another coplanar overlay; offset it so alpha pass-through reaches the base armour.
-        capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0)
-                + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
-        pendingOrder = 0;
+        capture.currentOrder = order + (isBannerPattern(renderType) ? 1 : 0)
+                + (pass == PASS_GLINT_OVERLAY ? ENCHANTMENT_GLINT_ORDER
+                : pass == PASS_COMBINED_GLINT ? COMBINED_GLINT_ORDER : 0f);
         // Glint is never faked translucent: its texture alpha gates coverage (vanilla's own discard), so
         // the prim keeps full opacity and the ray either shades the shimmer or passes to the armour.
         capture.currentOpacity = 1.0f;
@@ -316,9 +351,19 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
         }
-        // Remember this submission's texture for the next glint submission (the armour layer is always
-        // followed by its glint in vanilla's EquipmentLayerRenderer). Glint submissions themselves are
-        // skipped so lastArmorTexSlot keeps pointing at the armour texture beneath them.
+        if (pass == PASS_COMBINED_GLINT) {
+            // Same geometry and UVs as the base pass just captured (a shield's sprite remap included, so
+            // the armour gate in world.rahit still addresses the base texture), but shaded from the glint
+            // texture. If it cannot be resolved, the base pass already drew the surface; skip the shimmer.
+            int glintSlot = RtEntityTextures.INSTANCE.glintSlotFor(renderType);
+            if (glintSlot == 0) {
+                return;
+            }
+            capture.currentTexSlot = glintSlot;
+            capture.currentMaterialId = RtEntityTextures.INSTANCE.glintMaterialIdFor(renderType);
+        }
+        // Remember this submission's texture for the next glint pass (see lastArmorTexSlot). Glint passes
+        // themselves are skipped so lastArmorTexSlot keeps pointing at the armour texture beneath them.
         // A trim layer sits between the armour and its glint, in a packed texture the glint's own UVs do
         // not address, so it must not replace the armour texture as the gate.
         if (!glint && !packedLayer) {
@@ -582,8 +627,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return "minecraft:pipeline/banner_pattern".equals(pipeline.getLocation().toString());
     }
 
-    /** Vanilla enchantment/foil glint pipelines include "glint" in their resource path
-     *  (entity_glint, armor_entity_glint, glint_direct, etc.). */
+    /** Vanilla enchantment/foil glint pipelines include "glint" in their resource path: the standalone
+     *  overlay (pipeline/glint) and 26.x's combined base+glint pipelines (armor_cutout_no_cull_glint,
+     *  entity_solid_glint, item_*_glint), which {@link RtEntityTextures#hasGlintSampler} tells apart. */
     private static boolean isGlint(RenderType renderType) {
         if (renderType == null) {
             return false;
@@ -1417,7 +1463,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             return;
         }
 
-        boolean glint = !lines && isGlint(renderType);
+        // A combined base+glint render type here draws as its base texture (no separate shimmer pass):
+        // tagging it glint would shade the whole surface as a faint shimmer, as submitModel explains.
+        boolean glint = !lines && isGlint(renderType) && !RtEntityTextures.INSTANCE.hasGlintSampler(renderType);
         capture.currentOrder = pendingOrder + (glint ? ENCHANTMENT_GLINT_ORDER : 0);
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates

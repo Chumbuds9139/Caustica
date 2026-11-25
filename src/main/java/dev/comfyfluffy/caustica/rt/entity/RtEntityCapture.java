@@ -53,8 +53,10 @@ public final class RtEntityCapture implements VertexConsumer {
     // texture additively, so texture alpha alone would make the ray-traced layer fully opaque.
     float currentOpacity = 1.0f;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
-    // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
-    int currentOrder;
+    // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push. A float so an overlay can sit
+    // half a rank above its base: the glint split out of a combined armour+glint render type must stay
+    // below the next armour layer vanilla stacks one whole rank up (leather's undyed overlay).
+    float currentOrder;
     // Portal classification for the current submission (world_common.slang TERRAIN_PRIM_PORTAL_*
     // values, 0 = none). Stamped into the prim's flags lane so world.rchit can shade held or
     // block-entity portal geometry (EndPortalRenderer's quad, endermen holding portal blocks) with
