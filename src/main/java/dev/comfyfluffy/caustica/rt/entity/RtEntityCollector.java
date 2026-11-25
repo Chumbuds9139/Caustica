@@ -250,6 +250,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         int order = pendingOrder;
         pendingOrder = 0;
+        if (renderType != null && renderType.isOutline()) {
+            // Outline-only pass: vanilla draws an invisible but Glowing body into the outline buffer alone.
+            // Captured, it became a solid body. The glow colour recorded above still reaches the glow mask.
+            return;
+        }
         if (!isGlint(renderType)) {
             captureModel(model, state, poseStack, renderType, lightCoords, overlayCoords, tintedColor, uvMapping,
                     order, PASS_BASE);

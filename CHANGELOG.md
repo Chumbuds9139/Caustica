@@ -8,6 +8,11 @@
   tridents and enchanted shields without a banner in one pass that combines the item's texture with the
   glint. Caustica took that whole pass for the glint alone, so the armour showed only as a faint,
   moving shimmer. It now draws the armour, trident or shield itself, and the glint on top of it.
+- **Invisible item frames and armour stands show what is on them.** Caustica left out every invisible
+  entity, so an invisible item frame hid its item or map and an invisible armour stand hid its armour
+  and held items. Like vanilla, invisibility now hides only the frame or the body. This also brings back
+  armour and held items on invisible players and mobs, and the name tags of invisible armour stands that
+  servers use for floating text.
 
 ## 0.4.2 — 2026-11-22
 

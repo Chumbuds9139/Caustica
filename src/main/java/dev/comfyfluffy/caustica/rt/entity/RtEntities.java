@@ -768,10 +768,16 @@ public final class RtEntities {
             if (build.full() || capturedThisFrame >= maxOrdinaryEntities()) {
                 break;
             }
-            if (entity.isInvisible()) {
+            boolean firstPersonSelf = entity == cameraEntity && firstPerson;
+            // Invisible entities go through their renderer like any other: vanilla hides only what the
+            // invisibility hides (the frame of an invisible item frame, an armour stand's or mob's body)
+            // and still draws the framed item, worn armour, held items and name tags (server holograms
+            // are invisible armour stands). Skipping them here dropped all of that. The one exception is
+            // your own invisible body in first person (a spectator, or an invisibility potion), which
+            // keeps out of reflections and shadows as before.
+            if (firstPersonSelf && entity.isInvisible()) {
                 continue;
             }
-            boolean firstPersonSelf = entity == cameraEntity && firstPerson;
             int mask = firstPersonSelf ? MASK_SECONDARY : MASK_ALL;
             float ix;
             float iy;
@@ -905,15 +911,14 @@ public final class RtEntities {
     }
 
     /**
-     * The level's visible entities, in the level's own order while they all fit under the cap, otherwise
-     * sorted by distance from the camera so the cap drops the farthest ones.
+     * The level's entities, in the level's own order while they all fit under the cap, otherwise sorted
+     * by distance from the camera so the cap drops the farthest ones. Invisible entities are included:
+     * their renderers still draw what invisibility leaves visible (see captureEntities).
      */
     private Iterable<Entity> entitiesNearestFirst(ClientLevel level) {
         entityOrder.clear();
         for (Entity entity : level.entitiesForRendering()) {
-            if (!entity.isInvisible()) {
-                entityOrder.add(entity);
-            }
+            entityOrder.add(entity);
         }
         int count = entityOrder.size();
         int cap = maxOrdinaryEntities();
