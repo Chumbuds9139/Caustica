@@ -22,10 +22,12 @@
   the mob's surface the way vanilla mixes it, before lighting, so the flash is lit by the scene like the
   rest of the mob. Armour does not flash, as in vanilla.
 - **Night vision works.** Vanilla applies night vision by raising the floor of its lightmap, which ray
-  tracing does not use, so the effect did nothing. It now adds a dim, even fill light, shaded per face
-  like vanilla (tops brightest, undersides darkest), using the dimension's night-vision colour. Caves
-  and nights become visible while daylight barely changes, and the effect flickers out over its last
-  ten seconds like vanilla. Conduit Power gives the same light underwater.
+  tracing does not use, so the effect did nothing. It now adds a dim fill light to what you see, shaded
+  per face like vanilla (tops brightest, undersides darkest) and darker in corners, at the foot of walls
+  and under overhangs, like vanilla's smooth lighting, so the scene keeps its shape. It uses the
+  dimension's night-vision colour. Caves and nights become visible while daylight barely changes, and the
+  effect flickers out over its last ten seconds like vanilla. Conduit Power gives the same light
+  underwater.
 - **Spectators inside blocks see into caves again.** Vanilla hides the back faces of blocks, which is
   what lets a spectator inside stone see the caves around them. Caustica drew every face from both
   sides, so the view showed the back of each cave's nearest wall instead. While a spectator's eye is

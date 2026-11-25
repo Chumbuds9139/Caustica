@@ -850,10 +850,12 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         // a torch in hand would barely brighten the blocks in front of it. Lambertian only; the
         // flame itself still gathers as ordinary emissive geometry on direct hit. Two-sided for
         // dynamic entities, mirroring the celestial NDL convention above. Night vision's fill light rides
-        // the same term: it is unshadowed, so it needs no ray of its own (see nightVisionIrradiance).
+        // the same term, on surfaces a camera or mirror ray reached only (see nightVisionIrradiance).
         float3 specialIrr = handLightIrradiance(p, hitPos, n, isDynamicEntityEarly)
-                + lightningIrradiance(p, hitPos, n, isDynamicEntityEarly)
-                + nightVisionIrradiance(n);
+                + lightningIrradiance(p, hitPos, n, isDynamicEntityEarly);
+        if (showCelestial && worldPush.nightVision.w > 0.0) {
+            specialIrr += nightVisionIrradiance(p, n, seed);
+        }
         if (max(specialIrr.x, max(specialIrr.y, specialIrr.z)) > 0.0) {
             float3 specialNee = throughput * diffAlb * INV_PI * specialIrr;
             L += specialNee;

@@ -3126,7 +3126,8 @@ public final class RtComposite {
      * when the radiance is zero, so those dimensions also stop paying for a light they do not have.
      */
     /**
-     * WorldPush.nightVision: xyz = the uniform fill irradiance the raygen adds at every shading vertex, w = the
+     * WorldPush.nightVision: xyz = the fill irradiance the raygen adds on surfaces the camera or a mirror sees
+     * (face-shaded and occluded within two blocks, see nightVisionIrradiance in lighting.slang), w = the
      * effect's intensity (0 = off). Intensity and colour follow vanilla's LightmapRenderStateExtractor exactly:
      * Night Vision gives 1.0, pulsing over its last ten seconds via {@link GameRenderer#nightVisionScale};
      * otherwise Conduit Power gives the player's water vision while underwater. Vanilla turns that into a floor

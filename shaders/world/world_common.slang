@@ -246,9 +246,9 @@ public struct WorldPush {
     // it cannot hit the hand and skips the trace; -1 (or lower) means "no bound this frame, always trace".
     // Trailing lanes; the generated WorldPushData appends them, so nothing above shifts.
     public float4   viewmodelCull;
-    // Night vision (and Conduit Power underwater): xyz = the uniform fill irradiance it adds, already
-    // scaled by the effect's intensity and the dimension's NIGHT_VISION_COLOR; w = that intensity, 0 when
-    // neither effect is active. Vanilla applies the effect as a floor on the lightmap, which ray tracing
+    // Night vision (and Conduit Power underwater): xyz = the fill irradiance it adds before face shade and
+    // occlusion, already scaled by the effect's intensity and the dimension's NIGHT_VISION_COLOR; w = that
+    // intensity, 0 when neither effect is active. Vanilla applies the effect as a floor on the lightmap, which ray tracing
     // never samples, so without this lane the effect did nothing at all. See nightVisionIrradiance.
     public float4   nightVision;
     // The sky cache (FEATURE_SKY_CACHE): SKY_CACHE_W x SKY_CACHE_H float4 texels, written by pass A and

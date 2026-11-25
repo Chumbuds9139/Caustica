@@ -806,23 +806,31 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
 
 // Night vision's fill light (WorldPush.nightVision). Vanilla lifts every lightmap value to at least
 // NIGHT_VISION_COLOR * intensity, so nothing in view falls below a dim grey however dark it is. Ray tracing
-// never samples the lightmap, so this adds the same lift as a uniform, unshadowed irradiance at each
-// shading vertex instead. Daylight is effectively unchanged (the sun alone is about twenty times this),
-// while caves and night scenes get enough light for auto exposure to bring them up.
+// never samples the lightmap, so this adds the same lift as irradiance on the surfaces the camera sees
+// instead. Daylight is effectively unchanged (the sun alone is about twenty times this), while caves and
+// night scenes get enough light for auto exposure to bring them up.
 //
-// A uniform term alone would give every face of a block the same radiance, so a cave lit only by night
-// vision would lose all sense of shape. Vanilla's floor is still multiplied by its per-face shade, so
-// weight by the normal the same way, with vanilla's default face shades (CardinalLighting.DEFAULT): up 1.0,
-// down 0.5, north/south 0.8, east/west 0.6. The Nether's set (0.9 up and down) is not mirrored. The weights
-// sum over the squared normal components, so an axis-aligned face gets the vanilla value and a tilted one
-// blends between them.
-public float3 nightVisionIrradiance(float3 n) {
+// A uniform lift flattens everything it dominates, so it keeps the two cues vanilla's floor keeps:
+//  - Face shade. Vanilla multiplies the floor by its per-face shade, so weight by the normal the same way,
+//    with vanilla's default face shades (CardinalLighting.DEFAULT): up 1.0, down 0.5, north/south 0.8,
+//    east/west 0.6. The Nether's set (0.9 up and down) is not mirrored. The weights sum over the squared
+//    normal components, so an axis-aligned face gets the vanilla value and a tilted one blends between them.
+//  - Ambient occlusion. Vanilla's smooth lighting darkens corners, wall bases and overhangs under the floor
+//    too. One cosine-distributed ray of NIGHT_VISION_AO_RADIUS blocks does the same here: the fill counts
+//    only along directions open for that distance, so it averages to the cosine-weighted open fraction of
+//    the hemisphere near the surface. Beyond that radius a cave or a room stays lit, as night vision should.
+// The caller adds it only where a camera or mirror ray arrives. Added again at diffuse-bounce vertices,
+// it would light every crevice a second time by interreflection and wash out the occlusion it just applied.
+public static const float NIGHT_VISION_AO_RADIUS = 2.0;
+
+public float3 nightVisionIrradiance(float3 origin, float3 n, inout uint seed) {
     if (worldPush.nightVision.w <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
     float3 n2 = n * n;
     float shade = n2.x * 0.6 + n2.z * 0.8 + n2.y * (n.y > 0.0 ? 1.0 : 0.5);
-    return worldPush.nightVision.xyz * shade;
+    VisibilityResult open = visibility(origin, cosineDir(n, seed), NIGHT_VISION_AO_RADIUS);
+    return worldPush.nightVision.xyz * shade * open.transmittance;
 }
 
 // Brief local point light from a lightning strike. It is zero outside the short flash window, so the
