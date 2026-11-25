@@ -819,9 +819,14 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
 //    too. One cosine-distributed ray of NIGHT_VISION_AO_RADIUS blocks does the same here: the fill counts
 //    only along directions open for that distance, so it averages to the cosine-weighted open fraction of
 //    the hemisphere near the surface. Beyond that radius a cave or a room stays lit, as night vision should.
+//    Like vanilla's, the darkening never reaches black: the open fraction only scales the fill between
+//    NIGHT_VISION_AO_FLOOR and 1, so the walls of a one-wide tunnel (almost fully closed within the radius)
+//    keep close to half of it instead of a noisy few percent. The player's own body, particles and the
+//    viewmodel are left out of the ray (CULL_HAND_LIGHT), as vanilla's occlusion ignores them too.
 // The caller adds it only where a camera or mirror ray arrives. Added again at diffuse-bounce vertices,
 // it would light every crevice a second time by interreflection and wash out the occlusion it just applied.
 public static const float NIGHT_VISION_AO_RADIUS = 2.0;
+public static const float NIGHT_VISION_AO_FLOOR = 0.4;
 
 public float3 nightVisionIrradiance(float3 origin, float3 n, inout uint seed) {
     if (worldPush.nightVision.w <= 0.0) {
@@ -829,8 +834,10 @@ public float3 nightVisionIrradiance(float3 origin, float3 n, inout uint seed) {
     }
     float3 n2 = n * n;
     float shade = n2.x * 0.6 + n2.z * 0.8 + n2.y * (n.y > 0.0 ? 1.0 : 0.5);
-    VisibilityResult open = visibility(origin, cosineDir(n, seed), NIGHT_VISION_AO_RADIUS);
-    return worldPush.nightVision.xyz * shade * open.transmittance;
+    VisibilityResult open = visibilityCulled(origin, cosineDir(n, seed), NIGHT_VISION_AO_RADIUS, CULL_HAND_LIGHT);
+    float3 occlusion = lerp(float3(NIGHT_VISION_AO_FLOOR, NIGHT_VISION_AO_FLOOR, NIGHT_VISION_AO_FLOOR),
+                            float3(1.0, 1.0, 1.0), open.transmittance);
+    return worldPush.nightVision.xyz * shade * occlusion;
 }
 
 // Brief local point light from a lightning strike. It is zero outside the short flash window, so the
