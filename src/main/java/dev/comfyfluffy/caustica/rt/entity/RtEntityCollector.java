@@ -387,6 +387,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             }
         }
         int color = tintedColor == 0 ? -1 : tintedColor; // vanilla uses 0 as the no-tint sentinel in some submit paths
+        if (pass == PASS_COMBINED_GLINT) {
+            // The tint belongs to the base texture (a leather dye); world.rchit multiplies the shimmer by
+            // the prim tint, so a dark dye would put the glint out. Vanilla's own glint passes are untinted.
+            color = -1;
+        }
         int vertStart = capture.verts.size();
         int idxStart = capture.idx.size();
         int uvStart = capture.uvList.size();
