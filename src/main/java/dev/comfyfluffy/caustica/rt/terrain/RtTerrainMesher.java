@@ -145,6 +145,7 @@ final class RtTerrainMesher {
             float minFill = CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value();
             collectLights(collected, mesh.opaque, materials, minFill);
             collectLights(collected, mesh.cutout, materials, minFill);
+            RtLightCollector.appendInvisibleLights(collected, mesh.invisibleLights);
             if (!collected.isEmpty()) {
                 lights = collected.toFloatArray();
             }
@@ -254,6 +255,13 @@ final class RtTerrainMesher {
                         RtFluidMesher.tesselate(region, m, fluidCapture, fluidModels, state, fluid);
                     }
                     if (state.getRenderShape() != RenderShape.MODEL) {
+                        // Light blocks have no model but do give light: record them for the light list
+                        // (RtLightCollector.appendInvisibleLights). By block, not by "invisible and
+                        // emissive": lava is INVISIBLE with emission 15 and already emits from its surface.
+                        if (state.is(Blocks.LIGHT)) {
+                            mesh.invisibleLights.add(RtLightCollector.packInvisibleLight(lx, ly, lz,
+                                    state.getLightEmission()));
+                        }
                         // The end portal block has no render model in vanilla (the starfield is a
                         // special shader over an invisible block); emit a night-sky-shaded proxy plane
                         // at the block's base so the ray tracer does not just see through the portal
@@ -323,6 +331,9 @@ final class RtTerrainMesher {
         Geom translucent;
         Geom water;
         private final Geom[] buckets = new Geom[RtAccel.TERRAIN_BUCKETS];
+        // Light blocks in this section (RtLightCollector.packInvisibleLight). They add lights, not
+        // geometry, so isEmpty ignores them: a section with nothing else to draw is still skipped.
+        final IntArrayList invisibleLights = new IntArrayList();
 
         Geom[] buckets() {
             buckets[RtAccel.BUCKET_SOLID] = geomOrEmpty(opaque);
@@ -369,6 +380,7 @@ final class RtTerrainMesher {
             resetGeom(cutout);
             resetGeom(translucent);
             resetGeom(water);
+            invisibleLights.clear();
         }
 
         private static void resetGeom(Geom geom) {

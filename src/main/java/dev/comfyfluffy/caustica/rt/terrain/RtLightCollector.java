@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.rt.material.RtEmissionGrid;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialDesc;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
 /**
@@ -60,6 +61,25 @@ final class RtLightCollector {
 
     /** Samples per axis over the quad's (a,b) parameter square; matches the emission grid resolution. */
     private static final int SCAN = RtEmissionGrid.SIZE;
+
+    /**
+     * Light blocks (minecraft:light) are invisible: vanilla gives them block light but no model, so there
+     * is no emissive quad to collect and they lit nothing. Each one becomes a small cube of six
+     * geometry-less rectangle lights at the block centre. Nothing can see or hit them (the NEE shadow ray
+     * stops short of the sample point and never needs to reach an emitter), so they light the scene the
+     * way the invisible block does in vanilla. Half-size 0.25 is exact at the half precision the GPU
+     * record stores the axes in.
+     */
+    private static final float INVISIBLE_LIGHT_HALF = 0.25f;
+    /**
+     * Per-face radiance at level 15, before the block-emissive slider (default 2.0). A one-sided cube
+     * shows 1 to sqrt(3) faces' worth of area, 1.5 on average, so at default settings its power is
+     * 0.8 x 0.25 x 1.5 x 2.0 = 0.6: the held-item light's calibration (RtComposite.HAND_LIGHT_POWER at the
+     * default held-item slider of 1.0), so a placed light block reads like the same block held in hand.
+     */
+    private static final float INVISIBLE_LIGHT_LE = 0.8f;
+    /** The held light block's tint (RtComposite.TINT_DEFAULT), for the same reason. */
+    private static final float INVISIBLE_LIGHT_R = 1.0f, INVISIBLE_LIGHT_G = 0.75f, INVISIBLE_LIGHT_B = 0.55f;
 
     private static final int PRIM_FLOATS = 12; // TerrainPrim lanes per triangle
     private static final int PRIM_FLAGS_LANE = 9;
@@ -256,6 +276,47 @@ final class RtLightCollector {
             int flagsB = Float.floatToRawIntBits(p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE]) | PRIM_FLAG_IN_LIGHT_BUFFER;
             p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(flagsA);
             p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(flagsB);
+        }
+    }
+
+    /** Packs a light block for {@link #appendInvisibleLights}: section-local position and its light level. */
+    static int packInvisibleLight(int lx, int ly, int lz, int level) {
+        return lx | (ly << 4) | (lz << 8) | (level << 12);
+    }
+
+    /** Append the stand-in lights of a section's light blocks (see {@link #INVISIBLE_LIGHT_HALF}). */
+    static void appendInvisibleLights(FloatArrayList out, IntArrayList blocks) {
+        float h = INVISIBLE_LIGHT_HALF;
+        float area = 4.0f * h * h; // 4 * |halfU x halfV|, exactly what the shader derives from the axes
+        float[] n = new float[3];
+        float[] u = new float[3];
+        float[] w = new float[3];
+        for (int i = 0; i < blocks.size(); i++) {
+            int packed = blocks.getInt(i);
+            int level = (packed >>> 12) & 15;
+            if (level <= 0) {
+                continue;
+            }
+            float le = INVISIBLE_LIGHT_LE * level / 15.0f;
+            float cx = (packed & 15) + 0.5f;
+            float cy = ((packed >>> 4) & 15) + 0.5f;
+            float cz = ((packed >>> 8) & 15) + 0.5f;
+            for (int axis = 0; axis < 3; axis++) {
+                for (int sign = -1; sign <= 1; sign += 2) {
+                    java.util.Arrays.fill(n, 0.0f);
+                    java.util.Arrays.fill(u, 0.0f);
+                    java.util.Arrays.fill(w, 0.0f);
+                    n[axis] = sign;
+                    u[(axis + 1) % 3] = h;
+                    w[(axis + 2) % 3] = h;
+                    append(out,
+                            cx + n[0] * h, cy + n[1] * h, cz + n[2] * h, area,
+                            n[0], n[1], n[2], 0,
+                            u[0], u[1], u[2], 0.0f,
+                            w[0], w[1], w[2], 0.0f,
+                            le * INVISIBLE_LIGHT_R, le * INVISIBLE_LIGHT_G, le * INVISIBLE_LIGHT_B, 0.0f);
+                }
+            }
         }
     }
 

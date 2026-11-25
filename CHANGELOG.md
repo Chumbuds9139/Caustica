@@ -13,6 +13,11 @@
   and held items. Like vanilla, invisibility now hides only the frame or the body. This also brings back
   armour and held items on invisible players and mobs, and the name tags of invisible armour stands that
   servers use for floating text.
+- **Light blocks give light.** The invisible light block (`minecraft:light`) has no model, and Caustica's
+  lights come from glowing surfaces, so a placed light block lit nothing (in hand it already worked).
+  Each light block now adds a small invisible light at its centre, as bright and as warm as the same
+  block held in hand, scaled by its level. It needs emitter sampling on (the default), and a light block
+  in a 16×16×16 section that contains nothing else does not light yet.
 
 ## 0.4.2 — 2026-11-22
 
