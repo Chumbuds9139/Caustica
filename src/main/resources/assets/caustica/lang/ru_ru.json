@@ -242,7 +242,7 @@
 	"caustica.options.rt.recommended": "Применить рекомендуемые настройки",
 	"caustica.options.rt.recommended.tooltip": "Подбирает настройки под видеокарту и экран и один раз измеряет около минуты игры, чтобы выбрать режим DLSS.",
 	"caustica.options.rt.recommended.measuring.title": "Caustica: измерение производительности",
-	"caustica.options.rt.recommended.measuring.message": "Играйте как обычно с закрытыми меню около минуты.",
+	"caustica.options.rt.recommended.measuring.message": "Играйте как обычно около минуты.",
 	"caustica.options.rt.recommended.done.title": "Caustica: рекомендуемые настройки применены",
 	"caustica.options.rt.recommended.done.message": "Режим DLSS: %1$s",
 	"caustica.options.rt.recommended.doneNoDlss.message": "Их можно изменить в настройках графики.",

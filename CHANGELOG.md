@@ -9,8 +9,8 @@
   play, once, and settles the DLSS mode from it. After that minute nothing is watched or changed.
   - A new install does this by itself a few seconds into the first world, once the driver has confirmed
     that DLSS Ray Reconstruction runs. An existing config is never changed unless you press the button.
-  - A notice says when the measurement starts: play as usual with menus closed. A second notice says
-    what was chosen and the measured GPU time per frame.
+  - A notice says when the measurement starts: just play as usual. A second notice says which DLSS
+    mode was chosen.
   - It only switches things on, never off. Where supported it turns on DLSS Ray Reconstruction, SHaRC
     and Reflex. On GeForce RTX 40 and 50 cards it also turns on Frame Generation, volumetric clouds and
     fog and picks preset F, the setup tested on a laptop RTX 4050 at 1080p (about 25 real frames a

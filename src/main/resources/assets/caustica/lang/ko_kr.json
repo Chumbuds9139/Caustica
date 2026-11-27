@@ -242,7 +242,7 @@
 	"caustica.options.rt.recommended": "권장 설정 적용",
 	"caustica.options.rt.recommended.tooltip": "GPU와 화면에 맞춰 설정을 고르고, 약 1분 동안의 플레이를 한 번만 측정해 DLSS 모드를 정합니다.",
 	"caustica.options.rt.recommended.measuring.title": "Caustica: 성능 측정 중",
-	"caustica.options.rt.recommended.measuring.message": "메뉴를 닫고 약 1분 동안 평소처럼 플레이하세요.",
+	"caustica.options.rt.recommended.measuring.message": "약 1분 동안 평소처럼 플레이하세요.",
 	"caustica.options.rt.recommended.done.title": "Caustica: 권장 설정 적용됨",
 	"caustica.options.rt.recommended.done.message": "DLSS 모드: %1$s",
 	"caustica.options.rt.recommended.doneNoDlss.message": "비디오 설정에서 바꿀 수 있습니다.",

@@ -242,7 +242,7 @@
 	"caustica.options.rt.recommended": "Aplicar ajustes recomendados",
 	"caustica.options.rt.recommended.tooltip": "Elige ajustes para tu GPU y pantalla, y mide una sola vez un minuto de juego para fijar el modo DLSS.",
 	"caustica.options.rt.recommended.measuring.title": "Caustica: midiendo el rendimiento",
-	"caustica.options.rt.recommended.measuring.message": "Juega con normalidad y sin menús durante un minuto.",
+	"caustica.options.rt.recommended.measuring.message": "Juega con normalidad durante un minuto.",
 	"caustica.options.rt.recommended.done.title": "Caustica: ajustes recomendados aplicados",
 	"caustica.options.rt.recommended.done.message": "Modo DLSS: %1$s",
 	"caustica.options.rt.recommended.doneNoDlss.message": "Puedes cambiarlos en Gráficos.",

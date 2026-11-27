@@ -242,7 +242,7 @@
 	"caustica.options.rt.recommended": "应用推荐设置",
 	"caustica.options.rt.recommended.tooltip": "根据显卡和屏幕选择设置，再测量约一分钟的游玩来确定 DLSS 模式（只测一次）。",
 	"caustica.options.rt.recommended.measuring.title": "Caustica：正在测量性能",
-	"caustica.options.rt.recommended.measuring.message": "请关闭菜单，照常玩约一分钟。",
+	"caustica.options.rt.recommended.measuring.message": "照常玩约一分钟就好。",
 	"caustica.options.rt.recommended.done.title": "Caustica：已应用推荐设置",
 	"caustica.options.rt.recommended.done.message": "DLSS 模式：%1$s",
 	"caustica.options.rt.recommended.doneNoDlss.message": "可在视频设置中调整。",
