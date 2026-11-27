@@ -136,6 +136,12 @@ public final class RtComposite {
     // The floor's ceiling in scene terms: the old fixed fill. In daylight the exposure is low and the
     // display-referred floor would otherwise grow far past it and lift every shadow.
     private static final float NIGHT_VISION_FILL_MAX = 2.8f;
+    // The floor's lower bound in scene terms, about 0.05 irradiance with the default colour (under the full
+    // moon's ~0.07, so moonlit scenes are unchanged). The display-referred floor alone shows dark stone
+    // (albedo ~0.2) at only ~0.02 on screen, which reads as black; this bound only takes over once exposure
+    // sits at its ceiling, i.e. where there is no real light to flatten, and brings an unlit stone cave
+    // to about 0.1.
+    private static final float NIGHT_VISION_FILL_MIN = 0.16f;
     // EV added to the auto-exposure ceiling at full intensity, so a moonlit scene can be exposed up to
     // where its moonlight and its shadows read, instead of being brightened by the floor alone.
     private static final float NIGHT_VISION_EV_LIFT = 2.0f;
@@ -3187,9 +3193,9 @@ public final class RtComposite {
      *   <li>It raises the auto-exposure ceiling by {@link #NIGHT_VISION_EV_LIFT} EV, so the light that is
      *   there (moonlight, torches) is amplified with its shadows intact.</li>
      *   <li>The fill becomes a display-referred floor ({@link #NIGHT_VISION_FLOOR} over the applied exposure,
-     *   capped at {@link #NIGHT_VISION_FILL_MAX}): at night it shrinks to moonlight scale and keeps out of the
-     *   way, next to torches it grows so a dark corridor is still visible, and in a pitch-black cave it is
-     *   what there is to see.</li>
+     *   kept between {@link #NIGHT_VISION_FILL_MIN} and {@link #NIGHT_VISION_FILL_MAX}): at night it shrinks
+     *   to moonlight scale and keeps out of the way, next to torches it grows so a dark corridor is still
+     *   visible, and in a pitch-black cave its lower bound is what there is to see.</li>
      * </ul>
      */
     private Float4 nightVisionPush() {
@@ -3215,7 +3221,7 @@ public final class RtComposite {
         var color = mc.gameRenderer.mainCamera().attributeProbe()
                 .getValue(EnvironmentAttributes.NIGHT_VISION_COLOR, partial);
         float applied = Math.max(exposure.appliedExposure(), 1.0e-4f);
-        float scale = intensity * Math.min(NIGHT_VISION_FLOOR / applied, NIGHT_VISION_FILL_MAX);
+        float scale = intensity * Math.clamp(NIGHT_VISION_FLOOR / applied, NIGHT_VISION_FILL_MIN, NIGHT_VISION_FILL_MAX);
         return new Float4(srgbToLinear(color.x()) * scale, srgbToLinear(color.y()) * scale,
                 srgbToLinear(color.z()) * scale, intensity);
     }
