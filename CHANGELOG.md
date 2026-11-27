@@ -1,13 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Fixes
-
-- **Xaero's Minimap in-world waypoints stay in place.** They drifted with the screen, because Caustica
-  skipped the hook where Xaero's Minimap reads the camera's direction. Hooks other mods add at the start of
-  the world render now run before Caustica takes it over.
-
 ## 0.4.3 — 2026-11-27
 
 ### New
@@ -63,6 +55,9 @@
 
 ### Fixes
 
+- **Xaero's Minimap in-world waypoints stay in place.** They drifted with the screen, because Caustica
+  skipped the hook where Xaero's Minimap reads the camera's direction. Hooks other mods add at the start of
+  the world render now run before Caustica takes it over.
 - **Enchanted armour is visible again.** Minecraft 26.3 draws enchanted armour (without a trim), enchanted
   tridents and enchanted shields without a banner in one pass that combines the item's texture with the
   glint. Caustica took that whole pass for the glint alone, so the armour showed only as a faint,
