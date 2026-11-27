@@ -9,8 +9,9 @@ Generation, FSR 3, XeSS, SVGF) while keeping Minecraft's UI and gameplay intact.
 ## Features
 
 - Vulkan hardware path-traced world rendering
-- **Apply Recommended Settings**: one button picks settings for your GPU and screen, then measures a
-  minute of play once to choose the DLSS mode. New installs do this by themselves in the first world.
+- **Apply Recommended Settings**: one button tunes the DLSS mode and a graphics level (Low to Ultra) to
+  your GPU and screen, then measures a minute of play once to settle them. New installs do this by
+  themselves in the first world.
 - DLSS Ray Reconstruction, FSR 3, XeSS and NRD/SVGF denoising, with a Ray Reconstruction model
   preset choice (Auto / D / E / F)
 - Frame generation (experimental): DLSS Frame Generation on RTX 40/50, or Caustica's own engine on any

@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.RtCalibration;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.rt.RtPerfSweep;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.network.chat.Component;
@@ -19,21 +20,24 @@ import java.util.Locale;
 
 /**
  * Sets up the recommended settings once: an estimate from the hardware, then about a minute of measured
- * play that settles the upscaler mode. Nothing is watched or changed after that minute.
+ * play that settles the upscaler mode and the {@link RtRecommendedProfile.Tier} of cost settings. Nothing
+ * is watched or changed after that minute.
  *
  * <p>Two ways in: the "Apply Recommended Settings" button, and a brand-new config file, which the first
  * world starts by itself ({@link CausticaConfig.Rt.Recommended#PENDING}) a few seconds in, once DLSS Ray
  * Reconstruction has brought NGX up and the driver has said what runs here; it only starts by itself
  * where the driver confirmed Ray Reconstruction. Either way:
  * <ol>
- *   <li>a notice says the measurement has started, and the estimate is applied, except frame generation
- *       (on a new install the DLSS-G feature is then created once, at the end, at its final size);</li>
+ *   <li>a notice says the measurement has started, and the estimate is applied, tier included, except
+ *       frame generation (on a new install the DLSS-G feature is then created once, at the end, at its
+ *       final size);</li>
  *   <li>{@link RtCalibration} measures ordinary play, skipping anything that passes by itself;</li>
- *   <li>the upscaler mode is settled from the measurement, frame generation is set, and a notice says
- *       what was chosen. The estimate stays when no clean minute came together within
- *       {@value #TIMEOUT_TICKS} ticks of play, or when the window was much smaller than the screen; a GPU
- *       the TDR guard never let reach the configured settings gets the lightest mode. If the player picks
- *       a DLSS mode during the minute, the measurement stops and their mode stays.</li>
+ *   <li>the upscaler mode is settled from the measurement, the tier stays or goes one step lighter,
+ *       frame generation is set, and a notice says what was chosen. The estimate stays when no clean
+ *       minute came together within {@value #TIMEOUT_TICKS} ticks of play, or when the window was much
+ *       smaller than the screen; a GPU the TDR guard never let reach the configured settings gets the
+ *       lightest mode and tier. If the player picks a DLSS mode or changes one of the tier's settings
+ *       during the minute, the measurement stops and their choice stays.</li>
  * </ol>
  * The result line in the log also reports the CPU, memory and video memory, and when the measurement
  * shows the Java heap short, a second notice suggests a size: Caustica cannot set it, the launcher does.
@@ -55,6 +59,8 @@ public final class RtRecommendedSettings {
     private static int runningTicks;
     /** The upscaler mode and window size the running measurement is taken at; a change starts it over. */
     private static int runningQuality;
+    /** The cost settings the running measurement is taken at, or null when the profile leaves them alone. */
+    private static RtRecommendedProfile.Effects runningEffects;
     private static int runningWidth;
     private static int runningHeight;
 
@@ -168,6 +174,40 @@ public final class RtRecommendedSettings {
         if (CausticaConfig.Rt.Lights.BLOCK_INTENSITY.value() < profile.blockEmissiveAtLeast()) {
             CausticaConfig.Rt.Lights.BLOCK_INTENSITY.set(profile.blockEmissiveAtLeast());
         }
+        if (profile.tier() != null) {
+            applyEffects(profile.tier().effects());
+        }
+    }
+
+    /** Sets a tier's cost settings; each is read live every frame, like the option widgets set them. */
+    static void applyEffects(RtRecommendedProfile.Effects e) {
+        CausticaConfig.Rt.Composite.SPP.set(e.spp());
+        CausticaConfig.Rt.Composite.MAX_BOUNCES.set(e.maxBounces());
+        CausticaConfig.Rt.Composite.EARLY_ROULETTE.set(e.earlyRoulette());
+        CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.set(e.simpleRoughReflectionSky());
+        CausticaConfig.Rt.Composite.SKY_CACHE.set(e.skyCache());
+        CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.set(e.fastVolumetricClouds());
+        CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.set(e.halfResCameraClouds());
+        CausticaConfig.Rt.Lights.RIS_CANDIDATES.set(e.risCandidates());
+        CausticaConfig.Rt.Composite.PARALLAX_QUALITY.set(e.parallaxQuality());
+        CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.set(e.parallaxDistance());
+        CausticaConfig.Rt.Composite.WATER_WAVE_DETAIL.set(e.waterWaveDetail());
+    }
+
+    /** The cost settings as they are now, to tell whether the player changed one during the minute. */
+    static RtRecommendedProfile.Effects currentEffects() {
+        return new RtRecommendedProfile.Effects(
+                CausticaConfig.Rt.Composite.SPP.value(),
+                CausticaConfig.Rt.Composite.MAX_BOUNCES.value(),
+                CausticaConfig.Rt.Composite.EARLY_ROULETTE.value(),
+                CausticaConfig.Rt.Composite.SIMPLE_ROUGH_REFLECTION_SKY.value(),
+                CausticaConfig.Rt.Composite.SKY_CACHE.value(),
+                CausticaConfig.Rt.Composite.FAST_VOLUMETRIC_CLOUDS.value(),
+                CausticaConfig.Rt.Composite.HALF_RES_CAMERA_CLOUDS.value(),
+                CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
+                CausticaConfig.Rt.Composite.PARALLAX_QUALITY.value(),
+                CausticaConfig.Rt.Composite.PARALLAX_DISTANCE.value(),
+                CausticaConfig.Rt.Composite.WATER_WAVE_DETAIL.value());
     }
 
     /**
@@ -210,6 +250,7 @@ public final class RtRecommendedSettings {
 
     private static void rememberMeasuredSetup(Minecraft minecraft) {
         runningQuality = CausticaConfig.Rt.DlssRr.QUALITY.value();
+        runningEffects = runningProfile != null && runningProfile.tier() != null ? currentEffects() : null;
         runningWidth = minecraft.getWindow().getWidth();
         runningHeight = minecraft.getWindow().getHeight();
     }
@@ -220,8 +261,10 @@ public final class RtRecommendedSettings {
             finish(minecraft, result, Outcome.MEASURED);
             return;
         }
-        if (CausticaConfig.Rt.DlssRr.QUALITY.value() != runningQuality) {
-            // The player picked a DLSS mode during the measurement: theirs stands, nothing more is changed.
+        if (CausticaConfig.Rt.DlssRr.QUALITY.value() != runningQuality || runningEffects != null
+                && !RtPerfSweep.INSTANCE.running() && !runningEffects.equals(currentEffects())) {
+            // The player picked a DLSS mode or changed a tier setting during the measurement: theirs
+            // stands, nothing more is changed. (The F8 test changes them itself and puts them back.)
             RtCalibration.INSTANCE.disarm();
             finish(minecraft, null, Outcome.PLAYER_CHOSE);
             return;
@@ -254,9 +297,14 @@ public final class RtRecommendedSettings {
         runningHardware = null;
         runningProfile = null;
         runningReason = null;
+        RtRecommendedProfile.Effects measuredEffects = runningEffects;
+        runningEffects = null;
 
         int measuredQuality = runningQuality;
         int quality = CausticaConfig.Rt.DlssRr.QUALITY.value();
+        // The tier the minute ran at; it stays unless the measurement moves it one step lighter.
+        RtRecommendedProfile.Tier measuredTier = measuredEffects != null ? profile.tier() : null;
+        RtRecommendedProfile.Tier tier = measuredTier;
         // Frame generation only where the driver, now that NGX is up, still says it runs (the button may
         // have been pressed on the title screen, before NGX was up, on the GPU's name alone).
         NgxLibrary lib = NgxRuntime.INSTANCE.library();
@@ -270,14 +318,18 @@ public final class RtRecommendedSettings {
                         result.frameMs(), result.traceShare());
         boolean slowGpu = outcome == Outcome.TIMED_OUT && RtCalibration.INSTANCE.heldByGovernor();
         if (outcome == Outcome.PLAYER_CHOSE) {
-            decision = "the player chose the DLSS mode during the measurement; kept it";
+            decision = "the player changed the DLSS mode or a tier setting during the measurement; kept it";
             message = Component.translatable("caustica.options.rt.recommended.kept.message");
-        } else if (slowGpu && profile.useDlss()) {
+        } else if (slowGpu && (profile.useDlss() || measuredTier != null)) {
             // The TDR guard never let this GPU trace at the configured settings: as light as it goes.
-            quality = RtRecommendedProfile.lightestQuality(hardware.outputHeight());
-            decision = "the GPU never reached the configured samples and bounces; lightest mode";
-            message = Component.translatable("caustica.options.rt.recommended.slow.message",
-                    Component.translatable("caustica.options.rt.dlssQuality." + quality));
+            if (profile.useDlss()) {
+                quality = RtRecommendedProfile.lightestQuality(hardware.outputHeight());
+            }
+            if (measuredTier != null) {
+                tier = RtRecommendedProfile.Tier.LOW;
+            }
+            decision = "the GPU never reached the configured samples and bounces; lightest mode and tier";
+            message = Component.translatable("caustica.options.rt.recommended.slow.message");
         } else if (measurement == null) {
             decision = "no clean minute of play in time; kept the estimate";
             message = Component.translatable("caustica.options.rt.recommended.estimated.message");
@@ -289,14 +341,18 @@ public final class RtRecommendedSettings {
             decision = "measured in a window much smaller than the screen; kept the estimate";
             message = Component.translatable("caustica.options.rt.recommended.estimated.message");
         } else {
-            quality = RtRecommendedProfile.calibratedQuality(measurement, hardware.outputWidth(),
-                    hardware.outputHeight(), fgForBudget);
-            decision = "measured";
-            message = Component.translatable("caustica.options.rt.recommended.done.message",
-                    Component.translatable("caustica.options.rt.dlssQuality." + quality));
+            RtRecommendedProfile.Choice choice = RtRecommendedProfile.calibrated(measurement, measuredTier,
+                    hardware.outputWidth(), hardware.outputHeight(), fgForBudget);
+            quality = choice.quality();
+            tier = choice.tier();
+            decision = tier != measuredTier ? "measured; one tier lighter" : "measured";
+            message = doneMessage(tier, quality);
         }
         if (profile.useDlss()) {
             CausticaConfig.Rt.DlssRr.QUALITY.set(quality);
+        }
+        if (tier != null && tier != measuredTier) {
+            applyEffects(tier.effects());
         }
         if (frameGeneration) {
             CausticaConfig.Rt.Fg.ENABLED.set(true);
@@ -310,7 +366,7 @@ public final class RtRecommendedSettings {
                 result.heapAfterGcShare(), heapMax, physical);
         CausticaMod.LOGGER.info("Recommended settings ({}): {}. GPU '{}', SMs={}, videoMemory={} MiB, cpuThreads={}, "
                         + "memory={} MiB, javaHeapMax={} MiB; measured at {} {}x{} for target {}x{}: {}; skipped "
-                        + "frames: {} -> dlssQuality={}, frameGeneration={}{}",
+                        + "frames: {} -> dlssQuality={}, tier={}{}, frameGeneration={}{}",
                 reason, decision, RtDeviceBringup.gpuName(), RtDeviceBringup.gpuSmCount(),
                 RtDeviceBringup.gpuDeviceLocalBytes() >> 20, Runtime.getRuntime().availableProcessors(),
                 physical >> 20, heapMax >> 20, RtRecommendedProfile.qualityName(measuredQuality), runningWidth,
@@ -323,6 +379,7 @@ public final class RtRecommendedSettings {
                                 : String.format(Locale.ROOT, "%.0f%%", result.heapAfterGcShare() * 100.0)),
                 result != null ? result.skipped() : RtCalibration.INSTANCE.skippedSummary(),
                 profile.useDlss() ? RtRecommendedProfile.qualityName(quality) : "unchanged",
+                RtRecommendedProfile.tierName(tier), tier != null ? " " + tier.effects() : "",
                 CausticaConfig.Rt.Fg.ENABLED.value(),
                 heapAdvice > 0 ? ", suggest a Java heap of " + heapAdvice + " GiB" : "");
 
@@ -332,6 +389,15 @@ public final class RtRecommendedSettings {
                     Component.translatable("caustica.options.rt.recommended.memory.message",
                             Integer.toString(heapAdvice)));
         }
+    }
+
+    /** "Graphics: High, DLSS: Balanced", or just the DLSS mode when the tier was left alone. */
+    private static Component doneMessage(RtRecommendedProfile.Tier tier, int quality) {
+        Component mode = Component.translatable("caustica.options.rt.dlssQuality." + quality);
+        return tier == null
+                ? Component.translatable("caustica.options.rt.recommended.done.message", mode)
+                : Component.translatable("caustica.options.rt.recommended.doneTier.message",
+                        Component.translatable("caustica.options.rt.recommended.tier." + tier.key()), mode);
     }
 
     private static long physicalMemoryBytes() {

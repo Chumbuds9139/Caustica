@@ -35,18 +35,27 @@ SHARED_KEYS = {
 }
 # These are also valid local words/loanwords, not untranslated English fallbacks.
 LOCAL_SHARED_KEYS = {
-    "de_de": {"rt.debugView.2", "rt.bloomHeader", "rt.bloomQuality.ultra"},
+    "de_de": {
+        "rt.debugView.2", "rt.bloomHeader", "rt.bloomQuality.ultra",
+        "rt.recommended.tier.standard", "rt.recommended.tier.ultra",
+    },
     "es_es": {
         "rt.generalHeader", "rt.exposureMode.manual", "rt.upscaler.fsr3",
         "rt.upscaler.xess", "rt.debugView.2", "voxy.chunks",
-        "rt.bloomQuality.ultra", "rt.dofFocusMode.manual",
+        "rt.bloomQuality.ultra", "rt.dofFocusMode.manual", "rt.recommended.tier.ultra",
     },
-    "fr_fr": {"rt.exposureMode.auto", "rt.dlssQuality.0", "rt.bloomQuality.ultra"},
-    "it_it": {"rt.exposureMode.auto", "rt.debugView.2", "rt.bloomQuality.ultra"},
+    "fr_fr": {
+        "rt.exposureMode.auto", "rt.dlssQuality.0", "rt.bloomQuality.ultra",
+        "rt.recommended.tier.standard", "rt.recommended.tier.ultra",
+    },
+    "it_it": {
+        "rt.exposureMode.auto", "rt.debugView.2", "rt.bloomQuality.ultra",
+        "rt.recommended.tier.standard", "rt.recommended.tier.ultra",
+    },
     "pt_br": {
         "sharc.header", "rt.exposureMode.manual", "rt.upscaler.fsr3",
         "rt.upscaler.xess", "rt.debugView.2", "voxy.chunks", "rt.bloomHeader",
-        "rt.bloomQuality.ultra", "rt.dofFocusMode.manual",
+        "rt.bloomQuality.ultra", "rt.dofFocusMode.manual", "rt.recommended.tier.ultra",
     },
 }
 

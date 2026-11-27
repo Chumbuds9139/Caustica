@@ -21,10 +21,19 @@ import java.util.Locale;
  * from a minute of measured play ({@code RtCalibration}), against a GPU-time budget taken from the
  * reference: about 36 ms per ray-traced frame, which its player called good with frame generation on.
  *
- * <p>It only turns things on. Volumetric clouds, fog and frame generation are switched on for a DLSS-G
- * GPU and otherwise left as the player set them: a player who chose volumetric clouds chose them to see
- * them. Shader Execution Reordering is never part of it: every device loss seen so far happened in the one
- * dispatch that uses it, and it does not change the image.
+ * <p>Besides the upscaler mode it sets a {@link Tier} of the settings that cost GPU time without being a
+ * feature of their own (samples, bounces, the speed-ups for paths, sky and clouds, light candidates,
+ * parallax and water detail), from Low to Ultra. The reference gets Standard, which is exactly its
+ * player's own setup. The GPU's speed goes to a sharper upscaler mode first and to a heavier tier with
+ * what is left, so a faster card gets both, tuned to the same budget as the reference. The tier is applied
+ * before the minute of measurement, so the minute measures it; afterwards it can only go one step lighter
+ * (a heavier one would be unmeasured). A GPU whose speed is unknown keeps the player's values.
+ *
+ * <p>Features are only turned on, never off. Volumetric clouds, fog and frame generation are switched on
+ * for a DLSS-G GPU and otherwise left as the player set them: a player who chose volumetric clouds chose
+ * them to see them. Shader Execution Reordering is never part of it: every device loss seen so far happened
+ * in the one dispatch that uses it, and it does not change the image. Look settings (brightness, colour,
+ * parallax depth, wave height) are the player's and are not touched, apart from a floor on emissive blocks.
  */
 public final class RtRecommendedProfile {
     /** DLSS / FSR / XeSS quality numbering ({@code dlss-rr.quality}). */
@@ -72,25 +81,87 @@ public final class RtRecommendedProfile {
     }
 
     /**
+     * The settings a {@link Tier} sets: they cost GPU time, and none of them switches a feature off.
+     *
+     * @param spp                      {@code composite.spp}
+     * @param maxBounces               {@code composite.max-bounces}
+     * @param earlyRoulette            {@code composite.early-roulette} (a speed-up: on is cheaper)
+     * @param simpleRoughReflectionSky {@code composite.simple-rough-reflection-sky} (a speed-up)
+     * @param skyCache                 {@code composite.sky-cache} (a speed-up)
+     * @param fastVolumetricClouds     {@code composite.fast-volumetric-clouds} (a speed-up)
+     * @param halfResCameraClouds      {@code composite.half-res-camera-clouds} (a speed-up)
+     * @param risCandidates            {@code lights.ris-candidates}
+     * @param parallaxQuality          {@code composite.parallax-quality}
+     * @param parallaxDistance         {@code composite.parallax-distance}
+     * @param waterWaveDetail          {@code composite.water-wave-detail}
+     */
+    public record Effects(int spp, int maxBounces, boolean earlyRoulette, boolean simpleRoughReflectionSky,
+                          boolean skyCache, boolean fastVolumetricClouds, boolean halfResCameraClouds,
+                          int risCandidates, float parallaxQuality, float parallaxDistance, int waterWaveDetail) {
+    }
+
+    /**
+     * Steps of the cost settings, lightest first. Standard is the reference player's own setup; the cost is
+     * GPU time per ray-traced frame against Standard. The parts measured on the reference with the F8 test:
+     * early path termination off +8.6 ms and fast clouds off +4.4 ms of about 40 ms, sky cache off +0.7,
+     * one bounce fewer -0.8 and half the light candidates -1.4. The rest of each cost is an estimate, and
+     * the minute of measurement settles what it really costs here.
+     */
+    public enum Tier {
+        LOW(0.9, new Effects(1, 3, true, true, true, true, true, 4, 0.5f, 48.0f, 5)),
+        STANDARD(1.0, new Effects(1, 4, true, true, true, true, true, 8, 1.0f, 64.0f, 7)),
+        HIGH(1.25, new Effects(1, 5, true, true, true, false, false, 12, 1.5f, 96.0f, 7)),
+        ULTRA(1.8, new Effects(1, 6, false, false, false, false, false, 16, 2.0f, 128.0f, 7));
+
+        private final double cost;
+        private final Effects effects;
+
+        Tier(double cost, Effects effects) {
+            this.cost = cost;
+            this.effects = effects;
+        }
+
+        public Effects effects() {
+            return effects;
+        }
+
+        double cost() {
+            return cost;
+        }
+
+        /** One step lighter, or Low itself. */
+        public Tier lighter() {
+            return this == LOW ? LOW : values()[ordinal() - 1];
+        }
+
+        /** The translation key suffix of its name. */
+        public String key() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    /**
      * The recommended values. {@link #UNCHANGED} in an int field means "leave it as it is"; a boolean
-     * field means "turn it on" when true and "leave it as it is" when false.
+     * field means "turn it on" when true and "leave it as it is" when false; a null tier means "leave the
+     * cost settings as they are".
      *
      * @param useDlss select DLSS Ray Reconstruction as the upscaler
      * @param dlssQuality {@code dlss-rr.quality}, or {@link #UNCHANGED}
      * @param dlssPreset {@code dlss-rr.preset}, or {@link #UNCHANGED}
+     * @param tier the cost settings to set, or null
      */
     public record Profile(boolean useDlss, int dlssQuality, int dlssPreset, boolean frameGeneration,
                           boolean reflex, boolean sharc, boolean fog, boolean volumetricClouds,
-                          float blockEmissiveAtLeast) {
+                          float blockEmissiveAtLeast, Tier tier) {
         /** One line for the log. */
         public String describe() {
             return String.format(Locale.ROOT,
-                    "upscaler=%s, dlssQuality=%s, dlssPreset=%s, frameGeneration=%s, reflex=%s, sharc=%s, fog=%s, "
-                            + "volumetricClouds=%s, blockEmissiveIntensity>=%.1f",
+                    "upscaler=%s, dlssQuality=%s, dlssPreset=%s, tier=%s, frameGeneration=%s, reflex=%s, sharc=%s, "
+                            + "fog=%s, volumetricClouds=%s, blockEmissiveIntensity>=%.1f",
                     useDlss ? "DLSS" : "unchanged", dlssQuality == UNCHANGED ? "unchanged" : qualityName(dlssQuality),
-                    dlssPreset == UNCHANGED ? "unchanged" : Integer.toString(dlssPreset), onOrUnchanged(frameGeneration),
-                    onOrUnchanged(reflex), onOrUnchanged(sharc), onOrUnchanged(fog), onOrUnchanged(volumetricClouds),
-                    blockEmissiveAtLeast);
+                    dlssPreset == UNCHANGED ? "unchanged" : Integer.toString(dlssPreset), tierName(tier),
+                    onOrUnchanged(frameGeneration), onOrUnchanged(reflex), onOrUnchanged(sharc), onOrUnchanged(fog),
+                    onOrUnchanged(volumetricClouds), blockEmissiveAtLeast);
         }
 
         private static String onOrUnchanged(boolean on) {
@@ -146,22 +217,65 @@ public final class RtRecommendedProfile {
         if (!measuredNearTarget(m, targetWidth, targetHeight)) {
             return m.quality();
         }
-        int width = Math.max(targetWidth, 1);
-        int height = Math.max(targetHeight, 1);
-        double budget = frameGeneration ? BUDGET_MS_WITH_FG : BUDGET_MS_WITHOUT_FG;
-        double trace = m.frameMs() * Math.clamp(m.traceShare(), 0.0, 1.0);
-        double rest = m.frameMs() - trace;
-        double measuredPixels = Math.max(renderPixels(m.quality(), m.outputWidth(), m.outputHeight()), 1L);
-        double outputRatio = (double) width * height / Math.max((double) m.outputWidth() * m.outputHeight(), 1.0);
-        int[] candidates = candidates(height);
+        int[] candidates = candidates(Math.max(targetHeight, 1));
         for (int quality : candidates) {
-            double predicted = rest * outputRatio + trace * renderPixels(quality, width, height) / measuredPixels;
-            double limit = budget * (rank(quality) > rank(m.quality()) ? SHARPER_MARGIN : BUDGET_TOLERANCE);
-            if (predicted <= limit) {
+            if (fits(m, quality, targetWidth, targetHeight, frameGeneration)) {
                 return quality;
             }
         }
         return candidates[candidates.length - 1];
+    }
+
+    /** Whether a mode is predicted to fit the budget, with the room a mode sharper than the measured one needs. */
+    private static boolean fits(Measurement m, int quality, int targetWidth, int targetHeight, boolean frameGeneration) {
+        double budget = frameGeneration ? BUDGET_MS_WITH_FG : BUDGET_MS_WITHOUT_FG;
+        double limit = budget * (rank(quality) > rank(m.quality()) ? SHARPER_MARGIN : BUDGET_TOLERANCE);
+        return predictedMs(m, quality, targetWidth, targetHeight) <= limit;
+    }
+
+    /** GPU time per ray-traced frame predicted for a mode at the target size, from a measurement. */
+    static double predictedMs(Measurement m, int quality, int targetWidth, int targetHeight) {
+        int width = Math.max(targetWidth, 1);
+        int height = Math.max(targetHeight, 1);
+        double trace = m.frameMs() * Math.clamp(m.traceShare(), 0.0, 1.0);
+        double rest = m.frameMs() - trace;
+        double measuredPixels = Math.max(renderPixels(m.quality(), m.outputWidth(), m.outputHeight()), 1L);
+        double outputRatio = (double) width * height / Math.max((double) m.outputWidth() * m.outputHeight(), 1.0);
+        return rest * outputRatio + trace * renderPixels(quality, width, height) / measuredPixels;
+    }
+
+    /** The upscaler mode and tier settled from the measurement. */
+    public record Choice(int quality, Tier tier) {
+    }
+
+    /**
+     * The upscaler mode and tier from a measurement taken at {@code tier}. The tier stays when the measured
+     * mode or a sharper one fits. Otherwise the tier goes one step lighter, which keeps the mode if that is
+     * enough and otherwise takes the mode that fits the lighter tier; the tier never goes heavier than what
+     * was measured. A null tier stays null.
+     */
+    public static Choice calibrated(Measurement m, Tier tier, int targetWidth, int targetHeight,
+                                    boolean frameGeneration) {
+        int quality = calibratedQuality(m, targetWidth, targetHeight, frameGeneration);
+        boolean keep = tier == null || tier == Tier.LOW || !measuredNearTarget(m, targetWidth, targetHeight)
+                || rank(quality) >= rank(m.quality()) && fits(m, quality, targetWidth, targetHeight, frameGeneration);
+        if (keep) {
+            return new Choice(quality, tier);
+        }
+        Tier lighter = tier.lighter();
+        // The tiers' costs are measured against the whole frame; the saving comes out of the trace passes.
+        double saved = m.frameMs() * (1.0 - lighter.cost() / tier.cost());
+        double trace = m.frameMs() * Math.clamp(m.traceShare(), 0.0, 1.0);
+        double lighterTrace = Math.max(trace - saved, 0.0);
+        double lighterFrame = m.frameMs() - trace + lighterTrace;
+        Measurement scaled = new Measurement(m.quality(), m.outputWidth(), m.outputHeight(), lighterFrame,
+                lighterFrame > 0.0 ? lighterTrace / lighterFrame : 0.0);
+        int lighterQuality = calibratedQuality(scaled, targetWidth, targetHeight, frameGeneration);
+        // Stepping down because the measured setup was too heavy never ends sharper than what was measured.
+        if (rank(lighterQuality) > rank(m.quality())) {
+            lighterQuality = m.quality();
+        }
+        return new Choice(lighterQuality, lighter);
     }
 
     /** Sharper modes rank higher. */
@@ -211,9 +325,10 @@ public final class RtRecommendedProfile {
         // DLSS-G means an RTX 40 or 50: at least as fast as the reference, with frame generation to
         // double what is shown, so it gets the reference's whole look. Anywhere else those are left alone.
         boolean full = hw.rayReconstruction() && hw.dlssFrameGeneration();
+        int quality = hw.rayReconstruction() ? dlssQuality(hw) : UNCHANGED;
         return new Profile(
                 hw.rayReconstruction(),
-                hw.rayReconstruction() ? dlssQuality(hw) : UNCHANGED,
+                quality,
                 // Preset F is heavier on RTX 20 and 30, which lack the FP8 units it is built for.
                 full ? PRESET_F : UNCHANGED,
                 full,
@@ -223,7 +338,37 @@ public final class RtRecommendedProfile {
                 full,
                 full,
                 // Not a cost: placed lights read too dark below this on any GPU (also the default now).
-                MIN_BLOCK_EMISSIVE);
+                MIN_BLOCK_EMISSIVE,
+                quality != UNCHANGED && speedKnown(hw) ? tier(hw, quality) : null);
+    }
+
+    /**
+     * Whether {@link #speed} rests on something: the SM count, or DLSS-G, which only the reference's
+     * generation and later have. Without either (AMD, Intel, an unidentified card) the cost settings are
+     * left as the player set them rather than guessed down.
+     */
+    static boolean speedKnown(Hardware hw) {
+        return hw.smCount() > 0 || hw.dlssFrameGeneration();
+    }
+
+    /**
+     * The heaviest tier this GPU's speed still covers once the upscaler mode has taken its share: a sharper
+     * mode comes first, and what is left goes to the cost settings.
+     */
+    static Tier tier(Hardware hw, int quality) {
+        long pixels = Math.max(renderPixels(quality, Math.max(hw.outputWidth(), 1), Math.max(hw.outputHeight(), 1)), 1L);
+        double left = REFERENCE_RENDER_PIXELS * speed(hw) / pixels;
+        Tier best = Tier.LOW;
+        for (Tier tier : Tier.values()) {
+            if (tier.cost() <= left + 1e-9) {
+                best = tier;
+            }
+        }
+        return best;
+    }
+
+    static String tierName(Tier tier) {
+        return tier == null ? "unchanged" : tier.key();
     }
 
     /** GPU speed against the reference, from the SM count; 1 when it is unknown. */

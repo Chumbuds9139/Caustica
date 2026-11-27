@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.client;
 
+import dev.comfyfluffy.caustica.client.RtRecommendedProfile.Tier;
 import org.junit.jupiter.api.Test;
 
 import static dev.comfyfluffy.caustica.client.RtRecommendedProfile.BALANCED;
@@ -10,6 +11,7 @@ import static dev.comfyfluffy.caustica.client.RtRecommendedProfile.ULTRA_PERFORM
 import static dev.comfyfluffy.caustica.client.RtRecommendedProfile.UNCHANGED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RtRecommendedProfileTest {
@@ -141,6 +143,125 @@ class RtRecommendedProfileTest {
         RtRecommendedProfile.Measurement maximised = new RtRecommendedProfile.Measurement(PERFORMANCE, 1921, 1080,
                 30.0, 0.85);
         assertTrue(RtRecommendedProfile.measuredNearTarget(maximised, 1920, 1080));
+    }
+
+    @Test
+    void theReferenceGetsStandardWhichIsItsPlayersOwnSetup() {
+        RtRecommendedProfile.Profile p = RtRecommendedProfile.recommend(rtx40(20, true, 1920, 1080));
+        assertEquals(Tier.STANDARD, p.tier());
+        // The cost settings of the reference player's own config.
+        assertEquals(new RtRecommendedProfile.Effects(1, 4, true, true, true, true, true, 8, 1.0f, 64.0f, 7),
+                p.tier().effects());
+    }
+
+    @Test
+    void fasterCardsGetASharperModeFirstThenAHeavierTier() {
+        assertEquals(Tier.LOW, RtRecommendedProfile.recommend(rtx30(20, true, 1920, 1080)).tier());
+        assertEquals(Tier.STANDARD, RtRecommendedProfile.recommend(rtx30(82, false, 2560, 1440)).tier());
+        assertEquals(Tier.HIGH, RtRecommendedProfile.recommend(rtx40(46, false, 1920, 1080)).tier());
+        assertEquals(Tier.ULTRA, RtRecommendedProfile.recommend(rtx40(76, false, 1920, 1080)).tier());
+        // At 4K even the largest card spends its speed on pixels.
+        assertEquals(Tier.STANDARD, RtRecommendedProfile.recommend(rtx40(170, false, 3840, 2160)).tier());
+        // A small screen leaves the reference GPU room for more.
+        assertEquals(Tier.HIGH, RtRecommendedProfile.recommend(rtx40(20, true, 1280, 720)).tier());
+    }
+
+    @Test
+    void moreSmsNeverGiveALighterSetup() {
+        int[][] screens = {{1920, 1080}, {2560, 1440}, {3840, 2160}, {1280, 720}};
+        for (boolean laptop : new boolean[] {true, false}) {
+            for (boolean dlssg : new boolean[] {true, false}) {
+                for (int[] screen : screens) {
+                    int lastRank = -1;
+                    int lastTier = -1;
+                    for (int sms = 8; sms <= 200; sms++) {
+                        RtRecommendedProfile.Profile p = RtRecommendedProfile.recommend(
+                                new RtRecommendedProfile.Hardware(true, dlssg, true, sms, laptop, screen[0], screen[1]));
+                        int rank = RtRecommendedProfile.rank(p.dlssQuality());
+                        int tier = p.tier().ordinal();
+                        // The mode never gets lighter; the tier only gets lighter when the mode gets sharper.
+                        assertTrue(rank > lastRank || rank == lastRank && tier >= lastTier,
+                                "sms=" + sms + " laptop=" + laptop + " dlssg=" + dlssg + " " + screen[0] + "x" + screen[1]);
+                        lastRank = rank;
+                        lastTier = tier;
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void noTierSwitchesAFeatureOff() {
+        for (Tier tier : Tier.values()) {
+            RtRecommendedProfile.Effects e = tier.effects();
+            assertTrue(e.spp() >= 1);
+            assertTrue(e.maxBounces() >= 2);
+            assertTrue(e.risCandidates() > 0, "0 light candidates would switch the light sampling off");
+            assertTrue(e.waterWaveDetail() >= 1);
+            assertTrue(e.parallaxDistance() >= 16.0f && e.parallaxQuality() >= 0.25f);
+        }
+        for (int sms : new int[] {0, 8, 20, 46, 128}) {
+            RtRecommendedProfile.Profile p = RtRecommendedProfile.recommend(rtx40(sms, false, 2560, 1440));
+            assertTrue(p.frameGeneration() && p.fog() && p.volumetricClouds() && p.sharc());
+        }
+        for (int i = 1; i < Tier.values().length; i++) {
+            assertTrue(Tier.values()[i].cost() > Tier.values()[i - 1].cost());
+        }
+    }
+
+    @Test
+    void anUnknownSpeedLeavesTheCostSettingsAlone() {
+        // No SM count and no DLSS-G to go by: the player's values stay.
+        assertNull(RtRecommendedProfile.recommend(
+                new RtRecommendedProfile.Hardware(true, false, false, 0, false, 1920, 1080)).tier());
+        assertNull(RtRecommendedProfile.recommend(
+                new RtRecommendedProfile.Hardware(false, false, false, 0, false, 2560, 1440)).tier());
+        // DLSS-G alone counts as the reference.
+        assertEquals(Tier.STANDARD, RtRecommendedProfile.recommend(rtx40(0, false, 1920, 1080)).tier());
+    }
+
+    @Test
+    void theReferenceMeasurementKeepsStandard() {
+        RtRecommendedProfile.Measurement before = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                37.65, (28.28 + 3.95) / 37.65);
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
+                RtRecommendedProfile.calibrated(before, Tier.STANDARD, 1920, 1080, true));
+    }
+
+    @Test
+    void roomToSpareGoesToTheModeNeverToAnUnmeasuredTier() {
+        RtRecommendedProfile.Measurement fast = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                15.0, 0.85);
+        assertEquals(new RtRecommendedProfile.Choice(QUALITY, Tier.STANDARD),
+                RtRecommendedProfile.calibrated(fast, Tier.STANDARD, 1920, 1080, true));
+    }
+
+    @Test
+    void tooHeavyGoesOneTierLighterAndKeepsTheModeWhenThatIsEnough() {
+        // Measured at Balanced and Ultra, a little over: High keeps Balanced.
+        RtRecommendedProfile.Measurement over = new RtRecommendedProfile.Measurement(BALANCED, 1920, 1080,
+                42.0, 0.85);
+        assertEquals(new RtRecommendedProfile.Choice(BALANCED, Tier.HIGH),
+                RtRecommendedProfile.calibrated(over, Tier.ULTRA, 1920, 1080, true));
+        // Over at Performance, already the lightest mode at 1080p: the tier goes down instead.
+        RtRecommendedProfile.Measurement overLightest = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920,
+                1080, 42.0, 0.85);
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
+                RtRecommendedProfile.calibrated(overLightest, Tier.HIGH, 1920, 1080, true));
+    }
+
+    @Test
+    void farTooHeavyLowersBothButTheTierOnlyOneStep() {
+        RtRecommendedProfile.Measurement way = new RtRecommendedProfile.Measurement(BALANCED, 1920, 1080,
+                70.0, 0.85);
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
+                RtRecommendedProfile.calibrated(way, Tier.HIGH, 1920, 1080, true));
+        // Low is as light as it goes.
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.LOW),
+                RtRecommendedProfile.calibrated(way, Tier.LOW, 1920, 1080, true));
+        // Without a tier, only the mode moves.
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, null),
+                RtRecommendedProfile.calibrated(way, null, 1920, 1080, true));
     }
 
     @Test
