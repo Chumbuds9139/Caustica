@@ -806,9 +806,11 @@ public float3 handLightIrradiance(float3 origin, float3 hitPos, float3 n, bool t
 
 // Night vision's fill light (WorldPush.nightVision). Vanilla lifts every lightmap value to at least
 // NIGHT_VISION_COLOR * intensity, so nothing in view falls below a dim grey however dark it is. Ray tracing
-// never samples the lightmap, so this adds the same lift as irradiance on the surfaces the camera sees
-// instead. Daylight is effectively unchanged (the sun alone is about twenty times this), while caves and
-// night scenes get enough light for auto exposure to bring them up.
+// never samples the lightmap, so this adds a lift as irradiance on the surfaces the camera sees instead.
+// The CPU sizes it against the display exposure (RtComposite.nightVisionPush): it shows at a fixed, dim
+// brightness on screen, so at night it stays near moonlight and leaves moon shadows readable (night
+// vision also raises the auto-exposure ceiling, which brings the real light up), next to torches it grows
+// so dark corners stay visible, and in daylight it is capped well under the sun.
 //
 // A uniform lift flattens everything it dominates, so it keeps the two cues vanilla's floor keeps:
 //  - Face shade. Vanilla multiplies the floor by its per-face shade, so weight by the normal the same way,

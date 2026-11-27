@@ -22,6 +22,8 @@ public final class RtExposure {
     private RtExposurePipeline pipeline;
     private boolean logged;
     private long lastFrameNanos;
+    // EV added to the auto-exposure ceiling this frame (night vision; see RtComposite.nightVisionPush).
+    private float maxEvLift;
 
     public RtImage image() {
         return image;
@@ -29,6 +31,28 @@ public final class RtExposure {
 
     public boolean ready() {
         return image != null;
+    }
+
+    /** Raise the auto-exposure ceiling by {@code ev} from the next resolve on (0 = the configured ceiling). */
+    public void setMaxEvLift(float ev) {
+        maxEvLift = Float.isFinite(ev) ? Math.max(ev, 0.0f) : 0.0f;
+    }
+
+    /**
+     * The exposure scale the display applies now: the manual value, or auto exposure's latest resolve
+     * (read back from its host-visible state, one or two frames old). Falls back to the manual value,
+     * the auto history's own seed, until auto exposure has resolved once.
+     */
+    public float appliedExposure() {
+        if (mode() != Mode.AUTO || state == null || state.mapped == 0L) {
+            return manualExposureScale();
+        }
+        state.invalidate(0L, 2L * Integer.BYTES);
+        if (MemoryUtil.memGetInt(state.mapped + Integer.BYTES) == 0) {
+            return manualExposureScale();
+        }
+        float value = MemoryUtil.memGetFloat(state.mapped);
+        return Float.isFinite(value) && value > 0.0f ? value : manualExposureScale();
     }
 
     public void ensureResources(RtContext ctx) {
@@ -151,11 +175,11 @@ public final class RtExposure {
         return CausticaConfig.Rt.Exposure.MANUAL_EV.value();
     }
 
-    private static AutoConfig autoConfig() {
+    private AutoConfig autoConfig() {
         return new AutoConfig(
                 CausticaConfig.Rt.Exposure.KEY.value(),
                 CausticaConfig.Rt.Exposure.minEv(),
-                CausticaConfig.Rt.Exposure.maxEv(),
+                CausticaConfig.Rt.Exposure.maxEv() + maxEvLift,
                 CausticaConfig.Rt.Exposure.ADAPT_UP.value(),
                 CausticaConfig.Rt.Exposure.ADAPT_DOWN.value(),
                 manualEv());

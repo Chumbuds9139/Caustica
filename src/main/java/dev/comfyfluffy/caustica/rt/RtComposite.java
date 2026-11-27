@@ -126,9 +126,19 @@ public final class RtComposite {
     private static final int READY_MASK_OFFSET = (WORLD_PUSH_SIZE + 15) & ~15;
     // Covers a 257x257x48-section window (render distance 128) with room to spare.
     private static final int READY_MASK_CAPACITY = 512 * 1024;
-    // Night vision's fill irradiance per unit of linearised NIGHT_VISION_COLOR at full intensity. The default
-    // colour (0.6 grey, about 0.32 linear) comes out near 0.9: see nightVisionPush.
-    private static final float NIGHT_VISION_FILL_IRRADIANCE = 2.8f;
+    // Night vision (see nightVisionPush). The floor is display-referred: per unit of linearised
+    // NIGHT_VISION_COLOR at full intensity its irradiance is NIGHT_VISION_FLOOR divided by the exposure the
+    // display applies, so it shows at the same brightness on screen however bright the real light around it
+    // is. With the default colour (0.6 grey, about 0.32 linear) a white top face lit by the floor alone reads
+    // about 0.12 before tone mapping, under the auto-exposure key (0.18): at or above the key, auto exposure
+    // would sink the real light under the floor and flatten the scene again.
+    private static final float NIGHT_VISION_FLOOR = 1.2f;
+    // The floor's ceiling in scene terms: the old fixed fill. In daylight the exposure is low and the
+    // display-referred floor would otherwise grow far past it and lift every shadow.
+    private static final float NIGHT_VISION_FILL_MAX = 2.8f;
+    // EV added to the auto-exposure ceiling at full intensity, so a moonlit scene can be exposed up to
+    // where its moonlight and its shadows read, instead of being brightened by the floor alone.
+    private static final float NIGHT_VISION_EV_LIFT = 2.0f;
     // Vanilla's authored classic cloud shape (RtCloudCells): a bit-packed clouds.png occupancy bitmap
     // riding the same ring slot, addressed from WorldPush.cloudCellsAddr exactly like the ready mask
     // above is addressed from the push constants — no extra binding, one flush covers all three.
@@ -3165,18 +3175,26 @@ public final class RtComposite {
      * (face-shaded and occluded within two blocks, see nightVisionIrradiance in lighting.slang), w = the
      * effect's intensity (0 = off). Intensity and colour follow vanilla's LightmapRenderStateExtractor exactly:
      * Night Vision gives 1.0, pulsing over its last ten seconds via {@link GameRenderer#nightVisionScale};
-     * otherwise Conduit Power gives the player's water vision while underwater. Vanilla turns that into a floor
-     * of NIGHT_VISION_COLOR * intensity under the lightmap (lightmap.fsh: max(AmbientColor, NightVisionColor *
-     * NightVisionFactor)); ray tracing has no lightmap, so the raygen adds it as light instead.
+     * otherwise Conduit Power gives the player's water vision while underwater.
      *
-     * <p>{@link #NIGHT_VISION_FILL_IRRADIANCE} sets how bright that light is next to the scene's real lights. The
-     * default colour (0.6 grey) comes out at about 0.9 once linearised, a dim fill: enough to see a cave by, while the sun's
-     * irradiance (around 21 at noon) leaves daylight scenes practically unchanged.
+     * <p>Vanilla turns that into a floor of NIGHT_VISION_COLOR * intensity under its lightmap; ray tracing has
+     * no lightmap. A fixed fill bright enough to see a cave by was about twelve times the full moon, so it
+     * washed out every moon shadow and the difference between near and far, worst on flat sand. So night
+     * vision does two things here instead:
+     * <ul>
+     *   <li>It raises the auto-exposure ceiling by {@link #NIGHT_VISION_EV_LIFT} EV, so the light that is
+     *   there (moonlight, torches) is amplified with its shadows intact.</li>
+     *   <li>The fill becomes a display-referred floor ({@link #NIGHT_VISION_FLOOR} over the applied exposure,
+     *   capped at {@link #NIGHT_VISION_FILL_MAX}): at night it shrinks to moonlight scale and keeps out of the
+     *   way, next to torches it grows so a dark corridor is still visible, and in a pitch-black cave it is
+     *   what there is to see.</li>
+     * </ul>
      */
-    private static Float4 nightVisionPush() {
+    private Float4 nightVisionPush() {
         Minecraft mc = Minecraft.getInstance();
         var player = mc.player;
         if (player == null) {
+            exposure.setMaxEvLift(0.0f);
             return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
@@ -3188,11 +3206,14 @@ public final class RtComposite {
             intensity = waterVision > 0.0f && player.hasEffect(MobEffects.CONDUIT_POWER) ? waterVision : 0.0f;
         }
         if (!(intensity > 0.0f)) {
+            exposure.setMaxEvLift(0.0f);
             return new Float4(0.0f, 0.0f, 0.0f, 0.0f);
         }
+        exposure.setMaxEvLift(NIGHT_VISION_EV_LIFT * intensity);
         var color = mc.gameRenderer.mainCamera().attributeProbe()
                 .getValue(EnvironmentAttributes.NIGHT_VISION_COLOR, partial);
-        float scale = NIGHT_VISION_FILL_IRRADIANCE * intensity;
+        float applied = Math.max(exposure.appliedExposure(), 1.0e-4f);
+        float scale = intensity * Math.min(NIGHT_VISION_FLOOR / applied, NIGHT_VISION_FILL_MAX);
         return new Float4(srgbToLinear(color.x()) * scale, srgbToLinear(color.y()) * scale,
                 srgbToLinear(color.z()) * scale, intensity);
     }
