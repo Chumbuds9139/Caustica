@@ -29,11 +29,11 @@
   brightest, undersides darkest) and darker in corners, at the foot of walls and under overhangs, like
   vanilla's smooth lighting. It uses the dimension's night-vision colour, and the effect flickers out over
   its last ten seconds like vanilla. Conduit Power does the same underwater.
-- **Spectators inside blocks see into caves again.** Vanilla hides the back faces of blocks, which is
-  what lets a spectator inside stone see the caves around them. Caustica drew every face from both
-  sides, so the view showed the back of each cave's nearest wall instead. While a spectator's eye is
-  inside a solid block, camera rays now pass through the back faces of blocks and fluids as in vanilla.
-  Distant Horizons/Voxy terrain is not changed yet.
+- **A camera inside blocks sees into caves again**, in spectator mode and with a free-camera mod in
+  any game mode. Vanilla hides the back faces of blocks, which is what lets a camera inside stone see
+  the caves around it. Caustica drew every face from both sides, so the view showed the back of each
+  cave's nearest wall instead. While the camera is inside a solid block, camera rays now pass through the
+  back faces of blocks and fluids as in vanilla. Distant Horizons/Voxy terrain is not changed yet.
 - **DLSS Frame Generation recovers from black generated frames by itself.** Every generated frame
   could come out black, flickering against the real ones until frame generation was switched off and
   on. In the one log that shows it, the only unusual event just before was a hit the hit guards had to

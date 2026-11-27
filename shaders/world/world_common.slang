@@ -386,8 +386,8 @@ public static const float STORM_GREY_MIX = 0.35;
 public static const uint WORLD_FLAG_SUBMERGED = 1u; // bit0: the eye is inside a water volume
 public static const uint WORLD_FLAG_WAVES = 16u;   // bit4: animated geometric water waves
 public static const uint WORLD_FLAG_POM_SMOOTHING = 32u; // bit5: bilinear LabPBR normal/surface sampling
-// bit6: a spectator's eye is inside a solid-rendering block (vanilla's own test, Camera: isSpectator() &&
-// isSolidRender()). Camera rays then skip terrain back faces; see PAYLOAD_SKIP_TERRAIN_BACK_FACES.
+// bit6: the camera is inside a solid-rendering block (spectator, or a free-camera mod in any game mode).
+// Camera rays then skip terrain back faces; see PAYLOAD_SKIP_TERRAIN_BACK_FACES.
 public static const uint WORLD_FLAG_CAMERA_IN_SOLID = 64u;
 // POM walks the LabPBR height field as a grid of per-texel box columns (world.rchit parallaxTrace), so
 // the walk is bounded by texel crossings rather than by a fixed layer count: a head-on view resolves in
@@ -699,7 +699,7 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
-    public uint  flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source, bit 7 emitter-in-list, bit 8 dynamic entity, bit 9 weather, bit 10 end-portal unlit, bit 11 ray still in water (miss), bit 12 rain-exposed water (hit), bit 14 ray-traced viewmodel, bits 20-21 spectator back-face skip (request, answer).
+    public uint  flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source, bit 7 emitter-in-list, bit 8 dynamic entity, bit 9 weather, bit 10 end-portal unlit, bit 11 ray still in water (miss), bit 12 rain-exposed water (hit), bit 14 ray-traced viewmodel, bits 20-21 camera-in-solid back-face skip (request, answer).
     public uint   roughMetal;  // packHalf2x16(roughness, metalness)
     public uint   emissionSss; // packHalf2x16(emission, sss)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
@@ -748,8 +748,8 @@ public static const uint PAYLOAD_CAMERA_RAY = 262144u;
 // world.rmiss: this miss fills a camera cloud buffer texel (world_primary.rgen): it returns the cloud deck
 // alone, scatter in albedo and transmittance in normal.x, instead of the sky.
 public static const uint PAYLOAD_CLOUD_BUFFER_BUILD = 524288u;
-// Spectator inside a solid block (WORLD_FLAG_CAMERA_IN_SOLID), camera rays only: vanilla culls the back
-// faces of terrain, which is what lets a spectator inside stone see into the caves around them; ray tracing
+// Camera inside a solid block (WORLD_FLAG_CAMERA_IN_SOLID), camera rays only: vanilla culls the back
+// faces of terrain, which is what lets a camera inside stone see into the caves around it; ray tracing
 // treats every face as two-sided, so the camera saw the back of each cave's near wall instead. Set by
 // raygen on the trace; world.rchit answers a back-facing terrain hit with only its distance and
 // PAYLOAD_TERRAIN_BACK_FACE, and trace.slang re-traces from just beyond it. See traceRadianceMiss.

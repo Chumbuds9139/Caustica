@@ -2016,10 +2016,12 @@ public final class RtComposite {
                 if (fs.is(FluidTags.WATER) && camY < cameraBlockPos.getY() + fs.getHeight(level, cameraBlockPos)) {
                     flags |= 0b01;
                 }
-                // bit6: a spectator's eye inside a solid block, by vanilla's own test (Camera's smartCull
-                // rule). Camera rays then see past terrain back faces, as vanilla's culling lets them.
-                var player = Minecraft.getInstance().player;
-                if (player != null && player.isSpectator() && level.getBlockState(cameraBlockPos).isSolidRender()) {
+                // bit6: the camera is inside a solid-rendering block. Camera rays then see past terrain back
+                // faces, as vanilla's culling lets them. Not gated on spectator mode: vanilla culls back faces
+                // in every game mode, and a free-camera mod puts the camera inside stone while the player is
+                // in survival or creative. Outside those, the eye is only in a block while suffocating, where
+                // the in-wall overlay covers the screen anyway.
+                if (level.getBlockState(cameraBlockPos).isSolidRender()) {
                     flags |= 0b1000000;
                 }
             }

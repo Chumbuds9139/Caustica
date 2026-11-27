@@ -191,7 +191,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex,
         gv_cheapMedia = showCelestial && !mediaFull;
         bool cameraRay = bounce == 0 && seg.bounce == 0;
         gv_cameraRay = cameraRay;
-        // Same back-face skip as pass A's trace of this ray (spectator inside a solid block). It runs
+        // Same back-face skip as pass A's trace of this ray (camera inside a solid block). It runs
         // through the ordinary trace below: the re-traces need the payload straight after each hit.
         gv_skipTerrainBackFaces = cameraRay && cameraInSolidBlock();
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to

@@ -948,7 +948,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     float3 n = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
 
-    // Spectator inside a solid block: a camera ray that reached the back of a terrain face reports only
+    // Camera inside a solid block: a camera ray that reached the back of a terrain face reports only
     // where, so trace.slang can carry on beyond it the way vanilla's back-face culling would. Block faces
     // are wound outward (the mesher's coplanar resolve depends on that too), and so are fluid faces:
     // RtFluidMesher drops vanilla's reversed copies. Skipping a fluid's back face also keeps a ray that

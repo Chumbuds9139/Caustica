@@ -29,7 +29,7 @@ public static uint gv_secondaryCull = CULL_SECONDARY;
 public static bool gv_cheapMedia = false;
 // Raygen sets this for pass B's trace of a camera ray; it travels as PAYLOAD_CAMERA_RAY (F8 probes only).
 public static bool gv_cameraRay = false;
-// Raygen sets this around a camera ray's trace while a spectator's eye is inside a solid block
+// Raygen sets this around a camera ray's trace while the camera is inside a solid block
 // (cameraInSolidBlock): the trace then skips terrain back faces, as vanilla's culling does.
 public static bool gv_skipTerrainBackFaces = false;
 // How many back faces one camera ray may step through before it takes whatever it hits. A ray out of
@@ -166,7 +166,7 @@ void traceRadianceMiss(uint missIndex, uint cullMask, float3 ro, float tmin, flo
     }
 }
 
-// The spectator back-face skip (PAYLOAD_SKIP_TERRAIN_BACK_FACES): while the last trace stopped on the back
+// The camera-in-solid back-face skip (PAYLOAD_SKIP_TERRAIN_BACK_FACES): while the last trace stopped on the back
 // of a terrain face, trace again from just beyond it, along the same ray from the same origin, so hitT keeps
 // measuring from the eye and the guides, motion and shading all see the surface vanilla would draw. The step
 // stays well under the mesher's 2e-4 coplanar offsets (an inset glass face, a grass overlay) so it cannot
