@@ -1951,9 +1951,10 @@ public final class CausticaConfig {
 
         /**
          * Recommended settings for the GPU and screen ({@code RtRecommendedSettings}). {@code pending} is
-         * written as true only into a brand-new config file, and the first world then applies the
-         * recommendation once NGX has said what DLSS can do here and turns it off. A config that already
-         * existed is never changed by it; the "Apply Recommended Settings" button does the same on demand.
+         * written as true into a brand-new config file, and the first world then starts the recommendation
+         * once NGX has said what DLSS can do here. The "Apply Recommended Settings" button sets it too. It
+         * stays true until the one-off measurement finishes, so quitting in the middle starts it over in
+         * the next session's first world. A config that already existed is never changed without the button.
          */
         public static final class Recommended {
             public static final BooleanSetting PENDING =

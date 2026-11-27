@@ -120,6 +120,8 @@ public final class RtRecommendedSettings {
     private static void begin(Minecraft minecraft, RtRecommendedProfile.Hardware hardware, String reason) {
         RtRecommendedProfile.Profile profile = RtRecommendedProfile.recommend(hardware);
         applyAllButFrameGeneration(profile);
+        // Until it finishes: quitting mid-measurement starts it over in the next session's first world.
+        CausticaConfig.Rt.Recommended.PENDING.set(true);
         CausticaConfig.save();
         runningHardware = hardware;
         runningProfile = profile;

@@ -253,11 +253,15 @@ public final class RtCalibration {
         return total;
     }
 
-    /** The fullest heap pool right after its last collection (the old generation, in practice). */
+    /**
+     * The fullest heap pool right after its last collection: the old generation, in practice. The young
+     * pools are left out; a survivor space is normally near full right after a young collection.
+     */
     private static double heapAfterGcShare() {
         double fullest = Double.NaN;
         for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
-            if (pool.getType() != MemoryType.HEAP) {
+            String name = pool.getName() != null ? pool.getName() : "";
+            if (pool.getType() != MemoryType.HEAP || name.contains("Eden") || name.contains("Survivor")) {
                 continue;
             }
             MemoryUsage after = pool.getCollectionUsage();
