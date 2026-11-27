@@ -323,7 +323,7 @@
 	"caustica.options.rt.lightDumpRadius": "Radio del volcado de luces",
 	"caustica.options.rt.lightDumpRadius.tooltip": "Radio alrededor de la cámara para el Volcado de luces, en bloques.",
 	"caustica.options.rt.fgEngine": "Motor de FG",
-	"caustica.options.rt.fgEngine.tooltip": "Caustica Native funciona en cualquier GPU y llega a 4x. AMD FSR 3.1 está fijo en 2x.",
+	"caustica.options.rt.fgEngine.tooltip": "Caustica nativo funciona en cualquier GPU y llega a 4x. AMD FSR 3.1 está fijo en 2x.",
 	"caustica.options.rt.fgEngine.native": "Caustica nativo",
 	"caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1 (2x)",
 	"caustica.options.rt.fogHeader": "Niebla volumétrica",

@@ -323,7 +323,7 @@
 	"caustica.options.rt.lightDumpRadius": "光照转储半径",
 	"caustica.options.rt.lightDumpRadius.tooltip": "光照转储以相机为中心的范围（方块）。",
 	"caustica.options.rt.fgEngine": "帧生成引擎",
-	"caustica.options.rt.fgEngine.tooltip": "Caustica 原生引擎任何显卡都可用，最高 4x。AMD FSR 3.1 固定 2x。",
+	"caustica.options.rt.fgEngine.tooltip": "Caustica 原生任何显卡都可用，最高 4x。AMD FSR 3.1 固定 2x。",
 	"caustica.options.rt.fgEngine.native": "Caustica 原生",
 	"caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1 (2x)",
 	"caustica.options.rt.fogHeader": "体积雾",

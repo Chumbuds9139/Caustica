@@ -323,7 +323,7 @@
 	"caustica.options.rt.lightDumpRadius": "Rayon du vidage des lumières",
 	"caustica.options.rt.lightDumpRadius.tooltip": "Rayon autour de la caméra pour le Vidage des lumières, en blocs.",
 	"caustica.options.rt.fgEngine": "Moteur de FG",
-	"caustica.options.rt.fgEngine.tooltip": "Caustica Native fonctionne sur tout GPU et va jusqu'à 4x. AMD FSR 3.1 est fixé à 2x.",
+	"caustica.options.rt.fgEngine.tooltip": "Caustica natif fonctionne sur tout GPU et va jusqu'à 4x. AMD FSR 3.1 est fixé à 2x.",
 	"caustica.options.rt.fgEngine.native": "Caustica natif",
 	"caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1 (2x)",
 	"caustica.options.rt.fogHeader": "Brouillard volumétrique",

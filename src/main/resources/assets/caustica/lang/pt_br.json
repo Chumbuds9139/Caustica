@@ -336,7 +336,7 @@
 	"caustica.options.rt.lightDumpRadius": "Raio do Dump de Luzes",
 	"caustica.options.rt.lightDumpRadius.tooltip": "Raio em volta da câmera para o Dump de Luzes, em blocos.",
 	"caustica.options.rt.fgEngine": "Motor de FG",
-	"caustica.options.rt.fgEngine.tooltip": "Caustica Native funciona em qualquer GPU e vai até 4x. AMD FSR 3.1 é fixo em 2x.",
+	"caustica.options.rt.fgEngine.tooltip": "Caustica Nativo funciona em qualquer GPU e vai até 4x. AMD FSR 3.1 é fixo em 2x.",
 	"caustica.options.rt.fgEngine.native": "Caustica Nativo",
 	"caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1 (2x)",
 	"caustica.options.rt.bloomHeader": "Bloom",

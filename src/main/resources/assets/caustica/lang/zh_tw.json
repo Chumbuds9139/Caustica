@@ -323,7 +323,7 @@
 	"caustica.options.rt.lightDumpRadius": "光照傾印半徑",
 	"caustica.options.rt.lightDumpRadius.tooltip": "光照傾印以相機為中心的範圍（方塊）。",
 	"caustica.options.rt.fgEngine": "影格生成引擎",
-	"caustica.options.rt.fgEngine.tooltip": "Caustica Native 任何顯示卡都可用，最高 4x。AMD FSR 3.1 固定 2x。",
+	"caustica.options.rt.fgEngine.tooltip": "Caustica 原生任何顯示卡都可用，最高 4x。AMD FSR 3.1 固定 2x。",
 	"caustica.options.rt.fgEngine.native": "Caustica 原生",
 	"caustica.options.rt.fgEngine.fsr31": "AMD FSR 3.1 (2x)",
 	"caustica.options.rt.fogHeader": "體積霧",
