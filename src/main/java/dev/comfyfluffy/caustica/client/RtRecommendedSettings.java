@@ -19,8 +19,9 @@ import net.minecraft.network.chat.Component;
  * <p>Two ways in: the "Apply Recommended Settings" button, and a brand-new config file, which the first
  * world applies by itself ({@link CausticaConfig.Rt.Recommended#PENDING}). The automatic one waits a few
  * seconds into the world so that DLSS Ray Reconstruction has brought NGX up and the driver itself has said
- * whether Ray Reconstruction and Frame Generation run here; the button, which can be pressed on the title
- * screen before NGX is up, falls back on the GPU's name for those two, like the Frame Generation toggle.
+ * whether Ray Reconstruction and Frame Generation run here, and it only applies where the driver confirmed
+ * Ray Reconstruction. The button, which can be pressed on the title screen before NGX is up, falls back on
+ * the GPU's name for those two, like the Frame Generation toggle.
  */
 public final class RtRecommendedSettings {
     /** Ticks in a world before the automatic apply looks (about 5 s). */
@@ -77,13 +78,21 @@ public final class RtRecommendedSettings {
         return new int[] {width, height};
     }
 
-    /** Detects, applies and saves; returns what was applied. */
+    /** Detects, applies, saves and shows a notice; returns what was applied. */
     public static RtRecommendedProfile.Profile applyNow(Minecraft minecraft, String reason) {
-        RtRecommendedProfile.Hardware hardware = detect(minecraft);
+        return applyNow(minecraft, detect(minecraft), reason);
+    }
+
+    private static RtRecommendedProfile.Profile applyNow(Minecraft minecraft, RtRecommendedProfile.Hardware hardware,
+                                                         String reason) {
         RtRecommendedProfile.Profile profile = RtRecommendedProfile.recommend(hardware);
         apply(profile);
         CausticaConfig.Rt.Recommended.PENDING.set(false);
         CausticaConfig.save();
+        // Also on the button: when the settings already match, the notice is the only sign it did anything.
+        SystemToast.add(minecraft.gui.toastManager(), new SystemToast.SystemToastId(TOAST_ID_MILLIS),
+                Component.translatable("caustica.options.rt.recommended.toast.title"),
+                Component.translatable("caustica.options.rt.recommended.toast.message"));
         CausticaMod.LOGGER.info("Recommended settings applied ({}): GPU '{}', SMs={}, laptop={}, output {}x{}, "
                         + "rayReconstruction={}, dlssFrameGeneration={}, reflex={} -> {}",
                 reason, RtDeviceBringup.gpuName(), hardware.smCount(), hardware.laptop(), hardware.outputWidth(),
@@ -105,9 +114,6 @@ public final class RtRecommendedSettings {
             CausticaConfig.Rt.DlssRr.PRESET.set(profile.dlssPreset());
         }
         CausticaConfig.Rt.Fg.ENABLED.set(profile.frameGeneration());
-        if (profile.frameGeneration()) {
-            CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.set(1);
-        }
         CausticaConfig.Rt.Reflex.ENABLED.set(profile.reflex());
         CausticaConfig.Rt.Sharc.ENABLED.set(profile.sharc());
         CausticaConfig.Rt.Composite.FOG_ENABLED.set(profile.fog());
@@ -135,9 +141,16 @@ public final class RtRecommendedSettings {
         if (!ngxSettled && worldTicks < NGX_WAIT_TICKS) {
             return;
         }
-        applyNow(minecraft, "first run");
-        SystemToast.add(minecraft.gui.toastManager(), new SystemToast.SystemToastId(TOAST_ID_MILLIS),
-                Component.translatable("caustica.options.rt.recommended.toast.title"),
-                Component.translatable("caustica.options.rt.recommended.toast.message"));
+        RtRecommendedProfile.Hardware hardware = detect(minecraft);
+        if (NgxRuntime.INSTANCE.library() == null || !hardware.rayReconstruction()) {
+            // Only machines where the driver itself confirmed Ray Reconstruction get it unasked; the
+            // profile is untested elsewhere, so there it waits for the button.
+            CausticaConfig.Rt.Recommended.PENDING.set(false);
+            CausticaConfig.save();
+            CausticaMod.LOGGER.info("Recommended settings not applied automatically: DLSS Ray Reconstruction is "
+                    + "not confirmed on this machine (the button in the ray-tracing settings still applies them)");
+            return;
+        }
+        applyNow(minecraft, hardware, "first run");
     }
 }

@@ -22,9 +22,13 @@
     - Ultra Performance is picked only at 1440p and above.
     - Examples: a laptop RTX 4050 gets Performance at 1080p and Ultra Performance at 2560×1600. A desktop
       RTX 4090 gets Quality at 1440p.
-  - RTX 20 and 30 cards get DLSS with SHaRC and Reflex, but no Frame Generation, volumetric clouds or fog.
-  - Other GPUs keep their upscaler and get SHaRC.
-  - It never turns on Shader Execution Reordering.
+  - Cards with DLSS but without DLSS Frame Generation (RTX 20 and 30) get DLSS with SHaRC and Reflex, but
+    no Frame Generation, volumetric clouds or fog.
+  - Other GPUs keep their upscaler and get SHaRC. On them, and anywhere the driver has not confirmed Ray
+    Reconstruction, a new install waits for the button instead of applying anything.
+  - It never turns on Shader Execution Reordering, and it leaves the Frame Generation multiplier alone.
+  - Only the laptop RTX 4050 point is measured. How much faster desktop cards and larger GPUs are counted
+    is an estimate.
 
 ### Fixes
 

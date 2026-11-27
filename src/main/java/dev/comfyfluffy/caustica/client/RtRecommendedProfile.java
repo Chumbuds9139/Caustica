@@ -8,12 +8,14 @@ import java.util.Locale;
  *
  * <p>The reference is a laptop RTX 4050 (20 SMs) at 1920x1080 with DLSS Ray Reconstruction on
  * Performance (960x540 traced), four bounces, SHaRC, volumetric clouds, fog and DLSS Frame Generation:
- * about 38 ms per ray-traced frame, so about 25 real frames a second shown as about 50. That card is at
- * the bottom of the range DLSS Frame Generation runs on (GeForce RTX 40 and 50), so a GPU that has DLSS-G
- * gets the reference's full look, and its upscaler mode is chosen to trace about as many pixels as the
- * reference does per unit of GPU speed. GPU speed is estimated from the streaming-multiprocessor count
- * Vulkan reports on NVIDIA (no table of card names), with desktop cards counted a little faster per SM
- * than laptop ones, and older generations at half that per SM.
+ * the F8 test measured about 36-39 ms per ray-traced frame there, with and without Shader Execution
+ * Reordering held back, so about 25 real frames a second shown as about 50. That card is at the bottom
+ * of the range DLSS Frame Generation runs on (GeForce RTX 40 and 50), so a GPU that has DLSS-G gets the
+ * reference's full look, and its upscaler mode is chosen to trace about as many pixels as the reference
+ * does per unit of GPU speed. GPU speed is estimated from the streaming-multiprocessor count Vulkan
+ * reports on NVIDIA (no table of card names), with desktop cards counted a little faster per SM than
+ * laptop ones, and older generations at half that per SM. Only the reference point is measured: the
+ * desktop, older-generation and cap factors are estimates.
  *
  * <p>Shader Execution Reordering is never part of it: every device loss seen so far happened in the one
  * dispatch that uses it, and it does not change the image.
