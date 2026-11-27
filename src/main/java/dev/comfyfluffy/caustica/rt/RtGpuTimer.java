@@ -36,7 +36,9 @@ public final class RtGpuTimer {
     public static void beginFrame(RtContext ctx, VkCommandBuffer cmd) {
         frameCmd = null;
         boolean sweep = RtPerfSweep.INSTANCE.running();
-        if (!(RtFrameStats.enabled() || sweep) || ctx == null || ctx.timestampPeriodNanos() <= 0.0f) {
+        // The recommended-settings measurement needs them for its minute too, and only for that minute.
+        boolean calibration = RtCalibration.INSTANCE.wantsTiming();
+        if (!(RtFrameStats.enabled() || sweep || calibration) || ctx == null || ctx.timestampPeriodNanos() <= 0.0f) {
             return;
         }
         if (pool == 0L && !create(ctx)) {
@@ -45,6 +47,7 @@ public final class RtGpuTimer {
         frame = (frame + 1) % RING;
         harvest(ctx, frame);
         RtPerfSweep.INSTANCE.onFrame();
+        RtCalibration.INSTANCE.onFrame();
         VK10.vkCmdResetQueryPool(cmd, pool, frame * MAX_QUERIES, MAX_QUERIES);
         STAGE_COUNT[frame] = 0;
         RECORDED[frame] = true;
@@ -150,6 +153,7 @@ public final class RtGpuTimer {
                 long nanos = (long) ((end - begin) * (double) periodNanos);
                 RtFrameStats.FRAME.addStageNanos(STAGES[slot][i], nanos);
                 RtPerfSweep.INSTANCE.onGpuStage(STAGES[slot][i], nanos);
+                RtCalibration.INSTANCE.onGpuStage(STAGES[slot][i], nanos);
             }
         }
     }

@@ -20,6 +20,7 @@ import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
@@ -122,6 +123,7 @@ public final class RtDeviceBringup {
     private static volatile String gpuVendorName = "";
     // Streaming multiprocessors from VK_NV_shader_sm_builtins (NVIDIA), 0 when the device does not say.
     private static volatile int gpuSmCount;
+    private static volatile long gpuDeviceLocalBytes;
     private static volatile boolean ommEnabled; // VK_EXT_opacity_micromap actually enabled on the device
     private static volatile boolean reflexEnabled; // VK_NV_low_latency2 actually enabled on the device
     private static volatile boolean presentIdEnabled; // VK_KHR_present_id actually enabled on the device
@@ -737,6 +739,30 @@ public final class RtDeviceBringup {
             gpuVendorName = "";
         }
         gpuSmCount = querySmCount(physicalDevice);
+        gpuDeviceLocalBytes = queryDeviceLocalBytes(physicalDevice);
+    }
+
+    /** The largest device-local memory heap: the GPU's own video memory on a discrete card. */
+    private static long queryDeviceLocalBytes(VulkanPhysicalDevice physicalDevice) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
+            VK10.vkGetPhysicalDeviceMemoryProperties(physicalDevice.vkPhysicalDevice(), memory);
+            long largest = 0L;
+            for (int i = 0; i < memory.memoryHeapCount(); i++) {
+                var heap = memory.memoryHeaps(i);
+                if ((heap.flags() & VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+                    largest = Math.max(largest, heap.size());
+                }
+            }
+            return largest;
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    /** Size of the largest device-local memory heap in bytes, or 0 when unknown. */
+    public static long gpuDeviceLocalBytes() {
+        return gpuDeviceLocalBytes;
     }
 
     /**

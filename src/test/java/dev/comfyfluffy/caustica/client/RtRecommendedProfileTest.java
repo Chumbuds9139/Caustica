@@ -92,6 +92,71 @@ class RtRecommendedProfileTest {
     }
 
     @Test
+    void theReferenceMeasurementsKeepPerformance() {
+        // Two F8 baselines from the reference laptop at 1080p Performance, frame generation on.
+        RtRecommendedProfile.Measurement before = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                37.65, (28.28 + 3.95) / 37.65);
+        RtRecommendedProfile.Measurement after = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                28.72, (21.74 + 1.25) / 28.72);
+        assertEquals(PERFORMANCE, RtRecommendedProfile.calibratedQuality(before, 1920, 1080, true));
+        // Balanced would be about 37 ms here: inside the budget, but not with the room a sharper mode needs.
+        assertEquals(PERFORMANCE, RtRecommendedProfile.calibratedQuality(after, 1920, 1080, true));
+    }
+
+    @Test
+    void aFastMeasurementGetsASharperMode() {
+        RtRecommendedProfile.Measurement fast = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                15.0, 0.85);
+        assertEquals(QUALITY, RtRecommendedProfile.calibratedQuality(fast, 1920, 1080, true));
+        // Without frame generation the budget is tighter.
+        RtRecommendedProfile.Measurement medium = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                18.0, 0.85);
+        assertEquals(BALANCED, RtRecommendedProfile.calibratedQuality(medium, 1920, 1080, false));
+    }
+
+    @Test
+    void aSlowMeasurementDropsALevel() {
+        RtRecommendedProfile.Measurement slow = new RtRecommendedProfile.Measurement(PERFORMANCE, 2560, 1440,
+                50.0, 0.85);
+        assertEquals(ULTRA_PERFORMANCE, RtRecommendedProfile.calibratedQuality(slow, 2560, 1440, true));
+        // Below 1440p Performance is as light as it goes.
+        RtRecommendedProfile.Measurement slow1080 = new RtRecommendedProfile.Measurement(QUALITY, 1920, 1080,
+                80.0, 0.85);
+        assertEquals(PERFORMANCE, RtRecommendedProfile.calibratedQuality(slow1080, 1920, 1080, true));
+        assertEquals(PERFORMANCE, RtRecommendedProfile.lightestQuality(1080));
+        assertEquals(ULTRA_PERFORMANCE, RtRecommendedProfile.lightestQuality(1440));
+    }
+
+    @Test
+    void aMeasurementInASmallWindowKeepsItsMode() {
+        // The default first-launch window on a 1440p screen: too small to predict the full screen from.
+        RtRecommendedProfile.Measurement small = new RtRecommendedProfile.Measurement(BALANCED, 854, 480,
+                10.0, 0.85);
+        assertFalse(RtRecommendedProfile.measuredNearTarget(small, 2560, 1440));
+        assertEquals(BALANCED, RtRecommendedProfile.calibratedQuality(small, 2560, 1440, true));
+        // A maximised window a pixel off the monitor's size counts as the screen.
+        RtRecommendedProfile.Measurement maximised = new RtRecommendedProfile.Measurement(PERFORMANCE, 1921, 1080,
+                30.0, 0.85);
+        assertTrue(RtRecommendedProfile.measuredNearTarget(maximised, 1920, 1080));
+    }
+
+    @Test
+    void heapAdvice() {
+        long gib = RtRecommendedProfile.GIB;
+        // The launcher's default 2 GiB with GC busy: at least 4 GiB.
+        assertEquals(4, RtRecommendedProfile.suggestedHeapGib(0.08, 0.5, 2 * gib, 16 * gib));
+        // Half again, when the heap after GC stays nearly full.
+        assertEquals(6, RtRecommendedProfile.suggestedHeapGib(0.01, 0.9, 4 * gib, 16 * gib));
+        // Never more than half the computer's memory, so nothing when the heap is already there.
+        assertEquals(0, RtRecommendedProfile.suggestedHeapGib(0.08, 0.9, 8 * gib, 16 * gib));
+        assertEquals(4, RtRecommendedProfile.suggestedHeapGib(0.08, 0.9, 2 * gib, 8 * gib));
+        // No shortage, or unknown sizes: no advice.
+        assertEquals(0, RtRecommendedProfile.suggestedHeapGib(0.01, 0.5, 2 * gib, 16 * gib));
+        assertEquals(0, RtRecommendedProfile.suggestedHeapGib(0.01, Double.NaN, 2 * gib, 16 * gib));
+        assertEquals(0, RtRecommendedProfile.suggestedHeapGib(0.08, 0.9, 2 * gib, 0L));
+    }
+
+    @Test
     void laptopNames() {
         assertTrue(RtRecommendedProfile.looksLikeLaptop("NVIDIA GeForce RTX 4050 Laptop GPU"));
         assertTrue(RtRecommendedProfile.looksLikeLaptop("NVIDIA GeForce RTX 2060 with Max-Q Design"));

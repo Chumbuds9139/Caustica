@@ -114,12 +114,12 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
     }
 
     /**
-     * Applies the recommended settings for this GPU and screen ({@code RtRecommendedSettings}), saves, and
-     * reopens the hub like the reset does.
+     * Applies the recommended settings for this GPU and screen and starts their one-off minute of
+     * measurement ({@code RtRecommendedSettings}), then reopens the hub like the reset does.
      */
     private Button recommendedButton() {
         Button button = Button.builder(Component.translatable("caustica.options.rt.recommended"), clicked -> {
-            dev.comfyfluffy.caustica.client.RtRecommendedSettings.applyNow(this.minecraft, "button");
+            dev.comfyfluffy.caustica.client.RtRecommendedSettings.begin(this.minecraft, "button");
             this.minecraft.gui.setScreen(new RtVideoOptionsScreen(this.rtParent, this.rtOptions));
         }).width(310).build();
         button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.recommended.tooltip")));

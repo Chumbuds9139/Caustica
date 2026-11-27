@@ -4,31 +4,33 @@
 
 ### New
 
-- **Recommended settings for your GPU.** A new **Apply Recommended Settings** button at the top of the
-  ray-tracing settings picks settings for your GPU and screen. A new install applies them by itself a few
-  seconds into the first world and shows a notice. It waits that long so the driver can say whether DLSS
-  Ray Reconstruction and Frame Generation run on the machine. An existing config is never changed unless
-  you press the button.
-  - GeForce RTX 40 and 50 cards get the settings tested on a laptop RTX 4050 at 1080p:
-    - DLSS Ray Reconstruction with preset F, Frame Generation and Reflex;
-    - SHaRC, volumetric clouds and fog.
-
-    That ran at about 25 real frames a second, shown as about 50.
-  - The DLSS mode is chosen so that the GPU traces about as many pixels, for its speed, as that laptop
-    does at 1080p Performance.
-    - Speed is estimated from the number of streaming multiprocessors the driver reports. A desktop card
-      counts a little faster than a laptop card.
-    - The larger of the window and its monitor counts as the resolution.
-    - Ultra Performance is picked only at 1440p and above.
-    - Examples: a laptop RTX 4050 gets Performance at 1080p and Ultra Performance at 2560×1600. A desktop
-      RTX 4090 gets Quality at 1440p.
-  - Cards with DLSS but without DLSS Frame Generation (RTX 20 and 30) get DLSS with SHaRC and Reflex, but
-    no Frame Generation, volumetric clouds or fog.
-  - Other GPUs keep their upscaler and get SHaRC. On them, and anywhere the driver has not confirmed Ray
-    Reconstruction, a new install waits for the button instead of applying anything.
+- **Recommended settings for your computer.** A new **Apply Recommended Settings** button at the top of
+  the ray-tracing settings picks settings for your GPU and screen. It then measures about a minute of your
+  play, once, and settles the DLSS mode from it. After that minute nothing is watched or changed.
+  - A new install does this by itself a few seconds into the first world, once the driver has confirmed
+    that DLSS Ray Reconstruction runs. An existing config is never changed unless you press the button.
+  - A notice says when the measurement starts: play as usual with menus closed. A second notice says
+    what was chosen and the measured GPU time per frame.
+  - It only switches things on, never off. Where supported it turns on DLSS Ray Reconstruction, SHaRC
+    and Reflex. On GeForce RTX 40 and 50 cards it also turns on Frame Generation, volumetric clouds and
+    fog and picks preset F, the setup tested on a laptop RTX 4050 at 1080p (about 25 real frames a
+    second, shown as about 50). Other cards keep those three as they were.
+  - The DLSS mode is first estimated from the GPU's size and the larger of the window and its monitor.
+    The measurement then picks the sharpest mode that keeps a ray-traced frame within about 36 ms of
+    GPU time with Frame Generation, or 30 ms without.
+    - A sharper mode than the estimate needs 10% to spare, so a minute that happened to see little sky
+      does not push it too far. Ultra Performance is only picked at 1440p and above.
+    - The measurement skips menus, the first seconds in a world, the SER guard's holds, Distant Horizons
+      refreshes, terrain builds and the TDR guard's slow start.
+    - The estimate stays if no clean minute of play comes together within five minutes of play, or if
+      the window was much smaller than the screen. A GPU that never reaches your samples and bounces
+      gets the lightest mode. If you pick a DLSS mode during the minute, your choice stays and the
+      measurement stops.
+  - If the Java garbage collector was busy, or the heap stayed nearly full, a third notice suggests how
+    much memory to give Minecraft in the launcher. Caustica cannot set this itself.
+  - The log gets one line with the GPU, video memory, CPU threads, memory, Java heap, the measurement
+    and what was chosen.
   - It never turns on Shader Execution Reordering, and it leaves the Frame Generation multiplier alone.
-  - Only the laptop RTX 4050 point is measured. How much faster desktop cards and larger GPUs are counted
-    is an estimate.
 
 ### Fixes
 

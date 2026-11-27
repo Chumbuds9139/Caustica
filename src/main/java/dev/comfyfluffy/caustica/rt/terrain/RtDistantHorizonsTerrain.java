@@ -772,6 +772,11 @@ public final class RtDistantHorizonsTerrain {
         }
     }
 
+    /** Whether a distant-terrain refresh is still streaming its batches in (the GPU is busier than usual). */
+    public boolean refreshStreaming() {
+        return buildSession != null;
+    }
+
     private void queueAtomicBuild(RtContext ctx, List<PlannedBatch> plan,
                                   RtMaterialRegistry.Snapshot materials,
                                   long taskEpoch, long revision) {
