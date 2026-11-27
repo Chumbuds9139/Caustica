@@ -8,10 +8,11 @@
   mode it now sets a graphics level, Low, Standard, High or Ultra, for the settings that cost GPU time:
   samples, bounces, the path, sky and cloud speed-ups, light candidates, parallax and water detail.
   - Standard is the setup tested on a laptop RTX 4050 at 1080p. A faster card spends its extra speed on a
-    sharper DLSS mode first, then on a higher level, aiming for the same frame rate as that laptop. A
-    slower one gets Low.
-  - The minute of measurement runs at the chosen level. If it turns out too heavy, the level goes one step
-    lower, which keeps the DLSS mode when that is enough. It never goes higher than what was measured.
+    sharper DLSS mode first, then on a higher level, aiming for the same frame rate as that laptop. Only a
+    card that is slower even at the lightest DLSS mode gets Low.
+  - The minute of measurement runs at the chosen level. If it is clearly too heavy, the level goes one step
+    lower, keeping the DLSS mode when that is enough. A level above Standard only stays if the minute
+    confirmed it.
   - Volumetric clouds, fog and frame generation are still never turned off, and look settings such as
     brightness, colours and parallax depth stay as you set them.
   - If you change one of these settings during the minute, your choice stays and the measurement stops.

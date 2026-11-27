@@ -25,9 +25,11 @@ import java.util.Locale;
  * feature of their own (samples, bounces, the speed-ups for paths, sky and clouds, light candidates,
  * parallax and water detail), from Low to Ultra. The reference gets Standard, which is exactly its
  * player's own setup. The GPU's speed goes to a sharper upscaler mode first and to a heavier tier with
- * what is left, so a faster card gets both, tuned to the same budget as the reference. The tier is applied
- * before the minute of measurement, so the minute measures it; afterwards it can only go one step lighter
- * (a heavier one would be unmeasured). A GPU whose speed is unknown keeps the player's values.
+ * what is left, so a faster card gets both, tuned to the same budget as the reference; Low is only for a
+ * GPU already at the lightest mode. The tier is applied before the minute of measurement, so the minute
+ * measures it; afterwards it can only go one step lighter (a heavier one would be unmeasured), and a tier
+ * above Standard that the minute did not confirm comes down to Standard. A GPU whose speed is unknown keeps
+ * the player's values.
  *
  * <p>Features are only turned on, never off. Volumetric clouds, fog and frame generation are switched on
  * for a DLSS-G GPU and otherwise left as the player set them: a player who chose volumetric clouds chose
@@ -194,6 +196,12 @@ public final class RtRecommendedProfile {
     /** A mode sharper than the measured one is picked only if it is predicted to fit with this much room. */
     static final double SHARPER_MARGIN = 0.9;
     /**
+     * How far over the budget the measured mode must be before the tier steps down. Wider than
+     * {@link #BUDGET_TOLERANCE}: the reference itself measures 36-43 ms at Standard, and a tier step is a
+     * bigger change than a mode step.
+     */
+    static final double TIER_STEP_TOLERANCE = 1.25;
+    /**
      * The measurement must have run at no less than this share of the target screen's pixels. Scaling a
      * small window's frame up to a large screen also scales costs that do not grow with pixels, so a
      * measurement in the small window of a first launch would over-predict and pick too light a mode.
@@ -249,16 +257,18 @@ public final class RtRecommendedProfile {
     }
 
     /**
-     * The upscaler mode and tier from a measurement taken at {@code tier}. The tier stays when the measured
-     * mode or a sharper one fits. Otherwise the tier goes one step lighter, which keeps the mode if that is
-     * enough and otherwise takes the mode that fits the lighter tier; the tier never goes heavier than what
-     * was measured. A null tier stays null.
+     * The upscaler mode and tier from a measurement taken at {@code tier}. The mode is settled as by
+     * {@link #calibratedQuality}, and the tier stays, unless the measured setup is more than
+     * {@link #TIER_STEP_TOLERANCE} over the budget. Then the tier goes one step lighter, which keeps the
+     * mode if that is enough and otherwise takes the mode that fits the lighter tier. The tier never goes
+     * heavier than what was measured. A null tier stays null.
      */
     public static Choice calibrated(Measurement m, Tier tier, int targetWidth, int targetHeight,
                                     boolean frameGeneration) {
         int quality = calibratedQuality(m, targetWidth, targetHeight, frameGeneration);
+        double budget = frameGeneration ? BUDGET_MS_WITH_FG : BUDGET_MS_WITHOUT_FG;
         boolean keep = tier == null || tier == Tier.LOW || !measuredNearTarget(m, targetWidth, targetHeight)
-                || rank(quality) >= rank(m.quality()) && fits(m, quality, targetWidth, targetHeight, frameGeneration);
+                || predictedMs(m, m.quality(), targetWidth, targetHeight) <= budget * TIER_STEP_TOLERANCE;
         if (keep) {
             return new Choice(quality, tier);
         }
@@ -353,14 +363,17 @@ public final class RtRecommendedProfile {
 
     /**
      * The heaviest tier this GPU's speed still covers once the upscaler mode has taken its share: a sharper
-     * mode comes first, and what is left goes to the cost settings.
+     * mode comes first, and what is left goes to the cost settings. Low is only for a GPU that is already
+     * at the lightest mode: one that could afford a sharper mode is never pushed below Standard by it.
      */
     static Tier tier(Hardware hw, int quality) {
-        long pixels = Math.max(renderPixels(quality, Math.max(hw.outputWidth(), 1), Math.max(hw.outputHeight(), 1)), 1L);
+        int width = Math.max(hw.outputWidth(), 1);
+        int height = Math.max(hw.outputHeight(), 1);
+        long pixels = Math.max(renderPixels(quality, width, height), 1L);
         double left = REFERENCE_RENDER_PIXELS * speed(hw) / pixels;
-        Tier best = Tier.LOW;
+        Tier best = quality == lightestQuality(height) ? Tier.LOW : Tier.STANDARD;
         for (Tier tier : Tier.values()) {
-            if (tier.cost() <= left + 1e-9) {
+            if (tier.ordinal() > best.ordinal() && tier.cost() <= left + 1e-9) {
                 best = tier;
             }
         }

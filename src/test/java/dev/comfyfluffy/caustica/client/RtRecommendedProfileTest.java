@@ -221,11 +221,41 @@ class RtRecommendedProfileTest {
     }
 
     @Test
-    void theReferenceMeasurementKeepsStandard() {
+    void lowIsOnlyForAGpuAlreadyAtTheLightestMode() {
+        // Desktop 4070/5070 class at 1440p: Quality only just fits, which leaves less than Standard's share;
+        // the card still gets Standard rather than trading its sharpness for Low.
+        assertEquals(Tier.STANDARD, RtRecommendedProfile.recommend(rtx40(46, false, 2560, 1440)).tier());
+        assertEquals(Tier.STANDARD, RtRecommendedProfile.recommend(rtx40(48, false, 2560, 1440)).tier());
+        int[][] screens = {{1920, 1080}, {2560, 1440}, {3840, 2160}, {1280, 720}, {2560, 1600}};
+        for (boolean laptop : new boolean[] {true, false}) {
+            for (boolean dlssg : new boolean[] {true, false}) {
+                for (int[] screen : screens) {
+                    for (int sms = 1; sms <= 200; sms++) {
+                        RtRecommendedProfile.Profile p = RtRecommendedProfile.recommend(
+                                new RtRecommendedProfile.Hardware(true, dlssg, true, sms, laptop, screen[0], screen[1]));
+                        if (p.tier() == Tier.LOW) {
+                            assertEquals(RtRecommendedProfile.lightestQuality(screen[1]), p.dlssQuality(),
+                                    "sms=" + sms + " " + screen[0] + "x" + screen[1]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void theReferenceMeasurementsKeepStandard() {
         RtRecommendedProfile.Measurement before = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
                 37.65, (28.28 + 3.95) / 37.65);
         assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
                 RtRecommendedProfile.calibrated(before, Tier.STANDARD, 1920, 1080, true));
+        // The reference has measured anywhere from 36 to 43 ms: none of that is enough to drop to Low.
+        for (double ms : new double[] {39.0, 43.0}) {
+            RtRecommendedProfile.Measurement m = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920, 1080,
+                    ms, 0.85);
+            assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
+                    RtRecommendedProfile.calibrated(m, Tier.STANDARD, 1920, 1080, true), "ms=" + ms);
+        }
     }
 
     @Test
@@ -238,14 +268,19 @@ class RtRecommendedProfileTest {
 
     @Test
     void tooHeavyGoesOneTierLighterAndKeepsTheModeWhenThatIsEnough() {
-        // Measured at Balanced and Ultra, a little over: High keeps Balanced.
-        RtRecommendedProfile.Measurement over = new RtRecommendedProfile.Measurement(BALANCED, 1920, 1080,
+        // A little over: the mode settles it and the tier stays.
+        RtRecommendedProfile.Measurement slightly = new RtRecommendedProfile.Measurement(BALANCED, 1920, 1080,
                 42.0, 0.85);
+        assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.ULTRA),
+                RtRecommendedProfile.calibrated(slightly, Tier.ULTRA, 1920, 1080, true));
+        // Measured at Balanced and Ultra, clearly over: High keeps Balanced.
+        RtRecommendedProfile.Measurement over = new RtRecommendedProfile.Measurement(BALANCED, 1920, 1080,
+                48.0, 0.85);
         assertEquals(new RtRecommendedProfile.Choice(BALANCED, Tier.HIGH),
                 RtRecommendedProfile.calibrated(over, Tier.ULTRA, 1920, 1080, true));
         // Over at Performance, already the lightest mode at 1080p: the tier goes down instead.
         RtRecommendedProfile.Measurement overLightest = new RtRecommendedProfile.Measurement(PERFORMANCE, 1920,
-                1080, 42.0, 0.85);
+                1080, 48.0, 0.85);
         assertEquals(new RtRecommendedProfile.Choice(PERFORMANCE, Tier.STANDARD),
                 RtRecommendedProfile.calibrated(overLightest, Tier.HIGH, 1920, 1080, true));
     }

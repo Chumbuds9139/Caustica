@@ -35,9 +35,10 @@ import java.util.Locale;
  *   <li>the upscaler mode is settled from the measurement, the tier stays or goes one step lighter,
  *       frame generation is set, and a notice says what was chosen. The estimate stays when no clean
  *       minute came together within {@value #TIMEOUT_TICKS} ticks of play, or when the window was much
- *       smaller than the screen; a GPU the TDR guard never let reach the configured settings gets the
- *       lightest mode and tier. If the player picks a DLSS mode or changes one of the tier's settings
- *       during the minute, the measurement stops and their choice stays.</li>
+ *       smaller than the screen, though a tier above Standard comes down to Standard when the minute did
+ *       not confirm it; a GPU the TDR guard never let reach the configured settings gets the lightest
+ *       mode and tier. If the player picks a DLSS mode or changes one of the tier's settings during the
+ *       minute, the measurement stops and their choice stays.</li>
  * </ol>
  * The result line in the log also reports the CPU, memory and video memory, and when the measurement
  * shows the Java heap short, a second notice suggests a size: Caustica cannot set it, the launcher does.
@@ -313,6 +314,7 @@ public final class RtRecommendedSettings {
         boolean fgForBudget = frameGeneration || CausticaConfig.Rt.Fg.ENABLED.value();
         String decision;
         Component message;
+        boolean tierMeasured = false;
         RtRecommendedProfile.Measurement measurement = result == null ? null
                 : new RtRecommendedProfile.Measurement(measuredQuality, runningWidth, runningHeight,
                         result.frameMs(), result.traceShare());
@@ -345,8 +347,16 @@ public final class RtRecommendedSettings {
                     hardware.outputWidth(), hardware.outputHeight(), fgForBudget);
             quality = choice.quality();
             tier = choice.tier();
+            tierMeasured = true;
             decision = tier != measuredTier ? "measured; one tier lighter" : "measured";
             message = doneMessage(tier, quality);
+        }
+        // A tier above Standard stays only if the minute confirmed it, unless the player has since set
+        // one of its settings themselves.
+        if (!tierMeasured && tier != null && tier.ordinal() > RtRecommendedProfile.Tier.STANDARD.ordinal()
+                && measuredEffects.equals(currentEffects())) {
+            tier = RtRecommendedProfile.Tier.STANDARD;
+            decision += "; the unmeasured tier comes down to standard";
         }
         if (profile.useDlss()) {
             CausticaConfig.Rt.DlssRr.QUALITY.set(quality);
