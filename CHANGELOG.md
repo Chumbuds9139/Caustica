@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Xaero's Minimap in-world waypoints stay in place.** They drifted with the screen, because Caustica
+  skipped the hook where Xaero's Minimap reads the camera's direction. Hooks other mods add at the start of
+  the world render now run before Caustica takes it over.
+
 ## 0.4.3 — 2026-11-27
 
 ### New

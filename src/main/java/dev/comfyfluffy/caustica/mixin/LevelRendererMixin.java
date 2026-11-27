@@ -22,7 +22,11 @@ public abstract class LevelRendererMixin {
 	@Final
 	private LevelRenderState levelRenderState;
 
-	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
+	// Other mods read the frame's camera from their own HEAD hooks on this method, and with equal order
+	// Mixin may apply ours first, so the cancel skipped them: Xaero's Minimap takes the view rotation for
+	// its in-world waypoints here, and they drifted with the screen. A later order (default 1000) applies
+	// this injector after theirs, so their HEAD callbacks run before the cancel.
+	@Inject(method = "render", at = @At("HEAD"), cancellable = true, order = 2000)
 	private void caustica$cancelVanillaWorld(
 			GraphicsResourceAllocator resourceAllocator,
 			boolean renderOutline,
