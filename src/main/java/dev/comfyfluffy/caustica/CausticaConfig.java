@@ -1332,8 +1332,12 @@ public final class CausticaConfig {
              */
             public static final FloatSetting DYNAMIC_INTENSITY =
                     lightIntensity("caustica.rt.dynamicLightIntensity", "lights.dynamic-intensity", 1.0f);
+            /**
+             * Scales the light of emissive blocks placed in the world. Default 5: below that, torches,
+             * lanterns and glowstone read too dark next to daylight and in caves.
+             */
             public static final FloatSetting BLOCK_INTENSITY =
-                    lightIntensity("caustica.rt.blockLightIntensity", "lights.block-emissive-intensity", 2.0f);
+                    lightIntensity("caustica.rt.blockLightIntensity", "lights.block-emissive-intensity", 5.0f);
             /**
              * Reservoir-based spatio-temporal resampling for emitter NEE. When disabled, every shading
              * vertex uses the original independent per-frame RIS reservoir and no history allocation is

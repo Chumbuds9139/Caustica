@@ -80,15 +80,17 @@ public final class RtRecommendedProfile {
      * @param dlssPreset {@code dlss-rr.preset}, or {@link #UNCHANGED}
      */
     public record Profile(boolean useDlss, int dlssQuality, int dlssPreset, boolean frameGeneration,
-                          boolean reflex, boolean sharc, boolean fog, boolean volumetricClouds) {
+                          boolean reflex, boolean sharc, boolean fog, boolean volumetricClouds,
+                          float blockEmissiveAtLeast) {
         /** One line for the log. */
         public String describe() {
             return String.format(Locale.ROOT,
                     "upscaler=%s, dlssQuality=%s, dlssPreset=%s, frameGeneration=%s, reflex=%s, sharc=%s, fog=%s, "
-                            + "volumetricClouds=%s",
+                            + "volumetricClouds=%s, blockEmissiveIntensity>=%.1f",
                     useDlss ? "DLSS" : "unchanged", dlssQuality == UNCHANGED ? "unchanged" : qualityName(dlssQuality),
                     dlssPreset == UNCHANGED ? "unchanged" : Integer.toString(dlssPreset), onOrUnchanged(frameGeneration),
-                    onOrUnchanged(reflex), onOrUnchanged(sharc), onOrUnchanged(fog), onOrUnchanged(volumetricClouds));
+                    onOrUnchanged(reflex), onOrUnchanged(sharc), onOrUnchanged(fog), onOrUnchanged(volumetricClouds),
+                    blockEmissiveAtLeast);
         }
 
         private static String onOrUnchanged(boolean on) {
@@ -105,6 +107,9 @@ public final class RtRecommendedProfile {
      * @param frameMs      GPU time per ray-traced frame (an upper percentile)
      * @param traceShare   share of that time spent in the trace passes, which grow with traced pixels
      */
+    /** Emissive Block Intensity the recommendation raises a lower value to (never lowers a higher one). */
+    public static final float MIN_BLOCK_EMISSIVE = 5.0f;
+
     public record Measurement(int quality, int outputWidth, int outputHeight, double frameMs, double traceShare) {
     }
 
@@ -216,7 +221,9 @@ public final class RtRecommendedProfile {
                 // Shorter path tails and much less multi-bounce noise, on any GPU.
                 true,
                 full,
-                full);
+                full,
+                // Not a cost: placed lights read too dark below this on any GPU (also the default now).
+                MIN_BLOCK_EMISSIVE);
     }
 
     /** GPU speed against the reference, from the SM count; 1 when it is unknown. */

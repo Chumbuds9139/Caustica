@@ -240,7 +240,7 @@
 	"caustica.options.rt.resetAll": "すべての RT 設定を初期値に戻す",
 	"caustica.options.rt.resetAll.tooltip": "これらのメニューに表示される Caustica 設定のすべてをワンクリックで工場初期値に戻します。起動時にのみ適用されるオプション（設定ファイルや -Dcaustica.* フラグ）は変更されません。",
 	"caustica.options.rt.recommended": "推奨設定を適用",
-	"caustica.options.rt.recommended.tooltip": "この GPU と画面に合わせて設定を選びます。対応していれば DLSS レイ再構成をオンにし、DLSS モードを選びます。GeForce RTX 40・50 シリーズではフレーム生成、ボリュメトリック雲、ボリューメトリックフォグもオンにし、プリセット F を選びます。SHaRC と、対応していれば Reflex もオンにします。オフにする設定はなく、その他の設定は変わりません。そのあと約 1 分間のプレイを一度だけ計測して DLSS モードを決めます。それ以降は監視も変更もしません。",
+	"caustica.options.rt.recommended.tooltip": "この GPU と画面に合わせて設定を選びます。対応していれば DLSS レイ再構成をオンにし、DLSS モードを選びます。GeForce RTX 40・50 シリーズではフレーム生成、ボリュメトリック雲、ボリューメトリックフォグもオンにし、プリセット F を選びます。SHaRC と、対応していれば Reflex もオンにします。発光ブロックの強度が 5 未満なら 5 に上げます。オフにする設定はなく、その他の設定は変わりません。そのあと約 1 分間のプレイを一度だけ計測して DLSS モードを決めます。それ以降は監視も変更もしません。",
 	"caustica.options.rt.recommended.measuring.title": "Caustica：推奨設定のための計測中",
 	"caustica.options.rt.recommended.measuring.message": "メニューを閉じて、約 1 分間いつも通りにプレイしてください。そのあと設定を一度だけ仕上げ、以降は変わりません。",
 	"caustica.options.rt.recommended.done.title": "Caustica：推奨設定が完了しました",

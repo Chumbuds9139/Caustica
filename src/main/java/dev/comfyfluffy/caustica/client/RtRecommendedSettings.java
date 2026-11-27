@@ -165,6 +165,9 @@ public final class RtRecommendedSettings {
         if (profile.volumetricClouds()) {
             CausticaConfig.Rt.Composite.CLOUD_STYLE.set("volumetric");
         }
+        if (CausticaConfig.Rt.Lights.BLOCK_INTENSITY.value() < profile.blockEmissiveAtLeast()) {
+            CausticaConfig.Rt.Lights.BLOCK_INTENSITY.set(profile.blockEmissiveAtLeast());
+        }
     }
 
     /**

@@ -32,6 +32,7 @@ class RtRecommendedProfileTest {
         assertTrue(p.sharc());
         assertTrue(p.fog());
         assertTrue(p.volumetricClouds());
+        assertEquals(5.0f, p.blockEmissiveAtLeast());
     }
 
     @Test
@@ -84,6 +85,8 @@ class RtRecommendedProfileTest {
         assertFalse(p.frameGeneration());
         assertFalse(p.reflex());
         assertTrue(p.sharc());
+        // Brightness is not a cost: every GPU gets at least the default.
+        assertEquals(5.0f, p.blockEmissiveAtLeast());
     }
 
     @Test

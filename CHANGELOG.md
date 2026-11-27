@@ -14,7 +14,8 @@
   - It only switches things on, never off. Where supported it turns on DLSS Ray Reconstruction, SHaRC
     and Reflex. On GeForce RTX 40 and 50 cards it also turns on Frame Generation, volumetric clouds and
     fog and picks preset F, the setup tested on a laptop RTX 4050 at 1080p (about 25 real frames a
-    second, shown as about 50). Other cards keep those three as they were.
+    second, shown as about 50). Other cards keep those three as they were. On every GPU it raises
+    Emissive Block Intensity to at least 5.
   - The DLSS mode is first estimated from the GPU's size and the larger of the window and its monitor.
     The measurement then picks the sharpest mode that keeps a ray-traced frame within about 36 ms of
     GPU time with Frame Generation, or 30 ms without.
@@ -31,6 +32,12 @@
   - The log gets one line with the GPU, video memory, CPU threads, memory, Java heap, the measurement
     and what was chosen.
   - It never turns on Shader Execution Reordering, and it leaves the Frame Generation multiplier alone.
+
+### Changes
+
+- **Emissive Block Intensity defaults to 5 (was 2).** At 2, torches, lanterns and glowstone looked too dark
+  in caves and at night. A config that already exists keeps its value. **Apply Recommended Settings**
+  raises a value below 5 to 5.
 
 ### Fixes
 

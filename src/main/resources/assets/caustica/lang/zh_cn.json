@@ -240,7 +240,7 @@
 	"caustica.options.rt.resetAll": "重置所有 RT 设置",
 	"caustica.options.rt.resetAll.tooltip": "一键把这些菜单中暴露的所有 Caustica 设置恢复为出厂默认值。仅启动时生效的选项（配置文件或 -Dcaustica.* 标志）不受影响。",
 	"caustica.options.rt.recommended": "应用推荐设置",
-	"caustica.options.rt.recommended.tooltip": "根据这张显卡和屏幕选择设置：支持时开启 DLSS 光线重建并选择 DLSS 模式。GeForce RTX 40、50 系列另外开启帧生成、体积云和体积雾，并选择预设 F。也会开启 SHaRC，支持时开启 Reflex。只开不关，其他设置不变。随后只测量一次约一分钟的游玩来确定 DLSS 模式，之后不再监测或更改。",
+	"caustica.options.rt.recommended.tooltip": "根据这张显卡和屏幕选择设置：支持时开启 DLSS 光线重建并选择 DLSS 模式。GeForce RTX 40、50 系列另外开启帧生成、体积云和体积雾，并选择预设 F。也会开启 SHaRC，支持时开启 Reflex。自发光方块强度低于 5 时调到 5。只开不关，其他设置不变。随后只测量一次约一分钟的游玩来确定 DLSS 模式，之后不再监测或更改。",
 	"caustica.options.rt.recommended.measuring.title": "Caustica：正在为推荐设置测量",
 	"caustica.options.rt.recommended.measuring.message": "请关闭菜单照常游玩约一分钟。之后会一次调整好设置，之后不再变动。",
 	"caustica.options.rt.recommended.done.title": "Caustica：推荐设置已完成",
