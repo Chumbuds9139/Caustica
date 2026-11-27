@@ -38,6 +38,8 @@
 - **Emissive Block Intensity defaults to 5 (was 2).** At 2, torches, lanterns and glowstone looked too dark
   in caves and at night. A config that already exists keeps its value. **Apply Recommended Settings**
   raises a value below 5 to 5.
+- **Shorter option descriptions.** Every setting's tooltip now says in a line or two what it does, in all
+  languages.
 
 ### Fixes
 
