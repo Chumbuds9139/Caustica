@@ -85,14 +85,18 @@ public final class CausticaConfig {
             Rt.Exposure.MODE, Rt.Tonemapping.OPERATOR, Rt.Bloom.ENABLED,
             Rt.Dof.ENABLED, Rt.Dof.FOCUS_MODE, Rt.Dof.FOCAL_DISTANCE, Rt.Dof.APERTURE,
             Rt.Dof.FOCAL_LENGTH, Rt.Dof.MAX_BLUR,
-            Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
+            Rt.FrameStats.ENABLED, Rt.Hdr.ENABLED, Ngx.PATH, Rt.Recommended.PENDING,
         };
     }
 
-    /** Writes the default config file if it does not exist yet. */
+    /**
+     * Writes the default config file if it does not exist yet. A brand-new file also asks the first world
+     * to apply the recommended settings for this GPU ({@link Rt.Recommended#PENDING}).
+     */
     public static void saveIfMissing() {
         ensureRegistered();
         if (FILE.valueMap().isEmpty()) {
+            Rt.Recommended.PENDING.set(true);
             save();
         }
     }
@@ -1942,6 +1946,20 @@ public final class CausticaConfig {
                     case "auto", "autofocus", "auto_focus" -> "auto";
                     default -> "manual";
                 };
+            }
+        }
+
+        /**
+         * Recommended settings for the GPU and screen ({@code RtRecommendedSettings}). {@code pending} is
+         * written as true only into a brand-new config file, and the first world then applies the
+         * recommendation once NGX has said what DLSS can do here and turns it off. A config that already
+         * existed is never changed by it; the "Apply Recommended Settings" button does the same on demand.
+         */
+        public static final class Recommended {
+            public static final BooleanSetting PENDING =
+                    bool("caustica.rt.recommended.pending", "recommended.pending", false);
+
+            private Recommended() {
             }
         }
 

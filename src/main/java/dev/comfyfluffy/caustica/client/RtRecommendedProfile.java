@@ -1,0 +1,164 @@
+package dev.comfyfluffy.caustica.client;
+
+import java.util.Locale;
+
+/**
+ * Picks the recommended settings for a GPU and screen. Pure logic, no Minecraft or config access, so it
+ * is unit-tested; {@link RtRecommendedSettings} gathers the {@link Hardware} and applies the result.
+ *
+ * <p>The reference is a laptop RTX 4050 (20 SMs) at 1920x1080 with DLSS Ray Reconstruction on
+ * Performance (960x540 traced), four bounces, SHaRC, volumetric clouds, fog and DLSS Frame Generation:
+ * about 38 ms per ray-traced frame, so about 25 real frames a second shown as about 50. That card is at
+ * the bottom of the range DLSS Frame Generation runs on (GeForce RTX 40 and 50), so a GPU that has DLSS-G
+ * gets the reference's full look, and its upscaler mode is chosen to trace about as many pixels as the
+ * reference does per unit of GPU speed. GPU speed is estimated from the streaming-multiprocessor count
+ * Vulkan reports on NVIDIA (no table of card names), with desktop cards counted a little faster per SM
+ * than laptop ones, and older generations at half that per SM.
+ *
+ * <p>Shader Execution Reordering is never part of it: every device loss seen so far happened in the one
+ * dispatch that uses it, and it does not change the image.
+ */
+public final class RtRecommendedProfile {
+    /** DLSS / FSR / XeSS quality numbering ({@code dlss-rr.quality}). */
+    public static final int PERFORMANCE = 0;
+    public static final int BALANCED = 1;
+    public static final int QUALITY = 2;
+    public static final int ULTRA_PERFORMANCE = 3;
+    /** {@code dlss-rr.preset} value of preset F, the second-generation transformer model. */
+    public static final int PRESET_F = 6;
+    /** A setting the profile leaves as it is. */
+    public static final int UNCHANGED = -1;
+
+    /** Pixels the reference traces per frame (1920x1080 at DLSS Performance). */
+    static final long REFERENCE_RENDER_PIXELS = 960L * 540L;
+    /** SMs of the reference GPU (laptop RTX 4050). */
+    static final int REFERENCE_SMS = 20;
+    /** A desktop card runs its SMs faster than a laptop card (clocks and power). */
+    static final double DESKTOP_PER_SM = 1.25;
+    /** Ray tracing per SM on a GPU without DLSS-G (RTX 20 and 30) against RTX 40 and 50. */
+    static final double OLDER_GENERATION_PER_SM = 0.5;
+    static final double MIN_SPEED = 0.5;
+    /** Beyond this the estimate is too coarse to push the upscaler further. */
+    static final double MAX_SPEED = 4.0;
+    /** How far over the pixel budget a mode may go and still be picked. */
+    static final double BUDGET_TOLERANCE = 1.1;
+    /** Ultra Performance is only offered from this output height up: below it the traced image gets too small. */
+    static final int ULTRA_PERFORMANCE_MIN_HEIGHT = 1440;
+
+    private RtRecommendedProfile() {
+    }
+
+    /**
+     * What the picker knows about the machine.
+     *
+     * @param rayReconstruction DLSS Ray Reconstruction runs here
+     * @param dlssFrameGeneration DLSS Frame Generation runs here (GeForce RTX 40/50)
+     * @param reflex NVIDIA Reflex is available
+     * @param smCount streaming multiprocessors, or 0 when unknown
+     * @param laptop a laptop (mobile) GPU
+     * @param outputWidth output width in pixels (the monitor's, or the window's)
+     * @param outputHeight output height in pixels
+     */
+    public record Hardware(boolean rayReconstruction, boolean dlssFrameGeneration, boolean reflex, int smCount,
+                           boolean laptop, int outputWidth, int outputHeight) {
+    }
+
+    /**
+     * The recommended values. {@link #UNCHANGED} in an int field means "leave it as it is".
+     *
+     * @param useDlss select DLSS Ray Reconstruction as the upscaler
+     * @param dlssQuality {@code dlss-rr.quality}, or {@link #UNCHANGED}
+     * @param dlssPreset {@code dlss-rr.preset}, or {@link #UNCHANGED}
+     */
+    public record Profile(boolean useDlss, int dlssQuality, int dlssPreset, boolean frameGeneration,
+                          boolean reflex, boolean sharc, boolean fog, boolean volumetricClouds) {
+        /** One line for the log. */
+        public String describe() {
+            return String.format(Locale.ROOT,
+                    "upscaler=%s, dlssQuality=%s, dlssPreset=%s, frameGeneration=%s, reflex=%s, sharc=%s, fog=%s, clouds=%s",
+                    useDlss ? "DLSS" : "unchanged", dlssQuality == UNCHANGED ? "unchanged" : qualityName(dlssQuality),
+                    dlssPreset == UNCHANGED ? "unchanged" : Integer.toString(dlssPreset), frameGeneration, reflex,
+                    sharc, fog, volumetricClouds ? "volumetric" : "classic");
+        }
+    }
+
+    public static Profile recommend(Hardware hw) {
+        // DLSS-G means an RTX 40 or 50: at least as fast as the reference, with frame generation to
+        // double what is shown, so it gets the reference's whole look.
+        boolean full = hw.rayReconstruction() && hw.dlssFrameGeneration();
+        return new Profile(
+                hw.rayReconstruction(),
+                hw.rayReconstruction() ? dlssQuality(hw) : UNCHANGED,
+                // Preset F is heavier on RTX 20 and 30, which lack the FP8 units it is built for.
+                full ? PRESET_F : UNCHANGED,
+                full,
+                hw.reflex(),
+                // Shorter path tails and much less multi-bounce noise, on any GPU.
+                true,
+                full,
+                full);
+    }
+
+    /** GPU speed against the reference, from the SM count; 1 when it is unknown. */
+    static double speed(Hardware hw) {
+        if (hw.smCount() <= 0) {
+            return hw.dlssFrameGeneration() ? 1.0 : MIN_SPEED;
+        }
+        double speed = (double) hw.smCount() / REFERENCE_SMS;
+        if (!hw.laptop()) {
+            speed *= DESKTOP_PER_SM;
+        }
+        if (!hw.dlssFrameGeneration()) {
+            speed *= OLDER_GENERATION_PER_SM;
+        }
+        return Math.clamp(speed, MIN_SPEED, MAX_SPEED);
+    }
+
+    /** The best-looking upscaler mode whose traced pixels fit this GPU's share of the reference's budget. */
+    static int dlssQuality(Hardware hw) {
+        int width = Math.max(hw.outputWidth(), 1);
+        int height = Math.max(hw.outputHeight(), 1);
+        double budget = REFERENCE_RENDER_PIXELS * speed(hw) * BUDGET_TOLERANCE;
+        int[] candidates = height >= ULTRA_PERFORMANCE_MIN_HEIGHT
+                ? new int[] {QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE}
+                : new int[] {QUALITY, BALANCED, PERFORMANCE};
+        for (int quality : candidates) {
+            if (renderPixels(quality, width, height) <= budget) {
+                return quality;
+            }
+        }
+        return candidates[candidates.length - 1];
+    }
+
+    /** Traced pixels for an upscaler mode at this output size. */
+    static long renderPixels(int quality, int width, int height) {
+        double scale = axisScale(quality);
+        return Math.round(width * scale) * Math.round(height * scale);
+    }
+
+    /** Per-axis render scale of a mode (DLSS's published ratios). */
+    static double axisScale(int quality) {
+        return switch (quality) {
+            case QUALITY -> 2.0 / 3.0;
+            case BALANCED -> 0.58;
+            case ULTRA_PERFORMANCE -> 1.0 / 3.0;
+            default -> 0.5;
+        };
+    }
+
+    static String qualityName(int quality) {
+        return switch (quality) {
+            case QUALITY -> "Quality";
+            case BALANCED -> "Balanced";
+            case ULTRA_PERFORMANCE -> "Ultra Performance";
+            case PERFORMANCE -> "Performance";
+            default -> Integer.toString(quality);
+        };
+    }
+
+    /** NVIDIA names its mobile parts "... Laptop GPU" (older ones "Max-Q" or "Mobile"). */
+    public static boolean looksLikeLaptop(String gpuName) {
+        String name = gpuName == null ? "" : gpuName.toUpperCase(Locale.ROOT);
+        return name.contains("LAPTOP") || name.contains("MAX-Q") || name.contains("MOBILE");
+    }
+}

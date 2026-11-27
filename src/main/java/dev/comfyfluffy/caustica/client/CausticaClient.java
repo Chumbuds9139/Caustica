@@ -47,6 +47,8 @@ public final class CausticaClient implements ClientModInitializer {
 				dev.comfyfluffy.caustica.rt.RtPerfSweep.INSTANCE.toggle();
 			}
 			dev.comfyfluffy.caustica.rt.RtPerfSweep.INSTANCE.tick(client);
+			// A brand-new config gets the recommended settings for this GPU a few seconds into the first world.
+			RtRecommendedSettings.tick(client);
 		});
 
 		ClientTickEvents.START_CLIENT_TICK.register(client -> {

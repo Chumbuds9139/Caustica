@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.xess.XessRuntime;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTMutableDescriptorType;
+import org.lwjgl.vulkan.NVShaderSmBuiltins;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
@@ -23,6 +24,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR;
+import org.lwjgl.vulkan.VkPhysicalDeviceShaderSMBuiltinsPropertiesNV;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV;
@@ -118,6 +120,8 @@ public final class RtDeviceBringup {
     // answered from the render thread without forcing NGX/Vulkan bring-up on the main menu.
     private static volatile String gpuName = "";
     private static volatile String gpuVendorName = "";
+    // Streaming multiprocessors from VK_NV_shader_sm_builtins (NVIDIA), 0 when the device does not say.
+    private static volatile int gpuSmCount;
     private static volatile boolean ommEnabled; // VK_EXT_opacity_micromap actually enabled on the device
     private static volatile boolean reflexEnabled; // VK_NV_low_latency2 actually enabled on the device
     private static volatile boolean presentIdEnabled; // VK_KHR_present_id actually enabled on the device
@@ -732,6 +736,46 @@ public final class RtDeviceBringup {
             gpuName = "";
             gpuVendorName = "";
         }
+        gpuSmCount = querySmCount(physicalDevice);
+    }
+
+    /**
+     * The GPU's streaming-multiprocessor count, which the recommended settings use as a rough measure of
+     * its speed. Only a property query: the extension does not have to be enabled for it.
+     */
+    private static int querySmCount(VulkanPhysicalDevice physicalDevice) {
+        try {
+            if (!physicalDevice.hasDeviceExtension(NVShaderSmBuiltins.VK_NV_SHADER_SM_BUILTINS_EXTENSION_NAME)) {
+                return 0;
+            }
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkPhysicalDeviceShaderSMBuiltinsPropertiesNV sm =
+                        VkPhysicalDeviceShaderSMBuiltinsPropertiesNV.calloc(stack).sType$Default();
+                VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default();
+                props2.pNext(sm.address());
+                VK12.vkGetPhysicalDeviceProperties2(physicalDevice.vkPhysicalDevice(), props2);
+                int count = sm.shaderSMCount();
+                CausticaMod.LOGGER.info("GPU streaming multiprocessors: {}", count);
+                return Math.max(count, 0);
+            }
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** Streaming multiprocessors of the device in use, or 0 when unknown (not NVIDIA, or before device creation). */
+    public static int gpuSmCount() {
+        return gpuSmCount;
+    }
+
+    /** Whether the device in use is an NVIDIA GPU. */
+    public static boolean isNvidia() {
+        return "NVIDIA".equalsIgnoreCase(gpuVendorName);
+    }
+
+    /** NAME-BASED guess at DLSS Ray Reconstruction support for before NGX is up: any GeForce/NVIDIA RTX. */
+    public static boolean looksLikeRtx() {
+        return isNvidia() && gpuName.toUpperCase(Locale.ROOT).matches(".*\\bRTX\\b.*");
     }
 
     /** {@code VkPhysicalDeviceProperties.deviceName} of the device in use ("" before device creation). */

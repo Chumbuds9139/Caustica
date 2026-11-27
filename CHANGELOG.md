@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### New
+
+- **Recommended settings for your GPU.** A new **Apply Recommended Settings** button at the top of the
+  ray-tracing settings picks settings for your GPU and screen. A new install applies them by itself a few
+  seconds into the first world and shows a notice. It waits that long so the driver can say whether DLSS
+  Ray Reconstruction and Frame Generation run on the machine. An existing config is never changed unless
+  you press the button.
+  - GeForce RTX 40 and 50 cards get the settings tested on a laptop RTX 4050 at 1080p:
+    - DLSS Ray Reconstruction with preset F, Frame Generation and Reflex;
+    - SHaRC, volumetric clouds and fog.
+
+    That ran at about 25 real frames a second, shown as about 50.
+  - The DLSS mode is chosen so that the GPU traces about as many pixels, for its speed, as that laptop
+    does at 1080p Performance.
+    - Speed is estimated from the number of streaming multiprocessors the driver reports. A desktop card
+      counts a little faster than a laptop card.
+    - The larger of the window and its monitor counts as the resolution.
+    - Ultra Performance is picked only at 1440p and above.
+    - Examples: a laptop RTX 4050 gets Performance at 1080p and Ultra Performance at 2560×1600. A desktop
+      RTX 4090 gets Quality at 1440p.
+  - RTX 20 and 30 cards get DLSS with SHaRC and Reflex, but no Frame Generation, volumetric clouds or fog.
+  - Other GPUs keep their upscaler and get SHaRC.
+  - It never turns on Shader Execution Reordering.
+
 ### Fixes
 
 - **Enchanted armour is visible again.** Minecraft 26.3 draws enchanted armour (without a trim), enchanted

@@ -61,6 +61,7 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
 
         // The hub-level safety net for "I touched everything and forgot the defaults": restores the
         // union of every sub-screen's settings, then reopens so the hub re-reads them.
+        list.addBig(recommendedButton());
         list.addBig(resetAllButton());
 
         // --- Image & upscaling ---
@@ -110,6 +111,19 @@ public class RtVideoOptionsScreen extends OptionsSubScreen {
             list.addSmall(RtVideoOptions.voxyOptions());
             list.addBig(RtVideoOptions.voxyRefreshButton());
         }
+    }
+
+    /**
+     * Applies the recommended settings for this GPU and screen ({@code RtRecommendedSettings}), saves, and
+     * reopens the hub like the reset does.
+     */
+    private Button recommendedButton() {
+        Button button = Button.builder(Component.translatable("caustica.options.rt.recommended"), clicked -> {
+            dev.comfyfluffy.caustica.client.RtRecommendedSettings.applyNow(this.minecraft, "button");
+            this.minecraft.gui.setScreen(new RtVideoOptionsScreen(this.rtParent, this.rtOptions));
+        }).width(310).build();
+        button.setTooltip(Tooltip.create(Component.translatable("caustica.options.rt.recommended.tooltip")));
+        return button;
     }
 
     /**

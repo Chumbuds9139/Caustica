@@ -75,6 +75,11 @@ public final class NgxRuntime {
         return initialized;
     }
 
+    /** Whether NGX failed to come up on this device (DLSS is unavailable until a fresh device). */
+    public synchronized boolean hasFailed() {
+        return failed;
+    }
+
     /** The shared library once {@link #acquire} has succeeded, else {@code null}. */
     public NgxLibrary library() {
         return lib;
