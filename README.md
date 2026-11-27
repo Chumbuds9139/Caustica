@@ -82,6 +82,7 @@ pipelines, post-processing or the Vulkan backend may conflict. UI-only mods are 
 | **Sodium** 0.9.2 / 0.9.3 | Caustica appears as its own entry in Sodium's settings screen: a page that opens the full Ray Tracing hub, plus native pages for the renderer's options. |
 | **Distant Horizons** 3.3.x | DH's LOD meshes are captured and ray traced beyond the loaded chunks. Caustica drives DH's upload queue itself while the vanilla world pass is replaced. |
 | **Voxy** 0.2.20 (unmodified) | Voxy vetoes the Vulkan backend and only ships an OpenGL renderer. Caustica keeps Vulkan, leaves that renderer off, and ray traces the LOD voxels Voxy still ingests and stores. |
+| **Entity Culling** | Not compatible: remove it. With it installed, mobs twitch and their heads spin (seen with squids and llamas). It pauses mobs it judges out of view, but Caustica draws mobs itself, also in reflections and shadows. |
 
 Details, limits and the relevant config keys are in
 [docs/compat-sodium-voxy-dh.md](docs/compat-sodium-voxy-dh.md).
