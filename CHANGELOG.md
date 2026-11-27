@@ -1,51 +1,44 @@
 # Changelog
 
-## Unreleased
-
-### Changes
-
-- **Apply Recommended Settings tunes the whole graphics setup, not only the DLSS mode.** Besides the DLSS
-  mode it now sets a graphics level, Low, Standard, High or Ultra, for the settings that cost GPU time:
-  samples, bounces, the path, sky and cloud speed-ups, light candidates, parallax and water detail.
-  - Standard is the setup tested on a laptop RTX 4050 at 1080p. A faster card spends its extra speed on a
-    sharper DLSS mode first, then on a higher level, aiming for the same frame rate as that laptop. Only a
-    card that is slower even at the lightest DLSS mode gets Low.
-  - The minute of measurement runs at the chosen level. If it is clearly too heavy, the level goes one step
-    lower, keeping the DLSS mode when that is enough. A level above Standard only stays if the minute
-    confirmed it.
-  - Volumetric clouds, fog and frame generation are still never turned off, and look settings such as
-    brightness, colours and parallax depth stay as you set them.
-  - If you change one of these settings during the minute, your choice stays and the measurement stops.
-  - Cards whose speed Caustica cannot tell (no SM count and no DLSS Frame Generation) keep their settings
-    as they are.
-
 ## 0.4.3 — 2026-11-27
 
 ### New
 
 - **Recommended settings for your computer.** A new **Apply Recommended Settings** button at the top of
-  the ray-tracing settings picks settings for your GPU and screen. It then measures about a minute of your
-  play, once, and settles the DLSS mode from it. After that minute nothing is watched or changed.
+  the ray-tracing settings picks the DLSS mode and a graphics level for your GPU and screen. It then
+  measures about a minute of your play, once, and settles both from it. After that minute nothing is
+  watched or changed.
   - A new install does this by itself a few seconds into the first world, once the driver has confirmed
     that DLSS Ray Reconstruction runs. An existing config is never changed unless you press the button.
-  - A notice says when the measurement starts: just play as usual. A second notice says which DLSS
-    mode was chosen.
-  - It only switches things on, never off. Where supported it turns on DLSS Ray Reconstruction, SHaRC
+  - A notice says when the measurement starts: just play as usual. A second notice says which graphics
+    level and DLSS mode were chosen.
+  - It only switches features on, never off. Where supported it turns on DLSS Ray Reconstruction, SHaRC
     and Reflex. On GeForce RTX 40 and 50 cards it also turns on Frame Generation, volumetric clouds and
     fog and picks preset F, the setup tested on a laptop RTX 4050 at 1080p (about 25 real frames a
     second, shown as about 50). Other cards keep those three as they were. On every GPU it raises
     Emissive Block Intensity to at least 5.
+  - The graphics level, Low, Standard, High or Ultra, sets the settings that cost GPU time: samples,
+    bounces, the path, sky and cloud speed-ups, light candidates, parallax and water detail. Look settings
+    such as brightness, colours and parallax depth stay as you set them.
+    - Standard is the setup tested on the laptop RTX 4050. A faster card spends its extra speed on a
+      sharper DLSS mode first, then on a higher level, aiming for the same frame rate as that laptop. Only
+      a card that is slower even at the lightest DLSS mode gets Low.
+    - Cards whose speed Caustica cannot tell (no SM count and no DLSS Frame Generation) keep these
+      settings as they are.
   - The DLSS mode is first estimated from the GPU's size and the larger of the window and its monitor.
     The measurement then picks the sharpest mode that keeps a ray-traced frame within about 36 ms of
     GPU time with Frame Generation, or 30 ms without.
     - A sharper mode than the estimate needs 10% to spare, so a minute that happened to see little sky
       does not push it too far. Ultra Performance is only picked at 1440p and above.
+    - The minute runs at the chosen level. If it is clearly too heavy, the level goes one step lower,
+      keeping the DLSS mode when that is enough. A level above Standard only stays if the minute
+      confirmed it.
     - The measurement skips menus, the first seconds in a world, the SER guard's holds, Distant Horizons
       refreshes, terrain builds and the TDR guard's slow start.
     - The estimate stays if no clean minute of play comes together within five minutes of play, or if
       the window was much smaller than the screen. A GPU that never reaches your samples and bounces
-      gets the lightest mode. If you pick a DLSS mode during the minute, your choice stays and the
-      measurement stops.
+      gets the lightest mode and Low. If you pick a DLSS mode or change one of the level's settings
+      during the minute, your choice stays and the measurement stops.
   - If the Java garbage collector was busy, or the heap stayed nearly full, a third notice suggests how
     much memory to give Minecraft in the launcher. Caustica cannot set this itself.
   - The log gets one line with the GPU, video memory, CPU threads, memory, Java heap, the measurement
