@@ -283,8 +283,7 @@ public final class RtRecommendedSettings {
             message = Component.translatable("caustica.options.rt.recommended.estimated.message");
         } else if (!profile.useDlss()) {
             decision = "measured; upscaler left as it was";
-            message = Component.translatable("caustica.options.rt.recommended.doneNoDlss.message",
-                    String.format(Locale.ROOT, "%.0f", result.frameMs()));
+            message = Component.translatable("caustica.options.rt.recommended.doneNoDlss.message");
         } else if (!RtRecommendedProfile.measuredNearTarget(measurement, hardware.outputWidth(),
                 hardware.outputHeight())) {
             decision = "measured in a window much smaller than the screen; kept the estimate";
@@ -294,8 +293,7 @@ public final class RtRecommendedSettings {
                     hardware.outputHeight(), fgForBudget);
             decision = "measured";
             message = Component.translatable("caustica.options.rt.recommended.done.message",
-                    Component.translatable("caustica.options.rt.dlssQuality." + quality),
-                    String.format(Locale.ROOT, "%.0f", result.frameMs()));
+                    Component.translatable("caustica.options.rt.dlssQuality." + quality));
         }
         if (profile.useDlss()) {
             CausticaConfig.Rt.DlssRr.QUALITY.set(quality);
