@@ -9,20 +9,22 @@ Generation, FSR 3, XeSS, SVGF) while keeping Minecraft's UI and gameplay intact.
 ## Features
 
 - Vulkan hardware path-traced world rendering
-- DLSS Ray Reconstruction, DLSS Frame Generation, FSR 3, XeSS and NRD/SVGF denoising, with a live
-  Ray Reconstruction model-preset slider (Default / D / E / F)
-- Blue-noise (void-and-cluster) dithering for the path tracer's per-vertex sampling decisions
+- **Apply Recommended Settings**: one button picks settings for your GPU and screen, then measures a
+  minute of play once to choose the DLSS mode. New installs do this by themselves in the first world.
+- DLSS Ray Reconstruction, FSR 3, XeSS and NRD/SVGF denoising, with a Ray Reconstruction model
+  preset choice (Auto / D / E / F)
+- Frame generation (experimental): DLSS Frame Generation on RTX 40/50, or Caustica's own engine on any
+  GPU (up to 4x)
 - HDR output, SDR/HDR presentation paths and exposure control
 - Dynamic entity rendering in the ray-traced scene
-- Opt-in ray-traced first-person viewmodel: the hand and held item move into the traced scene, with POM,
-  emission and scene lighting on held geometry, while staying shadow-free and above the blocks it swings
-  through (`hand.ray-traced`, off by default)
+- Glowing items in your hand light the world; optionally the hand itself is ray traced too
 - LabPBR-style material support, including toggleable subsurface scattering
 - Deep settings UI: nearly every renderer feature has its own sub-screen with a "Reset to
   Defaults" button, plus a global one on the hub
-- Weather-driven lighting: rain and thunderstorms dim the sun/moon and darken the sky
+- Weather: rain and thunderstorms dim the sun and darken the sky; wet ground, rain ripples and
+  lightning
 - Volumetric 3D clouds (classic vanilla-style or photoreal cumulus), volumetric fog with
-  per-light god rays, water waves, parallax occlusion mapping
+  per-light god rays, water waves, parallax occlusion mapping, bloom and depth of field
 - Dedicated Nether, End and portal skyboxes
 - OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
 - Experimental SHaRC-style world-space radiance cache (toggleable, inspectable via debug view 13)
@@ -31,16 +33,19 @@ Generation, FSR 3, XeSS, SVGF) while keeping Minecraft's UI and gameplay intact.
 
 - **Vulkan graphics backend enabled**
 - A GPU and driver with Vulkan ray tracing support
-- NVIDIA RTX GPU and a supported driver for DLSS features
+- NVIDIA RTX GPU and a supported driver for DLSS features (DLSS Frame Generation needs RTX 40 or 50)
 - An HDR-capable display and OS HDR mode for HDR output
 - On Linux, an HDR-capable Wayland compositor and a native Wayland session for HDR output
-- Install a LabPBR resource pack such as [SPBR](https://modrinth.com/resourcepack/spbr)
+- Recommended: a LabPBR resource pack such as [SPBR](https://modrinth.com/resourcepack/spbr)
 
 ## Installation
 
 1. Install Fabric Loader **0.19.5** for Minecraft **26.3**.
 2. Install **Fabric API 0.161.0+26.3**.
-3. Put the Caustica JAR in your Minecraft `mods` folder.
+3. Put one Caustica JAR in your Minecraft `mods` folder:
+   - `-windows-lite`: Windows, without Intel XeSS. Pick this one unless you use XeSS.
+   - the full JAR: Windows and Linux, with XeSS.
+   - `-linux`: Linux only.
 4. Launch the game with the Vulkan graphics backend.
 
 ## Building
